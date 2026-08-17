@@ -23,12 +23,20 @@ use theme as t;
 // FONT MODEL
 // ============================================================================
 
+/// One control point of a contour, in font units.
+struct GlyphPoint {
+    x: f64,
+    y: f64,
+    on_curve: bool,
+}
+
 /// One glyph, ready to paint: outline in font units (Y-up), advance
 /// width, and identifying info.
 struct GlyphEntry {
     name: SharedString,
     codepoint: Option<char>,
     path: Arc<BezPath>,
+    points: Arc<Vec<GlyphPoint>>,
     advance: f64,
 }
 
@@ -57,6 +65,18 @@ impl FontModel {
                 name: glyph.name().to_string().into(),
                 codepoint: glyph.codepoints.iter().next(),
                 path: Arc::new(glyph_path::glyph_to_bezpath(glyph, &font)),
+                points: Arc::new(
+                    glyph
+                        .contours
+                        .iter()
+                        .flat_map(|c| c.points.iter())
+                        .map(|p| GlyphPoint {
+                            x: p.x,
+                            y: p.y,
+                            on_curve: p.typ != norad::PointType::OffCurve,
+                        })
+                        .collect(),
+                ),
                 advance: glyph.width,
             })
             .collect();
@@ -90,7 +110,15 @@ fn build_fill_path(
     transform: Affine,
     origin: Point<gpui::Pixels>,
 ) -> Option<gpui::Path<gpui::Pixels>> {
-    let mut builder = PathBuilder::fill();
+    build_path(outline, transform, origin, PathBuilder::fill())
+}
+
+fn build_path(
+    outline: &BezPath,
+    transform: Affine,
+    origin: Point<gpui::Pixels>,
+    mut builder: PathBuilder,
+) -> Option<gpui::Path<gpui::Pixels>> {
     let mut any = false;
     let gp = |p: kurbo::Point| {
         gpui::point(origin.x + px(p.x as f32), origin.y + px(p.y as f32))
@@ -115,10 +143,17 @@ fn build_fill_path(
 // WORKSPACE VIEW
 // ============================================================================
 
+enum Mode {
+    Grid,
+    Editor(usize),
+}
+
 struct Workspace {
     font: Option<Arc<FontModel>>,
     load_error: Option<SharedString>,
     selected: Option<usize>,
+    mode: Mode,
+    focus_handle: gpui::FocusHandle,
 }
 
 const CELL: f32 = 96.0;
@@ -146,8 +181,11 @@ impl Workspace {
             .border_color(if selected { t::accent() } else { t::cell_border() })
             .rounded_md()
             .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                 this.selected = Some(index);
+                if event.click_count() >= 2 {
+                    this.mode = Mode::Editor(index);
+                }
                 cx.notify();
             }))
             .child(div().flex_1().child(canvas(
@@ -206,6 +244,85 @@ impl Workspace {
             .child(div().text_sm().text_color(t::text_muted()).child(subtitle))
     }
 
+    /// The glyph editor: metrics lines, stroked outline over a dim
+    /// fill, and control points. View-only for now (no pan/zoom, no
+    /// editing). Esc returns to the grid.
+    fn editor_view(&self, index: usize) -> impl IntoElement + use<> {
+        let font = self.font.as_ref().unwrap().clone();
+        let entry = &font.glyphs[index];
+        let outline = entry.path.clone();
+        let points = entry.points.clone();
+        let advance = entry.advance;
+        let ascender = font.ascender;
+        let descender = font.descender;
+
+        div().flex_1().child(canvas(
+            move |bounds, _, _| bounds,
+            move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+                let h: f32 = bounds.size.height.into();
+                let w: f32 = bounds.size.width.into();
+                let scale = (h * 0.62) / (ascender - descender) as f32;
+                let baseline_y = h * 0.80 + (descender as f32 * scale);
+                let x_offset = (w - advance as f32 * scale) / 2.0;
+                let to_screen = |x: f64, y: f64| {
+                    gpui::point(
+                        bounds.origin.x + px(x_offset + x as f32 * scale),
+                        bounds.origin.y + px(baseline_y - y as f32 * scale),
+                    )
+                };
+
+                // Metrics lines: baseline, ascender, descender, and
+                // the two sidebearings.
+                let hline = |y: f64, window: &mut Window| {
+                    let a = to_screen(0.0, y);
+                    let b = to_screen(advance, y);
+                    window.paint_quad(gpui::fill(
+                        Bounds::from_corners(a, gpui::point(b.x, b.y + px(1.0))),
+                        t::metrics_line(),
+                    ));
+                };
+                hline(0.0, window);
+                hline(ascender, window);
+                hline(descender, window);
+                for x in [0.0, advance] {
+                    let a = to_screen(x, ascender);
+                    let b = to_screen(x, descender);
+                    window.paint_quad(gpui::fill(
+                        Bounds::from_corners(a, gpui::point(a.x + px(1.0), b.y)),
+                        t::metrics_line(),
+                    ));
+                }
+
+                // Dim fill, then a 1.5px stroke of the same outline.
+                let transform = Affine::translate((x_offset as f64, baseline_y as f64))
+                    * Affine::scale_non_uniform(scale as f64, -(scale as f64));
+                if let Some(path) = build_fill_path(&outline, transform, bounds.origin) {
+                    window.paint_path(path, t::editor_fill());
+                }
+                if let Some(path) =
+                    build_path(&outline, transform, bounds.origin, PathBuilder::stroke(px(1.5)))
+                {
+                    window.paint_path(path, t::accent());
+                }
+
+                // Control points: squares for on-curve, smaller
+                // squares for off-curve.
+                for p in points.iter() {
+                    let c = to_screen(p.x, p.y);
+                    let r = if p.on_curve { px(3.0) } else { px(2.0) };
+                    let color = if p.on_curve { t::text() } else { t::text_muted() };
+                    window.paint_quad(gpui::fill(
+                        Bounds::from_corners(
+                            gpui::point(c.x - r, c.y - r),
+                            gpui::point(c.x + r, c.y + r),
+                        ),
+                        color,
+                    ));
+                }
+            },
+        ))
+    }
+
     fn status_bar(&self) -> impl IntoElement + use<> {
         let text: SharedString = match (self.selected, &self.font) {
             (Some(i), Some(font)) => {
@@ -234,26 +351,45 @@ impl Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let grid: Vec<_> = match &self.font {
-            Some(font) => (0..font.glyphs.len())
-                .map(|i| self.glyph_cell(i, cx).into_any_element())
-                .collect(),
-            None => Vec::new(),
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // No text inputs yet, so the workspace can hold focus for
+        // keyboard shortcuts unconditionally.
+        window.focus(&self.focus_handle);
+
+        let content = match self.mode {
+            Mode::Editor(index) if self.font.is_some() => {
+                self.editor_view(index).into_any_element()
+            }
+            _ => {
+                let grid: Vec<_> = match &self.font {
+                    Some(font) => (0..font.glyphs.len())
+                        .map(|i| self.glyph_cell(i, cx).into_any_element())
+                        .collect(),
+                    None => Vec::new(),
+                };
+                div()
+                    .id("glyph-grid")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .child(div().flex().flex_wrap().gap_2().p_4().children(grid))
+                    .into_any_element()
+            }
         };
+
         div()
             .flex()
             .flex_col()
             .size_full()
             .bg(t::window_bg())
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && matches!(this.mode, Mode::Editor(_)) {
+                    this.mode = Mode::Grid;
+                    cx.notify();
+                }
+            }))
             .child(self.header())
-            .child(
-                div()
-                    .id("glyph-grid")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .child(div().flex().flex_wrap().gap_2().p_4().children(grid)),
-            )
+            .child(content)
             .child(self.status_bar())
     }
 }
@@ -290,10 +426,12 @@ fn main() {
                 ..Default::default()
             },
             |_, cx| {
-                cx.new(|_| Workspace {
+                cx.new(|cx| Workspace {
                     font,
                     load_error,
                     selected: None,
+                    mode: Mode::Grid,
+                    focus_handle: cx.focus_handle(),
                 })
             },
         )

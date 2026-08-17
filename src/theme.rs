@@ -34,3 +34,14 @@ pub fn text() -> Rgba {
 pub fn text_muted() -> Rgba {
     rgb(0xa89a86)
 }
+pub fn metrics_line() -> Rgba {
+    rgb(0x4a4038)
+}
+pub fn editor_fill() -> Rgba {
+    Rgba {
+        r: 0.91,
+        g: 0.87,
+        b: 0.81,
+        a: 0.08,
+    }
+}
