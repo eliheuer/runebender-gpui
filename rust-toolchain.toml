@@ -1,0 +1,5 @@
+# Pin stable: pathfinder_simd (a gpui dependency) detects nightly and
+# turns on unstable SIMD intrinsics that no longer exist under current
+# nightlies, breaking the build. On stable it uses the portable path.
+[toolchain]
+channel = "stable"
