@@ -205,7 +205,10 @@ impl Workspace {
                         window.paint_path(path, t::glyph_fill());
                     }
                 },
-            )))
+            )
+            // A canvas has no intrinsic size; without this it lays
+            // out at 0x0 and paints nothing.
+            .size_full()))
             .child(
                 div()
                     .h(px(20.0))
@@ -320,7 +323,8 @@ impl Workspace {
                     ));
                 }
             },
-        ))
+        )
+        .size_full())
     }
 
     fn status_bar(&self) -> impl IntoElement + use<> {
@@ -414,6 +418,17 @@ fn main() {
         Err(e) => (None, Some(format!("{}: {e}", font_path.display()).into())),
     };
 
+    // QA hook: RB_OPEN_GLYPH=<name> starts in the editor on that
+    // glyph, so agent screenshots can reach it without clicks.
+    let start_mode = std::env::var("RB_OPEN_GLYPH")
+        .ok()
+        .and_then(|name| {
+            let f = font.as_ref()?;
+            f.glyphs.iter().position(|g| g.name.as_ref() == name)
+        })
+        .map(Mode::Editor)
+        .unwrap_or(Mode::Grid);
+
     Application::new().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
@@ -430,7 +445,7 @@ fn main() {
                     font,
                     load_error,
                     selected: None,
-                    mode: Mode::Grid,
+                    mode: start_mode,
                     focus_handle: cx.focus_handle(),
                 })
             },
