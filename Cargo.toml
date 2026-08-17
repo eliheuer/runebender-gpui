@@ -8,3 +8,5 @@ repository = "https://github.com/eliheuer/runebender-gpui"
 
 [dependencies]
 gpui = "0.2.2"
+kurbo = "0.13.1"
+norad = "0.18"
