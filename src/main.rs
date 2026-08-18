@@ -310,6 +310,198 @@ impl FontModel {
         }
     }
 
+    /// Delete the given points. Selected on-curve points vanish with
+    /// their incoming controls (neighbors reconnect); selected
+    /// off-curve points turn their segment into a line. Contours left
+    /// without segments are removed. Returns true if anything changed.
+    fn delete_points(
+        &mut self,
+        glyph_index: usize,
+        selected: &std::collections::HashSet<(usize, usize)>,
+    ) -> bool {
+        if selected.is_empty() {
+            return false;
+        }
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return false;
+        };
+        let mut changed = false;
+        let mut contour_index = 0usize;
+        glyph.contours.retain_mut(|contour| {
+            let ci = contour_index;
+            contour_index += 1;
+            let any_here = selected.iter().any(|(c, _)| *c == ci);
+            if !any_here {
+                return true;
+            }
+            changed = true;
+
+            // Parse into segments anchored at on-curve points.
+            struct Seg {
+                x: f64,
+                y: f64,
+                smooth: bool,
+                controls: Option<((f64, f64), (f64, f64))>,
+                on_index: usize,
+                control_indices: Vec<usize>,
+                is_move: bool,
+            }
+            let closed = contour
+                .points
+                .first()
+                .is_none_or(|p| p.typ != norad::PointType::Move);
+            let mut segs: Vec<Seg> = Vec::new();
+            let mut pending: Vec<(usize, (f64, f64))> = Vec::new();
+            for (i, p) in contour.points.iter().enumerate() {
+                match p.typ {
+                    norad::PointType::OffCurve => pending.push((i, (p.x, p.y))),
+                    _ => {
+                        let controls = if pending.len() == 2 {
+                            Some((pending[0].1, pending[1].1))
+                        } else {
+                            None
+                        };
+                        segs.push(Seg {
+                            x: p.x,
+                            y: p.y,
+                            smooth: p.smooth,
+                            controls,
+                            on_index: i,
+                            control_indices: pending.iter().map(|(i, _)| *i).collect(),
+                            is_move: p.typ == norad::PointType::Move,
+                        });
+                        pending.clear();
+                    }
+                }
+            }
+            // Closed contours may carry trailing off-curves that wrap
+            // to the first on-curve point.
+            if closed && pending.len() == 2 && !segs.is_empty() {
+                segs[0].controls = Some((pending[0].1, pending[1].1));
+                segs[0].control_indices = pending.iter().map(|(i, _)| *i).collect();
+            }
+
+            // Apply the deletions.
+            segs.retain(|seg| !selected.contains(&(ci, seg.on_index)));
+            for seg in segs.iter_mut() {
+                if seg
+                    .control_indices
+                    .iter()
+                    .any(|i| selected.contains(&(ci, *i)))
+                {
+                    seg.controls = None;
+                }
+            }
+            if segs.is_empty() {
+                return false; // drop the contour
+            }
+
+            // Reserialize.
+            let mut points: Vec<norad::ContourPoint> = Vec::new();
+            let n = segs.len();
+            for (k, seg) in segs.iter().enumerate() {
+                let is_first = k == 0;
+                // An open contour starts with a bare Move point; its
+                // controls (if the old first point was deleted) drop.
+                let controls = if !closed && is_first { None } else { seg.controls };
+                let typ = if !closed && is_first {
+                    norad::PointType::Move
+                } else if controls.is_some() {
+                    norad::PointType::Curve
+                } else {
+                    norad::PointType::Line
+                };
+                // For closed contours the wrap-around controls of the
+                // first on-curve point go at the END of the list.
+                if let (Some((c1, c2)), false) = (controls, closed && is_first) {
+                    points.push(norad::ContourPoint::new(
+                        c1.0,
+                        c1.1,
+                        norad::PointType::OffCurve,
+                        false,
+                        None,
+                        None,
+                    ));
+                    points.push(norad::ContourPoint::new(
+                        c2.0,
+                        c2.1,
+                        norad::PointType::OffCurve,
+                        false,
+                        None,
+                        None,
+                    ));
+                }
+                points.push(norad::ContourPoint::new(
+                    seg.x, seg.y, typ, seg.smooth, None, None,
+                ));
+                let _ = seg.is_move;
+                let _ = n;
+            }
+            if closed {
+                if let Some((c1, c2)) = segs[0].controls {
+                    points.push(norad::ContourPoint::new(
+                        c1.0,
+                        c1.1,
+                        norad::PointType::OffCurve,
+                        false,
+                        None,
+                        None,
+                    ));
+                    points.push(norad::ContourPoint::new(
+                        c2.0,
+                        c2.1,
+                        norad::PointType::OffCurve,
+                        false,
+                        None,
+                        None,
+                    ));
+                }
+                // First point's type reflects its wrap-around controls.
+                if let Some(first) = points.first_mut() {
+                    first.typ = if segs[0].controls.is_some() {
+                        norad::PointType::Curve
+                    } else {
+                        norad::PointType::Line
+                    };
+                }
+            }
+            contour.points = points;
+            true
+        });
+        if changed {
+            self.dirty = true;
+            self.rebuild_entry(glyph_index);
+        }
+        changed
+    }
+
+    /// Toggle smooth/corner on the given on-curve points.
+    fn toggle_smooth(
+        &mut self,
+        glyph_index: usize,
+        selected: &std::collections::HashSet<(usize, usize)>,
+    ) -> bool {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return false;
+        };
+        let mut changed = false;
+        for (ci, contour) in glyph.contours.iter_mut().enumerate() {
+            for (pi, p) in contour.points.iter_mut().enumerate() {
+                if p.typ != norad::PointType::OffCurve && selected.contains(&(ci, pi)) {
+                    p.smooth = !p.smooth;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.dirty = true;
+            self.rebuild_entry(glyph_index);
+        }
+        changed
+    }
+
     fn save(&mut self) -> Result<(), norad::error::FontWriteError> {
         self.font.save(&self.source_path)?;
         self.dirty = false;
@@ -1361,6 +1553,37 @@ impl Workspace {
                 }
                 true
             }
+            ("backspace" | "delete", false) if in_editor => {
+                if self.editor.selected.is_empty() {
+                    false
+                } else {
+                    let Mode::Editor(index) = self.mode else {
+                        return false;
+                    };
+                    self.push_undo_snapshot(index);
+                    let selected = self.editor.selected.clone();
+                    let changed = self
+                        .font_mut()
+                        .is_some_and(|f| f.delete_points(index, &selected));
+                    if changed {
+                        self.editor.selected.clear();
+                    }
+                    changed
+                }
+            }
+            ("s", false) if in_editor => {
+                let Mode::Editor(index) = self.mode else {
+                    return false;
+                };
+                if self.editor.selected.is_empty() {
+                    false
+                } else {
+                    self.push_undo_snapshot(index);
+                    let selected = self.editor.selected.clone();
+                    self.font_mut()
+                        .is_some_and(|f| f.toggle_smooth(index, &selected))
+                }
+            }
             ("left", false) if in_editor => self.nudge_selection(-step, 0.0),
             ("right", false) if in_editor => self.nudge_selection(step, 0.0),
             ("up", false) if in_editor => self.nudge_selection(0.0, step),
@@ -1667,6 +1890,83 @@ mod tests {
             model.snapshot_contours(index).unwrap().len(),
             base_contours + 1
         );
+    }
+
+    #[test]
+    fn delete_and_smooth_operations() {
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
+        let index = model
+            .glyphs
+            .iter()
+            .position(|g| g.name.as_ref() == "space")
+            .unwrap();
+
+        // Build a closed square with one curved corner:
+        // (0,0) -line- (100,0) -line- (100,100) -curve- (0,100) -close-
+        let c = model.start_contour(index, 0.0, 0.0).unwrap();
+        model.append_segment(index, c, None, 100.0, 0.0, false);
+        model.append_segment(index, c, None, 100.0, 100.0, false);
+        model.append_segment(
+            index,
+            c,
+            Some(((80.0, 130.0), (20.0, 130.0))),
+            0.0,
+            100.0,
+            true,
+        );
+        model.close_contour(index, c, None);
+        let count_points = |m: &FontModel| {
+            m.snapshot_contours(index).unwrap()[c].points.len()
+        };
+        assert_eq!(count_points(&model), 6); // 4 on + 2 off
+
+        // Toggle smooth on the curve's endpoint.
+        let curve_end_index = model.glyphs[index]
+            .points
+            .iter()
+            .find(|p| p.contour == c && p.x == 0.0 && p.y == 100.0)
+            .map(|p| (p.contour, p.index))
+            .unwrap();
+        let sel: std::collections::HashSet<_> = [curve_end_index].into();
+        assert!(model.toggle_smooth(index, &sel));
+
+        // Delete one off-curve: the curve segment becomes a line.
+        let off = model.glyphs[index]
+            .points
+            .iter()
+            .find(|p| p.contour == c && !p.on_curve)
+            .map(|p| (p.contour, p.index))
+            .unwrap();
+        let sel: std::collections::HashSet<_> = [off].into();
+        assert!(model.delete_points(index, &sel));
+        assert_eq!(count_points(&model), 4); // pure quad now
+        let contour_data = &model.snapshot_contours(index).unwrap()[c];
+        assert!(contour_data.is_closed());
+        assert!(contour_data
+            .points
+            .iter()
+            .all(|p| p.typ != norad::PointType::OffCurve));
+
+        // Delete an on-curve point: square becomes a triangle.
+        let corner = model.glyphs[index]
+            .points
+            .iter()
+            .find(|p| p.contour == c && p.x == 100.0 && p.y == 0.0)
+            .map(|p| (p.contour, p.index))
+            .unwrap();
+        let sel: std::collections::HashSet<_> = [corner].into();
+        assert!(model.delete_points(index, &sel));
+        assert_eq!(count_points(&model), 3);
+
+        // Delete everything: the contour disappears.
+        let all: std::collections::HashSet<_> = model.glyphs[index]
+            .points
+            .iter()
+            .filter(|p| p.contour == c)
+            .map(|p| (p.contour, p.index))
+            .collect();
+        assert!(model.delete_points(index, &all));
+        assert!(model.snapshot_contours(index).unwrap().len() <= c);
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).
