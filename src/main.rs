@@ -191,6 +191,94 @@ impl FontModel {
 }
 
 // ============================================================================
+// PROJECT (designspace or single UFO)
+// ============================================================================
+
+/// An open project: one or more master UFOs, optionally tied together
+/// by a designspace document.
+struct Project {
+    masters: Vec<FontModel>,
+    active: usize,
+    /// Style names for the master switcher, one per master.
+    master_names: Vec<SharedString>,
+}
+
+impl Project {
+    fn load(path: &std::path::Path) -> Result<Self, String> {
+        if path.extension().is_some_and(|e| e == "designspace") {
+            let doc = norad::designspace::DesignSpaceDocument::load(path)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            let dir = path.parent().unwrap_or(std::path::Path::new("."));
+            let mut seen = std::collections::HashSet::new();
+            let mut masters = Vec::new();
+            let mut master_names = Vec::new();
+            let mut default_index = 0usize;
+            // The source whose location matches every axis default is
+            // the default master; open on that one.
+            let defaults: std::collections::HashMap<&str, f32> = doc
+                .axes
+                .iter()
+                .map(|a| (a.name.as_str(), a.default))
+                .collect();
+            for source in &doc.sources {
+                if !seen.insert(source.filename.clone()) {
+                    continue; // per-layer duplicate source entries
+                }
+                let ufo_path = dir.join(&source.filename);
+                let model = FontModel::load(&ufo_path)
+                    .map_err(|e| format!("{}: {e}", ufo_path.display()))?;
+                let is_default = source.location.iter().all(|d| {
+                    let value = d.xvalue.or(d.uservalue).unwrap_or(0.0);
+                    defaults
+                        .get(d.name.as_str())
+                        .is_some_and(|v| (*v - value).abs() < f32::EPSILON)
+                });
+                if is_default {
+                    default_index = masters.len();
+                }
+                let name = source
+                    .stylename
+                    .clone()
+                    .unwrap_or_else(|| source.filename.clone());
+                masters.push(model);
+                master_names.push(name.into());
+            }
+            if masters.is_empty() {
+                return Err(format!("{}: no sources", path.display()));
+            }
+            Ok(Self {
+                active: default_index,
+                masters,
+                master_names,
+            })
+        } else {
+            let model =
+                FontModel::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let name: SharedString = model
+                .font
+                .font_info
+                .style_name
+                .clone()
+                .unwrap_or_else(|| "Regular".into())
+                .into();
+            Ok(Self {
+                masters: vec![model],
+                active: 0,
+                master_names: vec![name],
+            })
+        }
+    }
+
+    fn active_font(&self) -> &FontModel {
+        &self.masters[self.active]
+    }
+
+    fn active_font_mut(&mut self) -> &mut FontModel {
+        &mut self.masters[self.active]
+    }
+}
+
+// ============================================================================
 // GLYPH PAINTING
 // ============================================================================
 
@@ -322,7 +410,7 @@ enum Mode {
 }
 
 struct Workspace {
-    font: Option<FontModel>,
+    project: Option<Project>,
     load_error: Option<SharedString>,
     selected: Option<usize>,
     mode: Mode,
@@ -338,6 +426,41 @@ const CELL: f32 = 96.0;
 const HIT_RADIUS_PX: f64 = 8.0;
 
 impl Workspace {
+    fn font(&self) -> Option<&FontModel> {
+        self.project.as_ref().map(|p| p.active_font())
+    }
+
+    fn font_mut(&mut self) -> Option<&mut FontModel> {
+        self.project.as_mut().map(|p| p.active_font_mut())
+    }
+
+    /// Switch the active master, keeping the open glyph (by name)
+    /// when it exists in the target master.
+    fn switch_master(&mut self, master: usize) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        if master >= project.masters.len() || master == project.active {
+            return;
+        }
+        let open_glyph_name = match self.mode {
+            Mode::Editor(i) => Some(project.active_font().glyphs[i].name.clone()),
+            Mode::Grid => None,
+        };
+        project.active = master;
+        if let Some(name) = open_glyph_name {
+            match project
+                .active_font()
+                .glyphs
+                .iter()
+                .position(|g| g.name == name)
+            {
+                Some(index) => self.open_editor(index),
+                None => self.mode = Mode::Grid,
+            }
+        }
+    }
+
     fn open_editor(&mut self, index: usize) {
         self.mode = Mode::Editor(index);
         self.editor.initialized = false;
@@ -348,7 +471,7 @@ impl Workspace {
     }
 
     fn glyph_cell(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let font = self.font.as_ref().unwrap();
+        let font = self.font().unwrap();
         let entry = &font.glyphs[index];
         let name = entry.name.clone();
         let selected = self.selected == Some(index);
@@ -413,7 +536,7 @@ impl Workspace {
     /// The glyph editor: metrics lines, stroked outline over a dim
     /// fill, draggable control points, wheel pan, Cmd+wheel zoom.
     fn editor_view(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let font = self.font.as_ref().unwrap();
+        let font = self.font().unwrap();
         let entry = &font.glyphs[index];
         let outline = entry.path.clone();
         let points = entry.points.clone();
@@ -572,7 +695,7 @@ impl Workspace {
         let Mode::Editor(index) = self.mode else {
             return;
         };
-        let Some(font) = self.font.as_ref() else {
+        let Some(font) = self.font() else {
             return;
         };
         let entry = &font.glyphs[index];
@@ -585,17 +708,22 @@ impl Workspace {
         let Mode::Editor(index) = self.mode else {
             return;
         };
-        let Some(font) = self.font.as_ref() else {
+        let Some(font) = self.font() else {
             return;
         };
         let (dx, dy) = self.editor.window_to_design(pos);
         let tolerance = HIT_RADIUS_PX / self.editor.zoom;
-        let hit = font.glyphs[index]
+        // Copy the point data out so selection can mutate afterwards.
+        let all_points: Vec<((usize, usize), (f64, f64))> = font.glyphs[index]
             .points
             .iter()
-            .map(|p| {
-                let dist = ((p.x - dx).powi(2) + (p.y - dy).powi(2)).sqrt();
-                (dist, (p.contour, p.index))
+            .map(|p| ((p.contour, p.index), (p.x, p.y)))
+            .collect();
+        let hit = all_points
+            .iter()
+            .map(|(id, (x, y))| {
+                let dist = ((x - dx).powi(2) + (y - dy).powi(2)).sqrt();
+                (dist, *id)
             })
             .filter(|(dist, _)| *dist <= tolerance)
             .min_by(|a, b| a.0.total_cmp(&b.0))
@@ -612,11 +740,9 @@ impl Workspace {
                     self.editor.selected.insert(id);
                 }
                 if self.editor.selected.contains(&id) {
-                    let originals: Vec<((usize, usize), (f64, f64))> = font.glyphs[index]
-                        .points
-                        .iter()
-                        .filter(|p| self.editor.selected.contains(&(p.contour, p.index)))
-                        .map(|p| ((p.contour, p.index), (p.x, p.y)))
+                    let originals: Vec<((usize, usize), (f64, f64))> = all_points
+                        .into_iter()
+                        .filter(|(id, _)| self.editor.selected.contains(id))
                         .collect();
                     self.push_undo_snapshot(index);
                     self.editor.drag = Some(Drag::Points {
@@ -651,7 +777,7 @@ impl Workspace {
                         (*id, ((ox + dx - sx).round(), (oy + dy - sy).round()))
                     })
                     .collect();
-                if let Some(font) = self.font.as_mut() {
+                if let Some(font) = self.font_mut() {
                     font.set_points(index, &updates);
                     return true;
                 }
@@ -673,13 +799,16 @@ impl Workspace {
         if let Some(Drag::Marquee { start, current }) = self.editor.drag.take() {
             let (x0, x1) = (start.0.min(current.0), start.0.max(current.0));
             let (y0, y1) = (start.1.min(current.1), start.1.max(current.1));
-            if let Some(font) = self.font.as_ref() {
-                for p in font.glyphs[index].points.iter() {
-                    if p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1 {
-                        self.editor.selected.insert((p.contour, p.index));
-                    }
-                }
-            }
+            let inside: Vec<(usize, usize)> = match self.font() {
+                Some(font) => font.glyphs[index]
+                    .points
+                    .iter()
+                    .filter(|p| p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)
+                    .map(|p| (p.contour, p.index))
+                    .collect(),
+                None => Vec::new(),
+            };
+            self.editor.selected.extend(inside);
         }
         self.editor.drag = None;
     }
@@ -687,7 +816,7 @@ impl Workspace {
     /// Push the open glyph's contours onto the undo stack and clear
     /// the redo tail. Called at the start of every mutating gesture.
     fn push_undo_snapshot(&mut self, index: usize) {
-        if let Some(snapshot) = self.font.as_ref().and_then(|f| f.snapshot_contours(index)) {
+        if let Some(snapshot) = self.font().and_then(|f| f.snapshot_contours(index)) {
             self.editor.undo.push(snapshot);
             self.editor.redo.clear();
         }
@@ -700,11 +829,12 @@ impl Workspace {
         let Some(previous) = self.editor.undo.pop() else {
             return;
         };
-        if let Some(font) = self.font.as_mut() {
-            if let Some(current) = font.snapshot_contours(index) {
+        if let Some(font) = self.font_mut() {
+            let current = font.snapshot_contours(index);
+            font.restore_contours(index, previous);
+            if let Some(current) = current {
                 self.editor.redo.push(current);
             }
-            font.restore_contours(index, previous);
         }
     }
 
@@ -715,11 +845,12 @@ impl Workspace {
         let Some(next) = self.editor.redo.pop() else {
             return;
         };
-        if let Some(font) = self.font.as_mut() {
-            if let Some(current) = font.snapshot_contours(index) {
+        if let Some(font) = self.font_mut() {
+            let current = font.snapshot_contours(index);
+            font.restore_contours(index, next);
+            if let Some(current) = current {
                 self.editor.undo.push(current);
             }
-            font.restore_contours(index, next);
         }
     }
 
@@ -732,13 +863,14 @@ impl Workspace {
             return false;
         }
         self.push_undo_snapshot(index);
-        let Some(font) = self.font.as_mut() else {
+        let selected = self.editor.selected.clone();
+        let Some(font) = self.font_mut() else {
             return false;
         };
         let updates: Vec<((usize, usize), (f64, f64))> = font.glyphs[index]
             .points
             .iter()
-            .filter(|p| self.editor.selected.contains(&(p.contour, p.index)))
+            .filter(|p| selected.contains(&(p.contour, p.index)))
             .map(|p| ((p.contour, p.index), (p.x + dx, p.y + dy)))
             .collect();
         font.set_points(index, &updates);
@@ -773,8 +905,8 @@ impl Workspace {
         }
     }
 
-    fn header(&self) -> impl IntoElement + use<> {
-        let (title, subtitle) = match (&self.font, &self.load_error) {
+    fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let (title, subtitle) = match (self.font(), &self.load_error) {
             (Some(font), _) => (
                 font.family_name.clone(),
                 SharedString::from(format!(
@@ -799,13 +931,52 @@ impl Workspace {
             .border_color(t::cell_border())
             .child(div().text_lg().text_color(t::text()).child(title))
             .child(div().text_sm().text_color(t::text_muted()).child(subtitle))
+            .child(div().flex_1())
+            .child(self.master_switcher(cx))
+    }
+
+    /// One button per master; the active one gets the accent border.
+    fn master_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let (names, active): (Vec<SharedString>, usize) = match &self.project {
+            Some(p) if p.masters.len() > 1 => (p.master_names.clone(), p.active),
+            _ => (Vec::new(), 0),
+        };
+        div().flex().gap_1().children(names.into_iter().enumerate().map(
+            move |(i, name)| {
+                let is_active = i == active;
+                let dirty = self
+                    .project
+                    .as_ref()
+                    .is_some_and(|p| p.masters[i].dirty);
+                let label: SharedString = if dirty {
+                    format!("{name} •").into()
+                } else {
+                    name
+                };
+                div()
+                    .id(("master", i))
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(if is_active { t::accent() } else { t::cell_border() })
+                    .text_color(if is_active { t::text() } else { t::text_muted() })
+                    .text_sm()
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.switch_master(i);
+                        cx.notify();
+                    }))
+                    .child(label)
+            },
+        ))
     }
 
     fn status_bar(&self) -> impl IntoElement + use<> {
         let text: SharedString = if let Some(note) = &self.status_note {
             note.clone()
         } else {
-            match (&self.mode, self.selected, &self.font) {
+            match (&self.mode, self.selected, self.font()) {
                 (Mode::Editor(i), _, Some(font)) => {
                     let g = &font.glyphs[*i];
                     let sel = match self.editor.selected.len() {
@@ -869,10 +1040,25 @@ impl Workspace {
             ("up", false) if in_editor => self.nudge_selection(0.0, step),
             ("down", false) if in_editor => self.nudge_selection(0.0, -step),
             ("s", true) => {
-                if let Some(font) = self.font.as_mut() {
-                    self.status_note = Some(match font.save() {
-                        Ok(()) => format!("Saved {}", font.source_path.display()).into(),
-                        Err(e) => format!("Save failed: {e}").into(),
+                // Save every dirty master.
+                if let Some(project) = self.project.as_mut() {
+                    let mut saved = Vec::new();
+                    let mut failed = Vec::new();
+                    for master in project.masters.iter_mut() {
+                        if !master.dirty {
+                            continue;
+                        }
+                        match master.save() {
+                            Ok(()) => saved.push(master.source_path.display().to_string()),
+                            Err(e) => failed.push(format!("{e}")),
+                        }
+                    }
+                    self.status_note = Some(if !failed.is_empty() {
+                        format!("Save failed: {}", failed.join("; ")).into()
+                    } else if saved.is_empty() {
+                        "Nothing to save".into()
+                    } else {
+                        format!("Saved {}", saved.join(", ")).into()
                     });
                 }
                 true
@@ -896,12 +1082,12 @@ impl Render for Workspace {
         }
 
         let content = match self.mode {
-            Mode::Editor(index) if self.font.is_some() => {
+            Mode::Editor(index) if self.project.is_some() => {
                 self.editor_view(index, cx).into_any_element()
             }
             _ => {
                 let query = self.search_query.clone();
-                let grid: Vec<_> = match &self.font {
+                let grid: Vec<_> = match self.font() {
                     Some(font) => (0..font.glyphs.len())
                         .filter(|&i| {
                             query.is_empty()
@@ -944,7 +1130,7 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
-            .child(self.header())
+            .child(self.header(cx))
             .child(content)
             .child(self.status_bar())
     }
@@ -956,7 +1142,7 @@ impl Render for Workspace {
 
 fn default_font_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../runebender-web/assets/test-fonts/VirtuaGrotesk-Regular.ufo")
+        .join("../runebender-web/assets/test-fonts/VirtuaGrotesk.designspace")
 }
 
 fn main() {
@@ -965,9 +1151,9 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(default_font_path);
 
-    let (font, load_error) = match FontModel::load(&font_path) {
-        Ok(f) => (Some(f), None),
-        Err(e) => (None, Some(format!("{}: {e}", font_path.display()).into())),
+    let (project, load_error) = match Project::load(&font_path) {
+        Ok(p) => (Some(p), None),
+        Err(e) => (None, Some(e.into())),
     };
 
     // QA hook: RB_OPEN_GLYPH=<name> starts in the editor on that
@@ -975,8 +1161,11 @@ fn main() {
     let start_mode = std::env::var("RB_OPEN_GLYPH")
         .ok()
         .and_then(|name| {
-            let f = font.as_ref()?;
-            f.glyphs.iter().position(|g| g.name.as_ref() == name)
+            let p = project.as_ref()?;
+            p.active_font()
+                .glyphs
+                .iter()
+                .position(|g| g.name.as_ref() == name)
         })
         .map(Mode::Editor)
         .unwrap_or(Mode::Grid);
@@ -1016,7 +1205,7 @@ fn main() {
                         }
                     });
                     Workspace {
-                        font,
+                        project,
                         load_error,
                         selected: None,
                         mode: start_mode,
@@ -1040,9 +1229,23 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn test_ufo_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../runebender-web/assets/test-fonts/VirtuaGrotesk-Regular.ufo")
+    }
+
+    #[test]
+    fn designspace_loads_with_masters() {
+        let project = Project::load(&default_font_path()).expect("designspace loads");
+        assert_eq!(project.masters.len(), 2, "regular + bold");
+        assert!(project.master_names.iter().any(|n| n.contains("Bold")));
+        // Active master is the default location (Regular).
+        assert!(!project.master_names[project.active].contains("Bold"));
+    }
+
     #[test]
     fn move_point_and_save_roundtrip() {
-        let src = default_font_path();
+        let src = test_ufo_path();
         let tmp = std::env::temp_dir().join("rbg-save-test.ufo");
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp).unwrap();
@@ -1083,7 +1286,7 @@ mod tests {
 
     #[test]
     fn snapshot_restore_roundtrip() {
-        let mut model = FontModel::load(&default_font_path()).expect("load");
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
         let index = model
             .glyphs
             .iter()
