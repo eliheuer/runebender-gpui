@@ -183,6 +183,133 @@ impl FontModel {
         self.rebuild_entry(glyph_index);
     }
 
+    /// Start a new open contour at (x, y). Returns its index.
+    fn start_contour(&mut self, glyph_index: usize, x: f64, y: f64) -> Option<usize> {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let glyph = self.font.default_layer_mut().get_glyph_mut(name.as_str())?;
+        let point = norad::ContourPoint::new(x, y, norad::PointType::Move, false, None, None);
+        glyph.contours.push(norad::Contour::new(vec![point], None));
+        let contour = glyph.contours.len() - 1;
+        self.dirty = true;
+        self.rebuild_entry(glyph_index);
+        Some(contour)
+    }
+
+    /// Append points to an open contour (pen tool). Pass the two
+    /// off-curve controls for a curve segment, or none for a line.
+    fn append_segment(
+        &mut self,
+        glyph_index: usize,
+        contour: usize,
+        controls: Option<((f64, f64), (f64, f64))>,
+        x: f64,
+        y: f64,
+        smooth: bool,
+    ) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return;
+        };
+        let Some(c) = glyph.contours.get_mut(contour) else {
+            return;
+        };
+        let typ = if controls.is_some() {
+            norad::PointType::Curve
+        } else {
+            norad::PointType::Line
+        };
+        if let Some(((c1x, c1y), (c2x, c2y))) = controls {
+            c.points.push(norad::ContourPoint::new(
+                c1x,
+                c1y,
+                norad::PointType::OffCurve,
+                false,
+                None,
+                None,
+            ));
+            c.points.push(norad::ContourPoint::new(
+                c2x,
+                c2y,
+                norad::PointType::OffCurve,
+                false,
+                None,
+                None,
+            ));
+        }
+        c.points
+            .push(norad::ContourPoint::new(x, y, typ, smooth, None, None));
+        self.dirty = true;
+        self.rebuild_entry(glyph_index);
+    }
+
+    /// Close an open contour: the Move start point becomes the final
+    /// segment's target. `controls` curves the closing segment.
+    fn close_contour(
+        &mut self,
+        glyph_index: usize,
+        contour: usize,
+        controls: Option<((f64, f64), (f64, f64))>,
+    ) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return;
+        };
+        let Some(c) = glyph.contours.get_mut(contour) else {
+            return;
+        };
+        let Some(first) = c.points.first_mut() else {
+            return;
+        };
+        if first.typ != norad::PointType::Move {
+            return;
+        }
+        // In UFO, a closed contour simply has no Move point: the
+        // final segment wraps around to the first point.
+        first.typ = if controls.is_some() {
+            norad::PointType::Curve
+        } else {
+            norad::PointType::Line
+        };
+        if let Some(((c1x, c1y), (c2x, c2y))) = controls {
+            c.points.push(norad::ContourPoint::new(
+                c1x,
+                c1y,
+                norad::PointType::OffCurve,
+                false,
+                None,
+                None,
+            ));
+            c.points.push(norad::ContourPoint::new(
+                c2x,
+                c2y,
+                norad::PointType::OffCurve,
+                false,
+                None,
+                None,
+            ));
+        }
+        self.dirty = true;
+        self.rebuild_entry(glyph_index);
+    }
+
+    /// Delete an unfinished pen contour (Esc while drawing a single
+    /// stray point, for example).
+    fn remove_contour_if_degenerate(&mut self, glyph_index: usize, contour: usize) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return;
+        };
+        if glyph
+            .contours
+            .get(contour)
+            .is_some_and(|c| c.points.len() < 2)
+        {
+            glyph.contours.remove(contour);
+            self.dirty = true;
+            self.rebuild_entry(glyph_index);
+        }
+    }
+
     fn save(&mut self) -> Result<(), norad::error::FontWriteError> {
         self.font.save(&self.source_path)?;
         self.dirty = false;
@@ -320,6 +447,23 @@ fn build_fill_path(
 // EDITOR VIEWPORT
 // ============================================================================
 
+/// The active editor tool.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tool {
+    Select,
+    Pen,
+}
+
+/// Pen-tool drawing state: the open contour and the outgoing handle
+/// of the previously placed point (set by click-dragging it).
+struct PenState {
+    contour: usize,
+    prev_out_handle: Option<(f64, f64)>,
+    /// While the mouse is down on a fresh point: its position, used
+    /// to mirror the dragged handle.
+    placing: Option<(f64, f64)>,
+}
+
 /// An in-progress mouse gesture on the editor canvas.
 enum Drag {
     /// Moving the selected points: gesture start in design space and
@@ -342,6 +486,8 @@ struct EditorState {
     zoom: f64,
     pan: (f64, f64),
     initialized: bool,
+    tool: Tool,
+    pen: Option<PenState>,
     selected: std::collections::HashSet<(usize, usize)>,
     drag: Option<Drag>,
     /// Undo/redo stacks of contour snapshots for the open glyph.
@@ -358,6 +504,8 @@ impl EditorState {
             zoom: 1.0,
             pan: (0.0, 0.0),
             initialized: false,
+            tool: Tool::Select,
+            pen: None,
             selected: std::collections::HashSet::new(),
             drag: None,
             undo: Vec::new(),
@@ -468,6 +616,8 @@ impl Workspace {
         self.editor.drag = None;
         self.editor.undo.clear();
         self.editor.redo.clear();
+        self.editor.tool = Tool::Select;
+        self.editor.pen = None;
     }
 
     fn glyph_cell(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -554,8 +704,45 @@ impl Workspace {
         let bounds_slot = self.editor.bounds.clone();
         let needs_fit = !self.editor.initialized;
 
+        let tool = self.editor.tool;
+        let tool_button = |id: &'static str, label_text: &'static str, this_tool: Tool| {
+            div()
+                .id(id)
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(if tool == this_tool { t::accent() } else { t::cell_border() })
+                .text_color(if tool == this_tool { t::text() } else { t::text_muted() })
+                .text_sm()
+                .cursor_pointer()
+                .child(label_text)
+        };
+
         div()
             .flex_1()
+            .relative()
+            .child(
+                div()
+                    .absolute()
+                    .top_2()
+                    .left_2()
+                    .flex()
+                    .gap_1()
+                    .child(tool_button("tool-select", "Select", Tool::Select).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.pen_finish();
+                            this.editor.tool = Tool::Select;
+                            cx.notify();
+                        }),
+                    ))
+                    .child(tool_button("tool-pen", "Pen", Tool::Pen).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.editor.tool = Tool::Pen;
+                            cx.notify();
+                        },
+                    ))),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
@@ -708,6 +895,10 @@ impl Workspace {
         let Mode::Editor(index) = self.mode else {
             return;
         };
+        if self.editor.tool == Tool::Pen {
+            self.pen_mouse_down(index, pos);
+            return;
+        }
         let Some(font) = self.font() else {
             return;
         };
@@ -767,6 +958,9 @@ impl Workspace {
         let Mode::Editor(index) = self.mode else {
             return false;
         };
+        if self.editor.tool == Tool::Pen {
+            return self.pen_mouse_drag(index, pos);
+        }
         let (dx, dy) = self.editor.window_to_design(pos);
         match &mut self.editor.drag {
             Some(Drag::Points { start, originals }) => {
@@ -792,6 +986,12 @@ impl Workspace {
     }
 
     fn editor_mouse_up(&mut self) {
+        if self.editor.tool == Tool::Pen {
+            if let Some(pen) = self.editor.pen.as_mut() {
+                pen.placing = None;
+            }
+            return;
+        }
         let Mode::Editor(index) = self.mode else {
             self.editor.drag = None;
             return;
@@ -811,6 +1011,115 @@ impl Workspace {
             self.editor.selected.extend(inside);
         }
         self.editor.drag = None;
+    }
+
+    /// Pen click: place a point (line segment from the previous one,
+    /// curve if the previous point was dragged into a handle), start
+    /// a contour if none is open, or close the contour when clicking
+    /// its first point.
+    fn pen_mouse_down(&mut self, index: usize, pos: Point<gpui::Pixels>) {
+        let (dx, dy) = self.editor.window_to_design(pos);
+        let (x, y) = (dx.round(), dy.round());
+        let tolerance = HIT_RADIUS_PX / self.editor.zoom;
+        self.push_undo_snapshot(index);
+
+        match self.editor.pen.take() {
+            None => {
+                if let Some(font) = self.font_mut() {
+                    if let Some(contour) = font.start_contour(index, x, y) {
+                        self.editor.pen = Some(PenState {
+                            contour,
+                            prev_out_handle: None,
+                            placing: Some((x, y)),
+                        });
+                    }
+                }
+            }
+            Some(pen) => {
+                // Near the contour's start point? Close it.
+                let start = self.font().and_then(|f| {
+                    f.glyphs[index]
+                        .points
+                        .iter()
+                        .find(|p| p.contour == pen.contour && p.index == 0)
+                        .map(|p| (p.x, p.y))
+                });
+                let closing = start.is_some_and(|(sx, sy)| {
+                    ((sx - dx).powi(2) + (sy - dy).powi(2)).sqrt() <= tolerance
+                });
+                let controls = pen.prev_out_handle.map(|out| {
+                    let target = if closing { start.unwrap() } else { (x, y) };
+                    // Incoming control defaults onto the target until
+                    // the user drags this point into a curve.
+                    (out, target)
+                });
+                if let Some(font) = self.font_mut() {
+                    if closing {
+                        font.close_contour(index, pen.contour, controls);
+                        self.editor.pen = None;
+                    } else {
+                        font.append_segment(index, pen.contour, controls, x, y, false);
+                        self.editor.pen = Some(PenState {
+                            contour: pen.contour,
+                            prev_out_handle: None,
+                            placing: Some((x, y)),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pen drag while placing a point: pull out symmetric handles.
+    /// The outgoing handle follows the cursor; the segment into the
+    /// point (if curved) gets the mirrored incoming handle.
+    fn pen_mouse_drag(&mut self, index: usize, pos: Point<gpui::Pixels>) -> bool {
+        let (dx, dy) = self.editor.window_to_design(pos);
+        let Some(pen) = self.editor.pen.as_mut() else {
+            return false;
+        };
+        let Some((px, py)) = pen.placing else {
+            return false;
+        };
+        let out = (dx.round(), dy.round());
+        let mirror = ((2.0 * px - out.0).round(), (2.0 * py - out.1).round());
+        pen.prev_out_handle = Some(out);
+        let contour = pen.contour;
+        // If the just-placed point ended a curve segment, move its
+        // incoming control to the mirror and mark the point smooth.
+        let updates: Option<Vec<((usize, usize), (f64, f64))>> = self.font().map(|f| {
+            let pts: Vec<_> = f.glyphs[index]
+                .points
+                .iter()
+                .filter(|p| p.contour == contour)
+                .collect();
+            let n = pts.len();
+            // Points layout when last segment was a curve:
+            // [... c1 c2 P] — c2 is at n-2.
+            if n >= 3 && !pts[n - 2].on_curve && pts[n - 1].x == px && pts[n - 1].y == py {
+                vec![((contour, n - 2), mirror)]
+            } else {
+                Vec::new()
+            }
+        });
+        if let (Some(updates), Some(font)) = (updates, self.font_mut()) {
+            if !updates.is_empty() {
+                font.set_points(index, &updates);
+            }
+        }
+        true
+    }
+
+    /// Finish an open pen contour without closing it.
+    fn pen_finish(&mut self) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        if let Some(pen) = self.editor.pen.take() {
+            if let Some(font) = self.font_mut() {
+                font.remove_contour_if_degenerate(index, pen.contour);
+            }
+        }
     }
 
     /// Push the open glyph's contours onto the undo stack and clear
@@ -983,11 +1292,11 @@ impl Workspace {
                         0 => String::new(),
                         n => format!(" · {n} selected"),
                     };
-                    format!(
-                        "{}{} · drag points or marquee, arrows nudge, Cmd+Z undo, Cmd+S saves, Esc exits",
-                        g.name, sel
-                    )
-                    .into()
+                    let tool = match self.editor.tool {
+                        Tool::Select => "V select",
+                        Tool::Pen => "P pen: click adds, drag curves, click start closes, Enter ends",
+                    };
+                    format!("{}{} · {tool} · Cmd+Z undo · Cmd+S saves · Esc", g.name, sel).into()
                 }
                 (_, Some(i), Some(font)) => {
                     let g = &font.glyphs[i];
@@ -1023,8 +1332,25 @@ impl Workspace {
         let step = if shift { 10.0 } else { 1.0 };
         match (key, cmd) {
             ("escape", _) if in_editor => {
-                self.mode = Mode::Grid;
-                self.status_note = None;
+                if self.editor.pen.is_some() {
+                    self.pen_finish();
+                } else {
+                    self.mode = Mode::Grid;
+                    self.status_note = None;
+                }
+                true
+            }
+            ("enter", _) if in_editor && self.editor.pen.is_some() => {
+                self.pen_finish();
+                true
+            }
+            ("v", false) if in_editor => {
+                self.pen_finish();
+                self.editor.tool = Tool::Select;
+                true
+            }
+            ("p", false) if in_editor => {
+                self.editor.tool = Tool::Pen;
                 true
             }
             ("z", true) if in_editor => {
@@ -1299,6 +1625,48 @@ mod tests {
         model.restore_contours(index, before);
         assert_eq!(model.glyphs[index].points[0].x, p0.x);
         assert_eq!(model.glyphs[index].points[0].y, p0.y);
+    }
+
+    #[test]
+    fn pen_primitives_build_a_closed_contour() {
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
+        let index = model
+            .glyphs
+            .iter()
+            .position(|g| g.name.as_ref() == "space")
+            .unwrap();
+        let base_contours = model.snapshot_contours(index).unwrap().len();
+
+        let c = model.start_contour(index, 0.0, 0.0).unwrap();
+        model.append_segment(index, c, None, 100.0, 0.0, false); // line
+        model.append_segment(
+            index,
+            c,
+            Some(((130.0, 40.0), (130.0, 80.0))),
+            100.0,
+            120.0,
+            true,
+        ); // curve
+        model.close_contour(index, c, None);
+
+        let contours = model.snapshot_contours(index).unwrap();
+        assert_eq!(contours.len(), base_contours + 1);
+        let new = &contours[c];
+        assert!(new.is_closed(), "contour should be closed");
+        // move->line conversion on close + 2 on-curves + 2 off-curves
+        assert_eq!(new.points.len(), 5);
+        assert_eq!(new.points[0].typ, norad::PointType::Line);
+        assert!(new.points[4].smooth);
+        // The outline cache rebuilt and is drawable.
+        assert!(!model.glyphs[index].path.elements().is_empty());
+
+        // Degenerate contour cleanup: a single stray point goes away.
+        let c2 = model.start_contour(index, 5.0, 5.0).unwrap();
+        model.remove_contour_if_degenerate(index, c2);
+        assert_eq!(
+            model.snapshot_contours(index).unwrap().len(),
+            base_contours + 1
+        );
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).
