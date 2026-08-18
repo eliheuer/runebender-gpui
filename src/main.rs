@@ -893,6 +893,41 @@ impl FontModel {
         true
     }
 
+    /// Contours that contain any selected point; all contours when
+    /// the selection is empty.
+    fn contours_for_copy(
+        &self,
+        glyph_index: usize,
+        selected: &std::collections::HashSet<(usize, usize)>,
+    ) -> Vec<norad::Contour> {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.get_glyph(name.as_str()) else {
+            return Vec::new();
+        };
+        if selected.is_empty() {
+            return glyph.contours.clone();
+        }
+        glyph
+            .contours
+            .iter()
+            .enumerate()
+            .filter(|(ci, _)| selected.iter().any(|(c, _)| c == ci))
+            .map(|(_, c)| c.clone())
+            .collect()
+    }
+
+    fn paste_contours(&mut self, glyph_index: usize, contours: &[norad::Contour]) {
+        if contours.is_empty() {
+            return;
+        }
+        let name = self.glyphs[glyph_index].name.to_string();
+        if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
+            glyph.contours.extend(contours.iter().cloned());
+            self.dirty = true;
+        }
+        self.rebuild_entry(glyph_index);
+    }
+
     /// Insert a rectangle or ellipse contour spanning `rect`.
     fn add_shape_contour(&mut self, glyph_index: usize, rect: kurbo::Rect, ellipse: bool) {
         let name = self.glyphs[glyph_index].name.to_string();
@@ -1415,6 +1450,8 @@ struct Workspace {
     preview_bounds: Arc<Mutex<Bounds<gpui::Pixels>>>,
     /// One slider per designspace axis, created lazily in render.
     axis_sliders: Vec<gpui::Entity<gpui_component::slider::SliderState>>,
+    /// Internal outline clipboard: whole contours.
+    clipboard: Vec<norad::Contour>,
     /// Filesystem watcher over the open masters' UFO directories.
     _watcher: Option<notify::RecommendedWatcher>,
     /// Set at save time so the watcher ignores our own writes.
@@ -3111,6 +3148,45 @@ impl Workspace {
                 }
                 true
             }
+            ("c", true) => {
+                let index = match self.mode {
+                    Mode::Editor(i) => Some(i),
+                    Mode::Grid => self.selected,
+                };
+                if let (Some(index), Some(font)) = (index, self.font()) {
+                    let selected = if in_editor {
+                        self.editor.selected.clone()
+                    } else {
+                        Default::default()
+                    };
+                    self.clipboard = font.contours_for_copy(index, &selected);
+                    self.status_note = Some(
+                        format!("Copied {} contours", self.clipboard.len()).into(),
+                    );
+                }
+                true
+            }
+            ("v", true) => {
+                let index = match self.mode {
+                    Mode::Editor(i) => Some(i),
+                    Mode::Grid => self.selected,
+                };
+                if let Some(index) = index {
+                    if self.clipboard.is_empty() {
+                        return false;
+                    }
+                    self.push_undo_snapshot(index);
+                    let contours = self.clipboard.clone();
+                    if let Some(font) = self.font_mut() {
+                        font.paste_contours(index, &contours);
+                    }
+                    if let Some(project) = self.project.as_mut() {
+                        let name = project.active_font().glyphs[index].name.to_string();
+                        project.recheck_compat(&name);
+                    }
+                }
+                true
+            }
             ("d", true) if in_editor && shift => {
                 let Mode::Editor(index) = self.mode else {
                     return false;
@@ -3382,6 +3458,7 @@ fn main() {
                         preview_bounds: Arc::new(Mutex::new(Bounds::default())),
                         selected_pair: None,
                         axis_sliders: Vec::new(),
+                        clipboard: Vec::new(),
                         _watcher: None,
                         last_save: Arc::new(Mutex::new(std::time::Instant::now())),
                         _subscriptions: vec![subscription, sub_w, sub_l, sub_r, sub_p],
