@@ -472,6 +472,38 @@ impl Project {
     }
 
     fn load_inner(path: &std::path::Path) -> Result<Self, String> {
+        if path.extension().is_some_and(|e| e == "glyphs") {
+            // Convert the .glyphs source to UFO + designspace files in
+            // a sibling directory, then open the converted project.
+            let text = std::fs::read_to_string(path).map_err(|e| format!("{e}"))?;
+            let result = runebender_core::glyphs_import::glyphs_to_ufo_files(&text)?;
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "glyphs-import".into());
+            let out_dir = path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join(format!("{stem}-ufo"));
+            let mut designspace: Option<std::path::PathBuf> = None;
+            let mut first_ufo: Option<std::path::PathBuf> = None;
+            for file in &result.files {
+                let target = out_dir.join(&file.path);
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| format!("{e}"))?;
+                }
+                std::fs::write(&target, &file.text).map_err(|e| format!("{e}"))?;
+                if file.path.ends_with(".designspace") {
+                    designspace = Some(target);
+                } else if first_ufo.is_none() && file.path.ends_with("fontinfo.plist") {
+                    first_ufo = target.parent().map(|p| p.to_path_buf());
+                }
+            }
+            let open = designspace
+                .or(first_ufo)
+                .ok_or_else(|| "conversion produced no font".to_string())?;
+            return Self::load_inner(&open);
+        }
         if path.extension().is_some_and(|e| e == "designspace") {
             let doc = norad::designspace::DesignSpaceDocument::load(path)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -3403,6 +3435,93 @@ mod tests {
             "union area wrong: {area} (expected ~17500)"
         );
         assert!(snap.contours[0].is_closed());
+    }
+
+    #[test]
+    fn glyphs_import_end_to_end() {
+        // Use the minimal fixture from runebender-core's tests via a
+        // real conversion + load cycle.
+        const MINIMAL: &str = r#"{
+.appVersion = "3300";
+.formatVersion = 3;
+axes = (
+{
+name = Weight;
+tag = wght;
+}
+);
+familyName = TestSans;
+fontMaster = (
+{
+ascender = 800;
+axesValues = (400);
+capHeight = 700;
+descender = -200;
+id = m01;
+name = Regular;
+},
+{
+ascender = 800;
+axesValues = (700);
+capHeight = 700;
+descender = -200;
+id = m02;
+name = Bold;
+}
+);
+glyphs = (
+{
+glyphname = A;
+layers = (
+{
+layerId = m01;
+shapes = (
+{
+closed = 1;
+nodes = (
+(0,0,l),
+(100,0,l),
+(50,700,l)
+);
+}
+);
+width = 600;
+},
+{
+layerId = m02;
+shapes = (
+{
+closed = 1;
+nodes = (
+(0,0,l),
+(140,0,l),
+(70,700,l)
+);
+}
+);
+width = 640;
+}
+);
+unicode = 65;
+}
+);
+unitsPerEm = 1000;
+}"#;
+        let dir = std::env::temp_dir().join("rbg-glyphs-import-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let glyphs_path = dir.join("TestSans.glyphs");
+        std::fs::write(&glyphs_path, MINIMAL).unwrap();
+        let project = Project::load(&glyphs_path).expect("glyphs project loads");
+        assert_eq!(project.masters.len(), 2);
+        let a = project
+            .active_font()
+            .glyphs
+            .iter()
+            .find(|g| g.name.as_ref() == "A")
+            .expect("glyph A");
+        assert!(!a.path.elements().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).
