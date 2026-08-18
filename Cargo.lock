@@ -5626,6 +5626,8 @@ name = "runebender-core"
 version = "0.1.0"
 dependencies = [
  "kurbo 0.13.1",
+ "linesweeper",
+ "norad",
  "serde",
  "unicode-general-category",
 ]
