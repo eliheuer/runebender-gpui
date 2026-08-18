@@ -928,6 +928,53 @@ impl FontModel {
         self.rebuild_entry(glyph_index);
     }
 
+    /// Remove overlap: union all contours via linesweeper, convert
+    /// back to norad contours (smooth flags restored on points that
+    /// kept their positions). Returns false when nothing changed.
+    fn remove_overlap(&mut self, glyph_index: usize) -> bool {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.get_glyph(name.as_str()) else {
+            return false;
+        };
+        if glyph.contours.is_empty() {
+            return false;
+        }
+        let combined = glyph_path::contours_to_bezpath(glyph);
+        let result = match linesweeper::binary_op(
+            &combined,
+            &BezPath::new(),
+            linesweeper::FillRule::NonZero,
+            linesweeper::BinaryOp::Union,
+        ) {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+        // Smoothness by original position.
+        let smooth_at: std::collections::HashMap<(i64, i64), bool> = glyph
+            .contours
+            .iter()
+            .flat_map(|c| c.points.iter())
+            .filter(|p| p.typ != norad::PointType::OffCurve)
+            .map(|p| ((p.x.round() as i64, p.y.round() as i64), p.smooth))
+            .collect();
+        let mut new_contours: Vec<norad::Contour> = Vec::new();
+        for contour in result.contours() {
+            if let Some(c) = bezpath_to_contour(&contour.path, &smooth_at) {
+                new_contours.push(c);
+            }
+        }
+        if new_contours.is_empty() {
+            return false;
+        }
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return false;
+        };
+        glyph.contours = new_contours;
+        self.dirty = true;
+        self.rebuild_entry(glyph_index);
+        true
+    }
+
     /// Insert a rectangle or ellipse contour spanning `rect`.
     fn add_shape_contour(&mut self, glyph_index: usize, rect: kurbo::Rect, ellipse: bool) {
         let name = self.glyphs[glyph_index].name.to_string();
@@ -982,6 +1029,122 @@ impl FontModel {
         self.dirty = false;
         Ok(())
     }
+}
+
+/// Convert one closed BezPath contour into a norad contour. Points
+/// found in `smooth_at` keep their smooth flag.
+fn bezpath_to_contour(
+    path: &BezPath,
+    smooth_at: &std::collections::HashMap<(i64, i64), bool>,
+) -> Option<norad::Contour> {
+    let mut points: Vec<norad::ContourPoint> = Vec::new();
+    let mut start: Option<kurbo::Point> = None;
+    let smooth = |x: f64, y: f64| {
+        smooth_at
+            .get(&(x.round() as i64, y.round() as i64))
+            .copied()
+            .unwrap_or(false)
+    };
+    let on = |x: f64, y: f64, curve: bool, smooth: bool| {
+        norad::ContourPoint::new(
+            x.round(),
+            y.round(),
+            if curve {
+                norad::PointType::Curve
+            } else {
+                norad::PointType::Line
+            },
+            smooth,
+            None,
+            None,
+        )
+    };
+    for el in path.elements() {
+        match el {
+            PathEl::MoveTo(p) => start = Some(*p),
+            PathEl::LineTo(p) => points.push(on(p.x, p.y, false, smooth(p.x, p.y))),
+            PathEl::CurveTo(c1, c2, p) => {
+                points.push(norad::ContourPoint::new(
+                    c1.x.round(),
+                    c1.y.round(),
+                    norad::PointType::OffCurve,
+                    false,
+                    None,
+                    None,
+                ));
+                points.push(norad::ContourPoint::new(
+                    c2.x.round(),
+                    c2.y.round(),
+                    norad::PointType::OffCurve,
+                    false,
+                    None,
+                    None,
+                ));
+                points.push(on(p.x, p.y, true, smooth(p.x, p.y)));
+            }
+            PathEl::QuadTo(c, p) => {
+                // Elevate to cubic.
+                let s = points
+                    .iter()
+                    .rev()
+                    .find(|q| q.typ != norad::PointType::OffCurve)
+                    .map(|q| kurbo::Point::new(q.x, q.y))
+                    .or(start)?;
+                let c1 = s + (c.to_vec2() - s.to_vec2()) * (2.0 / 3.0);
+                let c2 = *p + (c.to_vec2() - p.to_vec2()) * (2.0 / 3.0);
+                points.push(norad::ContourPoint::new(
+                    c1.x.round(),
+                    c1.y.round(),
+                    norad::PointType::OffCurve,
+                    false,
+                    None,
+                    None,
+                ));
+                points.push(norad::ContourPoint::new(
+                    c2.x.round(),
+                    c2.y.round(),
+                    norad::PointType::OffCurve,
+                    false,
+                    None,
+                    None,
+                ));
+                points.push(on(p.x, p.y, true, smooth(p.x, p.y)));
+            }
+            PathEl::ClosePath => {}
+        }
+    }
+    let start = start?;
+    // If the last on-curve duplicates the start, its segment closes
+    // the contour: rotate so that segment's target IS the first
+    // listed point (UFO closed convention: no Move point at all).
+    if let Some(last_on) = points
+        .iter()
+        .rposition(|p| p.typ != norad::PointType::OffCurve)
+    {
+        let lp = &points[last_on];
+        if (lp.x - start.x.round()).abs() < 0.51 && (lp.y - start.y.round()).abs() < 0.51 {
+            // The final on-curve replaces the implicit start point:
+            // rotate it (and its controls) to the front.
+            let tail: Vec<norad::ContourPoint> = points.drain(last_on..).collect();
+            // tail = [c1?, c2?, ON]; ON goes first, controls go last.
+            let (controls, on_pt) = tail.split_at(tail.len() - 1);
+            let mut rotated = vec![on_pt[0].clone()];
+            rotated.extend(points);
+            rotated.extend(controls.iter().cloned());
+            points = rotated;
+        } else {
+            // Path didn't return to start explicitly: close with a
+            // line by listing the start as first point.
+            let first = on(start.x, start.y, false, smooth(start.x, start.y));
+            points.insert(0, first);
+        }
+    } else {
+        return None;
+    }
+    if points.iter().filter(|p| p.typ != norad::PointType::OffCurve).count() < 2 {
+        return None;
+    }
+    Some(norad::Contour::new(points, None))
 }
 
 // ============================================================================
@@ -1782,6 +1945,21 @@ impl Workspace {
                     .child(op_button("op-optimize", "Optimize").on_click(cx.listener(
                         |this, _, _, cx| {
                             this.apply_curve_op(CurveOp::Optimize(0.12));
+                            cx.notify();
+                        },
+                    )))
+                    .child(op_button("op-overlap", "Overlap").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            if let Mode::Editor(index) = this.mode {
+                                this.push_undo_snapshot(index);
+                                let changed =
+                                    this.font_mut().is_some_and(|f| f.remove_overlap(index));
+                                if !changed {
+                                    this.editor.undo.pop();
+                                } else {
+                                    this.editor.selected.clear();
+                                }
+                            }
                             cx.notify();
                         },
                     ))),
@@ -3187,6 +3365,20 @@ impl Workspace {
                 }
                 true
             }
+            ("o", true) if in_editor && shift => {
+                let Mode::Editor(index) = self.mode else {
+                    return false;
+                };
+                self.push_undo_snapshot(index);
+                let changed = self.font_mut().is_some_and(|f| f.remove_overlap(index));
+                if !changed {
+                    self.editor.undo.pop();
+                }
+                if changed {
+                    self.editor.selected.clear();
+                }
+                changed
+            }
             ("d", true) if in_editor && shift => {
                 let Mode::Editor(index) = self.mode else {
                     return false;
@@ -3917,6 +4109,29 @@ mod tests {
             "area changed too much: {area_before} -> {area_after}"
         );
         assert!(model.glyphs[index].component_names.is_empty());
+    }
+
+    #[test]
+    fn remove_overlap_unions_contours() {
+        use kurbo::Shape;
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
+        let index = model
+            .glyphs
+            .iter()
+            .position(|g| g.name.as_ref() == "space")
+            .unwrap();
+        // Two overlapping squares: union area = 100*100 + 100*100 - 50*50.
+        model.add_shape_contour(index, kurbo::Rect::new(0.0, 0.0, 100.0, 100.0), false);
+        model.add_shape_contour(index, kurbo::Rect::new(50.0, 50.0, 150.0, 150.0), false);
+        assert!(model.remove_overlap(index));
+        let snap = model.snapshot_contours(index).unwrap();
+        assert_eq!(snap.contours.len(), 1, "union should merge to one contour");
+        let area = model.glyphs[index].path.area().abs();
+        assert!(
+            (area - 17500.0).abs() < 100.0,
+            "union area wrong: {area} (expected ~17500)"
+        );
+        assert!(snap.contours[0].is_closed());
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).

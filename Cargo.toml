@@ -17,6 +17,7 @@ kurbo = "0.13.1"
 norad = "0.18"
 notify = "8"
 futures = "0.3"
+linesweeper = "0.4"
 
 # Shared editing/model crate used by all Runebender editors. Sibling
 # checkout, same convention as runebender-xilem and runebender-web.
