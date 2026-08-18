@@ -217,6 +217,7 @@ impl FontModel {
         entry.points = points;
         entry.anchors = anchors;
         entry.advance = glyph_advance;
+        entry.mark = t::mark_label(glyph).map(SharedString::from);
     }
 
     /// Clone a glyph's editable state for undo snapshots.
@@ -1375,6 +1376,83 @@ impl Workspace {
             ))
             .child(row("Contours", format!("{contours}").into()));
         panel
+    }
+
+    /// Colors panel: mark-color swatches for the selected glyph, like
+    /// the web grid's bottom-right panel.
+    fn mark_colors_panel(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let current = self
+            .selected
+            .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))
+            .and_then(|e| e.mark.clone());
+        let mut swatches = div().flex().flex_wrap().gap_2();
+        for (index, (label, color)) in t::mark_palette().into_iter().enumerate() {
+            let is_current = current.as_deref() == Some(label.as_str());
+            swatches = swatches.child(
+                div()
+                    .id(("mark-swatch", index))
+                    .w(px(22.0))
+                    .h(px(22.0))
+                    .rounded_full()
+                    .bg(color)
+                    .border_2()
+                    .border_color(if is_current {
+                        t::cell_selected_ring()
+                    } else {
+                        gpui::Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }
+                    })
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_selected_mark(Some(label.clone()));
+                        cx.notify();
+                    })),
+            );
+        }
+        swatches = swatches.child(
+            div()
+                .id("mark-clear")
+                .w(px(22.0))
+                .h(px(22.0))
+                .rounded_full()
+                .border_1()
+                .border_color(if current.is_none() {
+                    t::cell_selected_ring()
+                } else {
+                    t::cell_border()
+                })
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .text_color(t::text_muted())
+                .cursor_pointer()
+                .child("×")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.set_selected_mark(None);
+                    cx.notify();
+                })),
+        );
+        div()
+            .w(px(200.0))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .bg(t::panel_bg())
+            .border_1()
+            .border_color(t::panel_outline())
+            .rounded_lg()
+            .child(div().text_sm().text_color(t::info_header()).child("Colors"))
+            .child(swatches)
+    }
+
+    /// Set or clear the selected glyph's mark color.
+    fn set_selected_mark(&mut self, label: Option<String>) {
+        let Some(index) = self.selected else { return };
+        let Some(font) = self.font_mut() else { return };
+        font.edit_glyph(index, |glyph| {
+            runebender_core::theme_oklch::set_glyph_mark(glyph, label.as_deref());
+        });
     }
 
     /// Editor sidebar: search + scrollable mini glyph grid, so glyph
@@ -3365,7 +3443,14 @@ impl Render for Workspace {
                             .rounded_lg()
                             .child(div().flex().flex_wrap().gap_2().p_3().children(grid)),
                     )
-                    .child(self.glyph_info_panel())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(self.glyph_info_panel())
+                            .child(self.mark_colors_panel(cx)),
+                    )
                     .into_any_element()
             }
         };

@@ -140,6 +140,15 @@ pub fn mark_color(label: &str) -> Option<Rgba> {
     theme().mark(label).map(c)
 }
 
+/// The full mark palette in order, for the Colors panel.
+pub fn mark_palette() -> Vec<(String, Rgba)> {
+    theme()
+        .marks
+        .iter()
+        .map(|(name, color)| (name.clone(), c(*color)))
+        .collect()
+}
+
 // ---- anchors ----
 
 pub fn anchor() -> Rgba {
