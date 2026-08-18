@@ -137,11 +137,13 @@ impl FontModel {
         let Some(glyph) = self.font.get_glyph(name.as_str()) else {
             return;
         };
+        let glyph_advance = glyph.width;
         let path = Arc::new(glyph_path::glyph_to_bezpath(glyph, &self.font));
         let points = Arc::new(extract_points(glyph));
         let entry = &mut self.glyphs[glyph_index];
         entry.path = path;
         entry.points = points;
+        entry.advance = glyph_advance;
     }
 
     /// Clone a glyph's contours for undo snapshots.
@@ -611,6 +613,51 @@ impl FontModel {
         changed
     }
 
+    /// Ink bounds of a glyph in design units, None when empty.
+    fn ink_bounds(&self, glyph_index: usize) -> Option<kurbo::Rect> {
+        use kurbo::Shape;
+        let path = &self.glyphs[glyph_index].path;
+        if path.elements().is_empty() {
+            None
+        } else {
+            Some(path.bounding_box())
+        }
+    }
+
+    fn set_advance(&mut self, glyph_index: usize, width: f64) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
+            glyph.width = width;
+            self.dirty = true;
+        }
+        self.rebuild_metrics(glyph_index);
+    }
+
+    /// Shift all of a glyph's ink horizontally (LSB edits). Component
+    /// references shift via their transform offset.
+    fn shift_ink(&mut self, glyph_index: usize, dx: f64) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
+            for contour in glyph.contours.iter_mut() {
+                for p in contour.points.iter_mut() {
+                    p.x += dx;
+                }
+            }
+            for component in glyph.components.iter_mut() {
+                component.transform.x_offset += dx;
+            }
+            self.dirty = true;
+        }
+        self.rebuild_entry(glyph_index);
+    }
+
+    fn rebuild_metrics(&mut self, glyph_index: usize) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        if let Some(glyph) = self.font.get_glyph(name.as_str()) {
+            self.glyphs[glyph_index].advance = glyph.width;
+        }
+    }
+
     fn save(&mut self) -> Result<(), norad::error::FontWriteError> {
         self.font.save(&self.source_path)?;
         self.dirty = false;
@@ -748,6 +795,14 @@ fn build_fill_path(
 // EDITOR VIEWPORT
 // ============================================================================
 
+/// Which metric field is being edited.
+#[derive(Clone, Copy)]
+enum MetricField {
+    Width,
+    Lsb,
+    Rsb,
+}
+
 /// A curve-quality operation from `runebender_core::curve`.
 #[derive(Clone, Copy)]
 enum CurveOp {
@@ -876,7 +931,15 @@ struct Workspace {
     status_note: Option<SharedString>,
     search: gpui::Entity<gpui_component::input::InputState>,
     search_query: String,
+    metric_inputs: MetricInputs,
     _subscriptions: Vec<gpui::Subscription>,
+}
+
+/// The editor's Width / LSB / RSB / X / Y fields.
+struct MetricInputs {
+    width: gpui::Entity<gpui_component::input::InputState>,
+    lsb: gpui::Entity<gpui_component::input::InputState>,
+    rsb: gpui::Entity<gpui_component::input::InputState>,
 }
 
 const CELL: f32 = 96.0;
@@ -1463,6 +1526,75 @@ impl Workspace {
         }
     }
 
+    fn apply_metric(&mut self, which: MetricField, value: f64) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        self.push_undo_snapshot(index);
+        let Some(font) = self.font_mut() else {
+            return;
+        };
+        let ink = font.ink_bounds(index);
+        let advance = font.glyphs[index].advance;
+        match which {
+            MetricField::Width => font.set_advance(index, value.round()),
+            MetricField::Lsb => {
+                if let Some(ink) = ink {
+                    // Move the ink; the right sidebearing absorbs it.
+                    font.shift_ink(index, (value - ink.x0).round());
+                }
+            }
+            MetricField::Rsb => {
+                if let Some(ink) = ink {
+                    font.set_advance(index, (ink.x1 + value).round());
+                } else {
+                    font.set_advance(index, (advance + value).round());
+                }
+            }
+        }
+    }
+
+    /// Push current glyph metrics into the input fields. Skipped when
+    /// an input has focus (unless forced) so typing is not clobbered.
+    fn refresh_metric_inputs(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        if !force {
+            // Any focused element other than the workspace canvas
+            // means an input might be active: leave the text alone.
+            if window
+                .focused(cx)
+                .is_some_and(|f| f != self.focus_handle)
+            {
+                return;
+            }
+        }
+        let Some(font) = self.font() else {
+            return;
+        };
+        let advance = font.glyphs[index].advance;
+        let ink = font.ink_bounds(index);
+        let (lsb, rsb) = match ink {
+            Some(r) => (format!("{:.0}", r.x0), format!("{:.0}", advance - r.x1)),
+            None => (String::new(), String::new()),
+        };
+        let width = format!("{advance:.0}");
+        let set = |entity: &gpui::Entity<gpui_component::input::InputState>,
+                   value: String,
+                   window: &mut Window,
+                   cx: &mut Context<Self>| {
+            entity.update(cx, |st, cx| {
+                if st.value() != value.as_str() {
+                    st.set_value(value, window, cx);
+                }
+            });
+        };
+        set(&self.metric_inputs.width, width, window, cx);
+        set(&self.metric_inputs.lsb, lsb, window, cx);
+        set(&self.metric_inputs.rsb, rsb, window, cx);
+    }
+
     fn apply_curve_op(&mut self, op: CurveOp) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -1637,6 +1769,31 @@ impl Workspace {
         ))
     }
 
+    /// Bottom bar in editor mode: Width / LSB / RSB fields.
+    fn metrics_bar(&self) -> impl IntoElement + use<> {
+        let field = |label_text: &'static str,
+                     state: &gpui::Entity<gpui_component::input::InputState>| {
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().text_sm().text_color(t::text_muted()).child(label_text))
+                .child(div().w(px(80.0)).child(gpui_component::input::Input::new(state)))
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_4()
+            .px_4()
+            .py_2()
+            .bg(t::panel_bg())
+            .border_t_1()
+            .border_color(t::cell_border())
+            .child(field("Width", &self.metric_inputs.width))
+            .child(field("LSB", &self.metric_inputs.lsb))
+            .child(field("RSB", &self.metric_inputs.rsb))
+    }
+
     fn status_bar(&self) -> impl IntoElement + use<> {
         let text: SharedString = if let Some(note) = &self.status_note {
             note.clone()
@@ -1794,10 +1951,17 @@ impl Render for Workspace {
             window.focus(&self.focus_handle, cx);
         }
 
+        if matches!(self.mode, Mode::Editor(_)) {
+            self.refresh_metric_inputs(false, window, cx);
+        }
         let content = match self.mode {
-            Mode::Editor(index) if self.project.is_some() => {
-                self.editor_view(index, cx).into_any_element()
-            }
+            Mode::Editor(index) if self.project.is_some() => div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .child(self.editor_view(index, cx).into_any_element())
+                .child(self.metrics_bar())
+                .into_any_element(),
             _ => {
                 let query = self.search_query.clone();
                 let grid: Vec<_> = match self.font() {
@@ -1903,6 +2067,41 @@ fn main() {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Search glyphs")
                     });
+                    let metric = |cx: &mut Context<Workspace>, window: &mut Window| {
+                        cx.new(|cx| gpui_component::input::InputState::new(window, cx))
+                    };
+                    let width_input = metric(cx, window);
+                    let lsb_input = metric(cx, window);
+                    let rsb_input = metric(cx, window);
+                    let metric_sub = |cx: &mut Context<Workspace>,
+                                      window: &mut Window,
+                                      state: &gpui::Entity<gpui_component::input::InputState>,
+                                      which: MetricField| {
+                        let state = state.clone();
+                        cx.subscribe_in(&state, window, {
+                            let state = state.clone();
+                            move |this: &mut Workspace,
+                                  _,
+                                  ev: &gpui_component::input::InputEvent,
+                                  window,
+                                  cx| {
+                                if matches!(
+                                    ev,
+                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                ) {
+                                    let text = state.read(cx).value().to_string();
+                                    if let Ok(v) = text.trim().parse::<f64>() {
+                                        this.apply_metric(which, v);
+                                    }
+                                    this.refresh_metric_inputs(true, window, cx);
+                                    cx.notify();
+                                }
+                            }
+                        })
+                    };
+                    let sub_w = metric_sub(cx, window, &width_input, MetricField::Width);
+                    let sub_l = metric_sub(cx, window, &lsb_input, MetricField::Lsb);
+                    let sub_r = metric_sub(cx, window, &rsb_input, MetricField::Rsb);
                     let subscription = cx.subscribe_in(&search, window, {
                         let search = search.clone();
                         move |this: &mut Workspace,
@@ -1927,7 +2126,12 @@ fn main() {
                         status_note: None,
                         search,
                         search_query: String::new(),
-                        _subscriptions: vec![subscription],
+                        metric_inputs: MetricInputs {
+                            width: width_input,
+                            lsb: lsb_input,
+                            rsb: rsb_input,
+                        },
+                        _subscriptions: vec![subscription, sub_w, sub_l, sub_r],
                     }
                 });
                 cx.new(|cx| gpui_component::Root::new(workspace, window, cx))
@@ -2160,6 +2364,31 @@ mod tests {
         model.curve_op(index, &none, CurveOp::Harmonize);
         model.curve_op(index, &none, CurveOp::Optimize(0.12));
         assert!(!model.glyphs[index].path.elements().is_empty());
+    }
+
+    #[test]
+    fn metric_edits() {
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
+        let index = model
+            .glyphs
+            .iter()
+            .position(|g| g.name.as_ref() == "n")
+            .unwrap();
+        let ink = model.ink_bounds(index).unwrap();
+        let advance = model.glyphs[index].advance;
+
+        // Width edit changes only the advance.
+        model.set_advance(index, advance + 20.0);
+        assert_eq!(model.glyphs[index].advance, advance + 20.0);
+        assert_eq!(model.ink_bounds(index).unwrap().x0, ink.x0);
+
+        // LSB edit shifts the ink, advance untouched.
+        model.shift_ink(index, 10.0);
+        let ink2 = model.ink_bounds(index).unwrap();
+        assert_eq!(ink2.x0, ink.x0 + 10.0);
+        assert_eq!(ink2.x1, ink.x1 + 10.0);
+        assert_eq!(model.glyphs[index].advance, advance + 20.0);
+        assert!(model.dirty);
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).
