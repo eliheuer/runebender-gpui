@@ -35,6 +35,7 @@ struct GlyphPoint {
     x: f64,
     y: f64,
     on_curve: bool,
+    smooth: bool,
     contour: usize,
     index: usize,
 }
@@ -103,6 +104,7 @@ fn extract_points(glyph: &norad::Glyph) -> Vec<GlyphPoint> {
                 x: p.x,
                 y: p.y,
                 on_curve: p.typ != norad::PointType::OffCurve,
+                smooth: p.smooth,
                 contour: ci,
                 index: pi,
             })
@@ -1040,6 +1042,7 @@ struct Workspace {
     project: Option<Project>,
     load_error: Option<SharedString>,
     selected: Option<usize>,
+    category: runebender_core::category::GlyphCategory,
     mode: Mode,
     editor: EditorState,
     focus_handle: gpui::FocusHandle,
@@ -1141,6 +1144,9 @@ impl Workspace {
         let font = self.font().unwrap();
         let entry = &font.glyphs[index];
         let name = entry.name.clone();
+        let unicode_label: Option<SharedString> = entry
+            .codepoint
+            .map(|c| format!("U+{:04X}", c as u32).into());
         let selected = if jump_on_click {
             matches!(self.mode, Mode::Editor(i) if i == index)
         } else {
@@ -1157,6 +1163,7 @@ impl Workspace {
             .and_then(|p| p.compat.get(entry.name.as_ref()))
             .is_some_and(|ok| !ok);
 
+        let label_h = if cell >= 90.0 { 32.0 } else { label_h };
         div()
             .id(index)
             .w(px(cell))
@@ -1165,7 +1172,11 @@ impl Workspace {
             .flex_col()
             .bg(if selected { t::cell_selected_bg() } else { t::cell_bg() })
             .border_1()
-            .border_color(if selected { t::accent() } else { t::cell_border() })
+            .border_color(if selected {
+                t::cell_selected_ring()
+            } else {
+                t::cell_border()
+            })
             .rounded_md()
             .cursor_pointer()
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
@@ -1208,22 +1219,158 @@ impl Workspace {
                     .h(px(label_h))
                     .px_1()
                     .flex()
-                    .items_center()
-                    .gap_1()
+                    .flex_col()
                     .text_size(px(if cell >= 90.0 { 10.0 } else { 8.0 }))
-                    .text_color(t::text_muted())
                     .overflow_hidden()
-                    .when(incompatible, |el| {
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_color(if selected {
+                                t::cell_selected_ring()
+                            } else {
+                                t::text()
+                            })
+                            .when(incompatible, |el| {
+                                el.child(
+                                    div()
+                                        .w(px(6.0))
+                                        .h(px(6.0))
+                                        .rounded_full()
+                                        .bg(t::anchor()),
+                                )
+                            })
+                            .child(name),
+                    )
+                    .when(cell >= 90.0, |el| {
                         el.child(
                             div()
-                                .w(px(6.0))
-                                .h(px(6.0))
-                                .rounded_full()
-                                .bg(t::anchor()),
+                                .text_color(if selected {
+                                    t::accent()
+                                } else {
+                                    t::text_muted()
+                                })
+                                .child(unicode_label.unwrap_or_else(|| "".into())),
                         )
-                    })
-                    .child(name),
+                    }),
             )
+    }
+
+    /// Left sidebar tile: search plus the category filter list,
+    /// like runebender-web's CategorySidebar.
+    fn category_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use runebender_core::category::GlyphCategory as GC;
+        const CATEGORIES: [(GC, &str); 8] = [
+            (GC::All, "All"),
+            (GC::Letter, "Letter"),
+            (GC::Number, "Number"),
+            (GC::Punctuation, "Punctuation"),
+            (GC::Symbol, "Symbol"),
+            (GC::Mark, "Mark"),
+            (GC::Separator, "Separator"),
+            (GC::Other, "Other"),
+        ];
+        let mut list = div().flex().flex_col().gap_1();
+        for (i, (category, label)) in CATEGORIES.into_iter().enumerate() {
+            let active = self.category == category;
+            list = list.child(
+                div()
+                    .id(("category", i))
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .text_sm()
+                    .cursor_pointer()
+                    .when(active, |el| {
+                        el.border_1().border_color(t::accent()).text_color(t::accent())
+                    })
+                    .when(!active, |el| el.text_color(t::text()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.category = category;
+                        cx.notify();
+                    }))
+                    .child(label),
+            );
+        }
+        div()
+            .w(px(200.0))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_2()
+            .bg(t::panel_bg())
+            .border_1()
+            .border_color(t::panel_outline())
+            .rounded_lg()
+            .child(gpui_component::input::Input::new(&self.search))
+            .child(div().text_sm().text_color(t::text_muted()).child("Categories"))
+            .child(list)
+    }
+
+    /// Right tile: details of the selected glyph, like
+    /// runebender-web's GlyphInfoSidebar.
+    fn glyph_info_panel(&self) -> impl IntoElement + use<> {
+        let row = |header: &'static str, value: SharedString| {
+            div()
+                .flex()
+                .flex_col()
+                .child(div().text_sm().text_color(t::info_header()).child(header))
+                .child(div().text_sm().text_color(t::text()).child(value))
+        };
+        let mut panel = div()
+            .w(px(200.0))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .bg(t::panel_bg())
+            .border_1()
+            .border_color(t::panel_outline())
+            .rounded_lg();
+        let (Some(project), Some(index)) = (self.project.as_ref(), self.selected) else {
+            return panel.child(
+                div()
+                    .text_sm()
+                    .text_color(t::text_muted())
+                    .child("Select a glyph"),
+            );
+        };
+        let font = project.active_font();
+        let Some(entry) = font.glyphs.get(index) else {
+            return panel.child(div());
+        };
+        let name = entry.name.to_string();
+        let master = project.master_names[project.active].clone();
+        let contours = font
+            .font
+            .get_glyph(name.as_str())
+            .map(|g| g.contours.len())
+            .unwrap_or(0);
+        let left_group = runebender_core::glyph_ops::kern_group(&font.font, &name, true)
+            .map(|g| g.as_str().replace("public.kern1.", ""))
+            .unwrap_or_else(|| "(empty)".into());
+        let right_group = runebender_core::glyph_ops::kern_group(&font.font, &name, false)
+            .map(|g| g.as_str().replace("public.kern2.", ""))
+            .unwrap_or_else(|| "(empty)".into());
+        panel = panel
+            .child(row("Master", master))
+            .child(row("Glyph Name", entry.name.clone()))
+            .child(row("Width", format!("{:.0}", entry.advance).into()))
+            .child(row(
+                "Kerning Groups",
+                format!("L {left_group} · R {right_group}").into(),
+            ))
+            .child(row(
+                "Unicode",
+                entry
+                    .codepoint
+                    .map(|c| format!("{:04X}", c as u32))
+                    .unwrap_or_else(|| "—".into())
+                    .into(),
+            ))
+            .child(row("Contours", format!("{contours}").into()));
+        panel
     }
 
     /// Editor sidebar: search + scrollable mini glyph grid, so glyph
@@ -1491,9 +1638,6 @@ impl Workspace {
                             ));
                         }
 
-                        if let Some(path) = build_fill_path(&outline, transform, origin) {
-                            window.paint_path(path, t::editor_fill());
-                        }
                         // Components: dim distinct fill, not editable
                         // directly (Cmd+Shift+D decomposes).
                         if !component_path.elements().is_empty()
@@ -1514,37 +1658,112 @@ impl Workspace {
                         {
                             window.paint_path(p, t::ghost());
                         }
+                        // Edit mode is a stroked outline (no fill),
+                        // like the other editors.
                         if let Some(path) =
-                            build_path(&outline, transform, origin, PathBuilder::stroke(px(1.5)))
+                            build_path(&outline, transform, origin, PathBuilder::stroke(px(1.0)))
                         {
-                            window.paint_path(path, t::accent());
+                            window.paint_path(path, t::path_stroke());
                         }
 
-                        for p in points.iter() {
-                            let c = to_screen(p.x, p.y);
-                            let is_selected =
-                                selected_points.contains(&(p.contour, p.index));
-                            let r = if is_selected {
-                                px(4.5)
-                            } else if p.on_curve {
-                                px(3.0)
-                            } else {
-                                px(2.0)
-                            };
-                            let color = if is_selected {
-                                t::accent()
-                            } else if p.on_curve {
-                                t::text()
-                            } else {
-                                t::text_muted()
-                            };
+                        // Handle lines: each off-curve connects to its
+                        // anchoring on-curve neighbor.
+                        {
+                            let mut lines = PathBuilder::stroke(px(1.0));
+                            let mut any_line = false;
+                            for (i, p) in points.iter().enumerate() {
+                                if p.on_curve {
+                                    continue;
+                                }
+                                // Neighbors within the same contour, cyclic.
+                                let contour_pts: Vec<&GlyphPoint> = points
+                                    .iter()
+                                    .filter(|q| q.contour == p.contour)
+                                    .collect();
+                                let n = contour_pts.len();
+                                let pos = contour_pts
+                                    .iter()
+                                    .position(|q| q.index == p.index)
+                                    .unwrap_or(0);
+                                let prev = contour_pts[(pos + n - 1) % n];
+                                let next = contour_pts[(pos + 1) % n];
+                                let anchor = if prev.on_curve {
+                                    prev
+                                } else if next.on_curve {
+                                    next
+                                } else {
+                                    continue;
+                                };
+                                lines.move_to(to_screen(p.x, p.y));
+                                lines.line_to(to_screen(anchor.x, anchor.y));
+                                any_line = true;
+                                let _ = i;
+                            }
+                            if any_line && let Ok(path) = lines.build() {
+                                window.paint_path(path, t::handle_line());
+                            }
+                        }
+
+                        // Points: smooth = blue circle, corner = green
+                        // square, off-curve = purple circle, selection
+                        // in yellow/orange — the shared palette.
+                        let circle = |window: &mut Window,
+                                      center: Point<gpui::Pixels>,
+                                      r: f32,
+                                      color: gpui::Rgba| {
+                            use kurbo::Shape;
+                            let cx_: f32 = center.x.into();
+                            let cy_: f32 = center.y.into();
+                            let shape = kurbo::Circle::new(
+                                (cx_ as f64, cy_ as f64),
+                                r as f64,
+                            )
+                            .to_path(0.25);
+                            if let Some(p) = build_fill_path(
+                                &shape,
+                                Affine::IDENTITY,
+                                gpui::point(px(0.0), px(0.0)),
+                            ) {
+                                window.paint_path(p, color);
+                            }
+                        };
+                        let square = |window: &mut Window,
+                                      center: Point<gpui::Pixels>,
+                                      r: f32,
+                                      color: gpui::Rgba| {
                             window.paint_quad(gpui::fill(
                                 Bounds::from_corners(
-                                    gpui::point(c.x - r, c.y - r),
-                                    gpui::point(c.x + r, c.y + r),
+                                    gpui::point(center.x - px(r), center.y - px(r)),
+                                    gpui::point(center.x + px(r), center.y + px(r)),
                                 ),
                                 color,
                             ));
+                        };
+                        for p in points.iter() {
+                            let center = to_screen(p.x, p.y);
+                            let is_selected =
+                                selected_points.contains(&(p.contour, p.index));
+                            // Web style: colored ring, dark inner;
+                            // selected points fill solid yellow.
+                            let (ring, inner) = if is_selected {
+                                (t::point_selected(), t::point_selected())
+                            } else if !p.on_curve {
+                                (t::point_offcurve_outer(), t::point_inner())
+                            } else if p.smooth {
+                                (t::point_smooth_outer(), t::point_inner())
+                            } else {
+                                (t::point_corner_outer(), t::point_inner())
+                            };
+                            if p.on_curve && !p.smooth {
+                                square(window, center, 4.5, ring);
+                                square(window, center, 2.5, inner);
+                            } else if p.on_curve {
+                                circle(window, center, 4.5, ring);
+                                circle(window, center, 2.5, inner);
+                            } else {
+                                circle(window, center, 3.5, ring);
+                                circle(window, center, 1.8, inner);
+                            }
                         }
                         // Anchors: diamonds (rotated squares drawn as
                         // two overlapping quads approximate; use a
@@ -1609,9 +1828,11 @@ impl Workspace {
                                 gpui::point(pa.x.max(pb.x), pa.y.max(pb.y)),
                             );
                             window.paint_quad(gpui::fill(rect, t::marquee_fill()));
-                            window.paint_quad(
-                                gpui::outline(rect, t::accent(), gpui::BorderStyle::Solid),
-                            );
+                            window.paint_quad(gpui::outline(
+                                rect,
+                                t::marquee_stroke(),
+                                gpui::BorderStyle::Solid,
+                            ));
                         }
                         let _ = (zoom, &component_names);
                     },
@@ -2118,33 +2339,61 @@ impl Workspace {
     }
 
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let (title, subtitle) = match (self.font(), &self.load_error) {
-            (Some(font), _) => (
-                font.family_name.clone(),
-                SharedString::from(format!(
-                    "{} · {} glyphs · {} upm{}",
-                    font.source_path.display(),
-                    font.glyphs.len(),
-                    font.units_per_em,
-                    if font.dirty { " · edited" } else { "" }
-                )),
-            ),
-            (None, Some(err)) => ("Load failed".into(), err.clone()),
-            (None, None) => ("Runebender GPUI".into(), "No font loaded".into()),
-        };
+        let (title, status): (SharedString, SharedString) =
+            match (self.font(), &self.load_error) {
+                (Some(font), _) => (
+                    format!(
+                        "{} · {} glyphs · {} upm",
+                        font.source_path.display(),
+                        font.glyphs.len(),
+                        font.units_per_em
+                    )
+                    .into(),
+                    if font.dirty {
+                        "Not saved".into()
+                    } else {
+                        "Saved".into()
+                    },
+                ),
+                (None, Some(err)) => ("Load failed".into(), err.clone()),
+                (None, None) => ("Runebender".into(), "No font loaded".into()),
+            };
         div()
             .flex()
-            .items_baseline()
-            .gap_3()
-            .px_4()
-            .py_2()
-            .bg(t::panel_bg())
-            .border_b_1()
-            .border_color(t::cell_border())
-            .child(div().text_lg().text_color(t::text()).child(title))
-            .child(div().text_sm().text_color(t::text_muted()).child(subtitle))
-            .child(div().flex_1())
-            .child(self.master_switcher(cx))
+            .gap_2()
+            .px_3()
+            .pt_3()
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .px_3()
+                    .py_2()
+                    .bg(t::panel_bg())
+                    .border_1()
+                    .border_color(t::panel_outline())
+                    .rounded_lg()
+                    .child(div().text_sm().text_color(t::text()).child(title))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(t::status_yellow())
+                            .child(status),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .bg(t::panel_bg())
+                    .border_1()
+                    .border_color(t::panel_outline())
+                    .rounded_lg()
+                    .child(self.master_switcher(cx)),
+            )
     }
 
     /// One button per master; the active one gets the accent border.
@@ -2390,7 +2639,7 @@ impl Workspace {
                                     if let Some(p) =
                                         build_fill_path(path, transform, bounds.origin)
                                     {
-                                        window.paint_path(p, t::glyph_fill());
+                                        window.paint_path(p, t::preview_glyph());
                                     }
                                 }
                             },
@@ -3070,11 +3319,24 @@ impl Render for Workspace {
                 .into_any_element(),
             _ => {
                 let query = self.search_query.clone();
+                let category = self.category;
                 let grid: Vec<_> = match self.font() {
                     Some(font) => (0..font.glyphs.len())
                         .filter(|&i| {
-                            query.is_empty()
-                                || font.glyphs[i].name.to_lowercase().contains(&query)
+                            let entry = &font.glyphs[i];
+                            let category_ok = category
+                                == runebender_core::category::GlyphCategory::All
+                                || entry.codepoint.map_or(
+                                    category
+                                        == runebender_core::category::GlyphCategory::Other,
+                                    |c| {
+                                        runebender_core::category::GlyphCategory::from_codepoint(c)
+                                            == category
+                                    },
+                                );
+                            category_ok
+                                && (query.is_empty()
+                                    || entry.name.to_lowercase().contains(&query))
                         })
                         .map(|i| self.glyph_cell(i, cx).into_any_element())
                         .collect(),
@@ -3082,24 +3344,24 @@ impl Render for Workspace {
                 };
                 div()
                     .flex()
-                    .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
-                    .child(
-                        div()
-                            .px_4()
-                            .py_2()
-                            .w(px(320.0))
-                            .child(gpui_component::input::Input::new(&self.search)),
-                    )
+                    .gap_2()
+                    .p_3()
+                    .child(self.category_sidebar(cx))
                     .child(
                         div()
                             .id("glyph-grid")
                             .flex_1()
                             .min_h(px(0.0))
                             .overflow_y_scroll()
-                            .child(div().flex().flex_wrap().gap_2().p_4().children(grid)),
+                            .bg(t::panel_bg())
+                            .border_1()
+                            .border_color(t::panel_outline())
+                            .rounded_lg()
+                            .child(div().flex().flex_wrap().gap_2().p_3().children(grid)),
                     )
+                    .child(self.glyph_info_panel())
                     .into_any_element()
             }
         };
@@ -3274,6 +3536,7 @@ fn main() {
                         project,
                         load_error,
                         selected: None,
+                        category: runebender_core::category::GlyphCategory::All,
                         mode: start_mode,
                         editor: EditorState::new(),
                         focus_handle: cx.focus_handle(),
