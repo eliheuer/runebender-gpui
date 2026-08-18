@@ -1611,8 +1611,9 @@ struct Workspace {
     preview_input: gpui::Entity<gpui_component::input::InputState>,
     preview_text: SharedString,
     preview_bounds: Arc<Mutex<Bounds<gpui::Pixels>>>,
-    /// One slider per designspace axis, created lazily in render.
-    axis_sliders: Vec<gpui::Entity<gpui_component::slider::SliderState>>,
+    /// Sliders for non-degenerate designspace axes: (axis index,
+    /// slider), created lazily in render.
+    axis_sliders: Vec<(usize, gpui::Entity<gpui_component::slider::SliderState>)>,
     /// Internal outline clipboard: whole contours.
     clipboard: Vec<norad::Contour>,
     /// Filesystem watcher over the open masters' UFO directories.
@@ -1797,8 +1798,10 @@ impl Workspace {
         };
         div()
             .w(px(224.0))
+            .h_full()
             .flex()
             .flex_col()
+            .min_h(px(0.0))
             .gap_2()
             .p_2()
             .bg(t::panel_bg())
@@ -1809,6 +1812,7 @@ impl Workspace {
                 div()
                     .id("editor-sidebar-grid")
                     .flex_1()
+                    .min_h(px(0.0))
                     .overflow_y_scroll()
                     .child(div().flex().flex_wrap().gap_1().children(cells)),
             )
@@ -2753,10 +2757,16 @@ impl Workspace {
         }
         let axes = project.axes.clone();
         for (i, axis) in axes.iter().enumerate() {
+            if axis.max <= axis.min {
+                continue; // degenerate axis: nothing to slide
+            }
+            // NOTE: .max() must precede .min(): SliderState starts at
+            // max=100 and each setter clamps the current value, so a
+            // min above 100 panics (f32::clamp with min > max).
             let slider = cx.new(|_| {
                 gpui_component::slider::SliderState::new()
-                    .min(axis.min as f32)
                     .max(axis.max as f32)
+                    .min(axis.min as f32)
                     .step(1.0)
                     .default_value(axis.default as f32)
             });
@@ -2786,8 +2796,7 @@ impl Workspace {
                 }
             });
             self._subscriptions.push(sub);
-            self.axis_sliders.push(slider);
-            let _ = i;
+            self.axis_sliders.push((i, slider));
         }
     }
 
@@ -2808,7 +2817,8 @@ impl Workspace {
             .bg(t::panel_bg())
             .border_t_1()
             .border_color(t::cell_border());
-        for (axis, slider) in project.axes.iter().zip(&self.axis_sliders) {
+        for (axis_index, slider) in &self.axis_sliders {
+            let axis = &project.axes[*axis_index];
             row = row.child(
                 div()
                     .flex()
@@ -3446,10 +3456,12 @@ impl Render for Workspace {
                 .flex()
                 .flex_col()
                 .flex_1()
+                .min_h(px(0.0))
                 .child(
                     div()
                         .flex()
                         .flex_1()
+                        .min_h(px(0.0))
                         .child(self.editor_sidebar(cx))
                         .child(self.editor_view(index, cx).into_any_element()),
                 )
@@ -3471,6 +3483,7 @@ impl Render for Workspace {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .min_h(px(0.0))
                     .child(
                         div()
                             .px_4()
@@ -3482,6 +3495,7 @@ impl Render for Workspace {
                         div()
                             .id("glyph-grid")
                             .flex_1()
+                            .min_h(px(0.0))
                             .overflow_y_scroll()
                             .child(div().flex().flex_wrap().gap_2().p_4().children(grid)),
                     )
