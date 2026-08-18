@@ -1661,6 +1661,59 @@ impl Workspace {
                             }
                             cx.notify();
                         },
+                    )))
+                    .child(div().w_2())
+                    .child(op_button("op-flip-h", "Flip H").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply_transform(Affine::scale_non_uniform(-1.0, 1.0));
+                            cx.notify();
+                        },
+                    )))
+                    .child(op_button("op-flip-v", "Flip V").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply_transform(Affine::scale_non_uniform(1.0, -1.0));
+                            cx.notify();
+                        },
+                    )))
+                    .child(op_button("op-rot-ccw", "Rot L").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply_transform(Affine::rotate(
+                                std::f64::consts::FRAC_PI_2,
+                            ));
+                            cx.notify();
+                        },
+                    )))
+                    .child(op_button("op-rot-cw", "Rot R").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply_transform(Affine::rotate(
+                                -std::f64::consts::FRAC_PI_2,
+                            ));
+                            cx.notify();
+                        },
+                    )))
+                    .child(op_button("op-reverse", "Reverse").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            if let Mode::Editor(index) = this.mode {
+                                this.push_undo_snapshot(index);
+                                let selected = this.editor.selected.clone();
+                                let changed = this
+                                    .font_mut()
+                                    .and_then(|f| {
+                                        f.edit_glyph(index, |g| {
+                                            runebender_core::glyph_ops::reverse_contours(
+                                                g, &selected,
+                                            )
+                                        })
+                                    })
+                                    .unwrap_or(false);
+                                if !changed {
+                                    this.editor.undo.pop();
+                                } else {
+                                    this.editor.selected.clear();
+                                }
+                            }
+                            cx.notify();
+                        },
                     ))),
             )
             .on_mouse_down(
@@ -2342,6 +2395,25 @@ impl Workspace {
         set(&self.metric_inputs.width, width, window, cx);
         set(&self.metric_inputs.lsb, lsb, window, cx);
         set(&self.metric_inputs.rsb, rsb, window, cx);
+    }
+
+    /// Flip/rotate the selection (whole glyph when nothing selected)
+    /// about its bbox center, with an undo snapshot.
+    fn apply_transform(&mut self, transform: Affine) {
+        let Mode::Editor(index) = self.mode else { return };
+        self.push_undo_snapshot(index);
+        let selected = self.editor.selected.clone();
+        let changed = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    runebender_core::glyph_ops::transform_selection(g, &selected, transform)
+                })
+            })
+            .unwrap_or(false);
+        if !changed {
+            self.editor.undo.pop();
+        }
     }
 
     fn apply_curve_op(&mut self, op: CurveOp) {
