@@ -906,10 +906,18 @@ struct Project {
     model: Option<runebender_core::var_model::VariationModel>,
     /// Current preview location, normalized, by axis name.
     location: runebender_core::var_model::Location,
+    /// Per-glyph master point-compatibility (designspaces only).
+    compat: std::collections::HashMap<String, bool>,
 }
 
 impl Project {
     fn load(path: &std::path::Path) -> Result<Self, String> {
+        let mut project = Self::load_inner(path)?;
+        project.compute_compat();
+        Ok(project)
+    }
+
+    fn load_inner(path: &std::path::Path) -> Result<Self, String> {
         if path.extension().is_some_and(|e| e == "designspace") {
             let doc = norad::designspace::DesignSpaceDocument::load(path)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -997,6 +1005,7 @@ impl Project {
                 master_locations,
                 model,
                 location,
+                compat: std::collections::HashMap::new(),
             })
         } else {
             let model =
@@ -1016,8 +1025,55 @@ impl Project {
                 master_locations: Vec::new(),
                 model: None,
                 location: runebender_core::var_model::Location::new(),
+                compat: std::collections::HashMap::new(),
             })
         }
+    }
+
+    /// Structural signature used for interpolation compatibility:
+    /// per contour, the ordered list of point types.
+    fn glyph_signature(font: &FontModel, name: &str) -> Option<Vec<Vec<norad::PointType>>> {
+        font.font.get_glyph(name).map(|g| {
+            g.contours
+                .iter()
+                .map(|c| c.points.iter().map(|p| p.typ).collect())
+                .collect()
+        })
+    }
+
+    /// Check one glyph's compatibility across all masters.
+    fn check_compat(&self, name: &str) -> bool {
+        let mut signatures = self.masters.iter().map(|m| Self::glyph_signature(m, name));
+        let Some(first) = signatures.next().flatten() else {
+            return false;
+        };
+        signatures.all(|s| s.as_ref() == Some(&first))
+    }
+
+    /// Recompute the whole compatibility map (load / reload).
+    fn compute_compat(&mut self) {
+        self.compat.clear();
+        if self.masters.len() < 2 {
+            return;
+        }
+        let names: Vec<String> = self.masters[self.active]
+            .glyphs
+            .iter()
+            .map(|g| g.name.to_string())
+            .collect();
+        for name in names {
+            let ok = self.check_compat(&name);
+            self.compat.insert(name, ok);
+        }
+    }
+
+    /// Recheck one glyph after editing.
+    fn recheck_compat(&mut self, name: &str) {
+        if self.masters.len() < 2 {
+            return;
+        }
+        let ok = self.check_compat(name);
+        self.compat.insert(name.to_string(), ok);
     }
 
     /// Interpolated outline + advance of a glyph at the current
@@ -1380,6 +1436,11 @@ impl Workspace {
         let ascender = font.ascender;
         let descender = font.descender;
         let label_h = if cell >= 90.0 { 20.0 } else { 14.0 };
+        let incompatible = self
+            .project
+            .as_ref()
+            .and_then(|p| p.compat.get(entry.name.as_ref()))
+            .is_some_and(|ok| !ok);
 
         div()
             .id(index)
@@ -1431,9 +1492,21 @@ impl Workspace {
                 div()
                     .h(px(label_h))
                     .px_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .text_size(px(if cell >= 90.0 { 10.0 } else { 8.0 }))
                     .text_color(t::text_muted())
                     .overflow_hidden()
+                    .when(incompatible, |el| {
+                        el.child(
+                            div()
+                                .w(px(6.0))
+                                .h(px(6.0))
+                                .rounded_full()
+                                .bg(t::anchor()),
+                        )
+                    })
                     .child(name),
             )
     }
@@ -2828,6 +2901,15 @@ impl Workspace {
                 if self.editor.pen.is_some() {
                     self.pen_finish();
                 } else {
+                    let Mode::Editor(index) = self.mode else {
+                        return false;
+                    };
+                    let name = self
+                        .font()
+                        .map(|f| f.glyphs[index].name.to_string());
+                    if let (Some(name), Some(project)) = (name, self.project.as_mut()) {
+                        project.recheck_compat(&name);
+                    }
                     self.mode = Mode::Grid;
                     self.status_note = None;
                 }
@@ -3612,6 +3694,23 @@ mod tests {
         let xs: Vec<f64> = circle.points.iter().map(|p| p.x).collect();
         assert_eq!(xs.iter().cloned().fold(f64::MAX, f64::min), 10.0);
         assert_eq!(xs.iter().cloned().fold(f64::MIN, f64::max), 110.0);
+    }
+
+    #[test]
+    fn compat_map_flags_structure_changes() {
+        let mut project = Project::load(&default_font_path()).expect("designspace");
+        // Demo masters are interpolation-compatible for letters.
+        assert_eq!(project.compat.get("n"), Some(&true));
+        // Break compatibility in one master and recheck.
+        let idx = project.masters[0]
+            .glyphs
+            .iter()
+            .position(|g| g.name.as_ref() == "n")
+            .unwrap();
+        let rect = kurbo::Rect::new(0.0, 0.0, 50.0, 50.0);
+        project.masters[0].add_shape_contour(idx, rect, false);
+        project.recheck_compat("n");
+        assert_eq!(project.compat.get("n"), Some(&false));
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).
