@@ -40,6 +40,24 @@ struct GlyphPoint {
     index: usize,
 }
 
+// App-level commands, reachable from the native menu bar and the
+// keymap. GPUI does not populate the macOS menu bar on its own; the
+// menus declared in `main` dispatch these.
+gpui::actions!(
+    runebender,
+    [
+        OpenFont,
+        SaveFont,
+        Undo,
+        Redo,
+        CopyContours,
+        PasteContours,
+        RemoveOverlap,
+        Decompose,
+        Quit
+    ]
+);
+
 /// One glyph, ready to paint: outline in font units (Y-up), advance
 /// width, and identifying info.
 struct GlyphEntry {
@@ -2482,6 +2500,108 @@ impl Workspace {
         }
     }
 
+    // ---- app commands (menu bar + keymap) ----
+
+    /// Save every dirty master (native), or PUT modified files to the
+    /// workspace server (web).
+    fn command_save(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_family = "wasm")]
+        {
+            self.save_to_web_host(cx);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let _ = cx;
+            if let Some(project) = self.project.as_mut() {
+                let mut saved = Vec::new();
+                let mut failed = Vec::new();
+                for master in project.masters.iter_mut() {
+                    if !master.dirty {
+                        continue;
+                    }
+                    match master.save() {
+                        Ok(()) => saved.push(master.source_path.display().to_string()),
+                        Err(e) => failed.push(format!("{e}")),
+                    }
+                }
+                *self.last_save.lock().unwrap() = web_time::Instant::now();
+                self.status_note = Some(if !failed.is_empty() {
+                    format!("Save failed: {}", failed.join("; ")).into()
+                } else if saved.is_empty() {
+                    "Nothing to save".into()
+                } else {
+                    format!("Saved {}", saved.join(", ")).into()
+                });
+            }
+        }
+    }
+
+    /// Copy the selected contours (whole glyph when nothing selected).
+    fn command_copy(&mut self) {
+        let in_editor = matches!(self.mode, Mode::Editor(_));
+        let index = match self.mode {
+            Mode::Editor(i) => Some(i),
+            Mode::Grid => self.selected,
+        };
+        if let (Some(index), Some(font)) = (index, self.font()) {
+            let selected = if in_editor {
+                self.editor.selected.clone()
+            } else {
+                Default::default()
+            };
+            self.clipboard = font.contours_for_copy(index, &selected);
+            self.status_note =
+                Some(format!("Copied {} contours", self.clipboard.len()).into());
+        }
+    }
+
+    /// Paste copied contours into the current glyph, with undo.
+    fn command_paste(&mut self) {
+        let index = match self.mode {
+            Mode::Editor(i) => Some(i),
+            Mode::Grid => self.selected,
+        };
+        let Some(index) = index else { return };
+        if self.clipboard.is_empty() {
+            return;
+        }
+        self.push_undo_snapshot(index);
+        let contours = self.clipboard.clone();
+        if let Some(font) = self.font_mut() {
+            font.paste_contours(index, &contours);
+        }
+        if let Some(project) = self.project.as_mut() {
+            let name = project.active_font().glyphs[index].name.to_string();
+            project.recheck_compat(&name);
+        }
+    }
+
+    /// Remove overlap on the open glyph, with undo.
+    fn command_remove_overlap(&mut self) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        self.push_undo_snapshot(index);
+        let changed = self.font_mut().is_some_and(|f| f.remove_overlap(index));
+        if !changed {
+            self.editor.undo.pop();
+        } else {
+            self.editor.selected.clear();
+        }
+    }
+
+    /// Decompose the open glyph's components, with undo.
+    fn command_decompose(&mut self) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        self.push_undo_snapshot(index);
+        let changed = self.font_mut().is_some_and(|f| f.decompose(index));
+        if !changed {
+            self.editor.undo.pop();
+        }
+    }
+
     fn undo(&mut self) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -3264,7 +3384,7 @@ impl Workspace {
         .detach();
     }
 
-    fn handle_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) -> bool {
+    fn handle_key(&mut self, event: &gpui::KeyDownEvent, _cx: &mut Context<Self>) -> bool {
         let key = event.keystroke.key.as_str();
         let cmd = event.keystroke.modifiers.platform;
         let shift = event.keystroke.modifiers.shift;
@@ -3321,14 +3441,6 @@ impl Workspace {
             ("m", false) if in_editor => {
                 self.pen_finish();
                 self.editor.tool = Tool::Measure;
-                true
-            }
-            ("z", true) if in_editor => {
-                if shift {
-                    self.redo();
-                } else {
-                    self.undo();
-                }
                 true
             }
             ("a", false) if in_editor => {
@@ -3396,105 +3508,6 @@ impl Workspace {
                     let r = font.glyphs[right].name.to_string();
                     let value = font.kern_value(&l, &r) + delta;
                     font.set_kern_pair(&l, &r, value);
-                }
-                true
-            }
-            ("c", true) => {
-                let index = match self.mode {
-                    Mode::Editor(i) => Some(i),
-                    Mode::Grid => self.selected,
-                };
-                if let (Some(index), Some(font)) = (index, self.font()) {
-                    let selected = if in_editor {
-                        self.editor.selected.clone()
-                    } else {
-                        Default::default()
-                    };
-                    self.clipboard = font.contours_for_copy(index, &selected);
-                    self.status_note = Some(
-                        format!("Copied {} contours", self.clipboard.len()).into(),
-                    );
-                }
-                true
-            }
-            ("v", true) => {
-                let index = match self.mode {
-                    Mode::Editor(i) => Some(i),
-                    Mode::Grid => self.selected,
-                };
-                if let Some(index) = index {
-                    if self.clipboard.is_empty() {
-                        return false;
-                    }
-                    self.push_undo_snapshot(index);
-                    let contours = self.clipboard.clone();
-                    if let Some(font) = self.font_mut() {
-                        font.paste_contours(index, &contours);
-                    }
-                    if let Some(project) = self.project.as_mut() {
-                        let name = project.active_font().glyphs[index].name.to_string();
-                        project.recheck_compat(&name);
-                    }
-                }
-                true
-            }
-            ("o", true) if in_editor && shift => {
-                let Mode::Editor(index) = self.mode else {
-                    return false;
-                };
-                self.push_undo_snapshot(index);
-                let changed = self.font_mut().is_some_and(|f| f.remove_overlap(index));
-                if !changed {
-                    self.editor.undo.pop();
-                }
-                if changed {
-                    self.editor.selected.clear();
-                }
-                changed
-            }
-            ("d", true) if in_editor && shift => {
-                let Mode::Editor(index) = self.mode else {
-                    return false;
-                };
-                self.push_undo_snapshot(index);
-                let changed = self.font_mut().is_some_and(|f| f.decompose(index));
-                if !changed {
-                    self.editor.undo.pop();
-                }
-                changed
-            }
-            ("o", true) => {
-                self.open_dialog(cx);
-                true
-            }
-            ("s", true) => {
-                #[cfg(target_family = "wasm")]
-                {
-                    self.save_to_web_host(cx);
-                    return true;
-                }
-                #[cfg(not(target_family = "wasm"))]
-                // Save every dirty master.
-                if let Some(project) = self.project.as_mut() {
-                    let mut saved = Vec::new();
-                    let mut failed = Vec::new();
-                    for master in project.masters.iter_mut() {
-                        if !master.dirty {
-                            continue;
-                        }
-                        match master.save() {
-                            Ok(()) => saved.push(master.source_path.display().to_string()),
-                            Err(e) => failed.push(format!("{e}")),
-                        }
-                    }
-                    *self.last_save.lock().unwrap() = web_time::Instant::now();
-                    self.status_note = Some(if !failed.is_empty() {
-                        format!("Save failed: {}", failed.join("; ")).into()
-                    } else if saved.is_empty() {
-                        "Nothing to save".into()
-                    } else {
-                        format!("Saved {}", saved.join(", ")).into()
-                    });
                 }
                 true
             }
@@ -3601,6 +3614,37 @@ impl Render for Workspace {
             .size_full()
             .bg(t::window_bg())
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, _: &OpenFont, _, cx| {
+                this.open_dialog(cx);
+            }))
+            .on_action(cx.listener(|this, _: &SaveFont, _, cx| {
+                this.command_save(cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Undo, _, cx| {
+                this.undo();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Redo, _, cx| {
+                this.redo();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &CopyContours, _, cx| {
+                this.command_copy();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &PasteContours, _, cx| {
+                this.command_paste();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &RemoveOverlap, _, cx| {
+                this.command_remove_overlap();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Decompose, _, cx| {
+                this.command_decompose();
+                cx.notify();
+            }))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if this.handle_key(event, cx) {
                     cx.notify();
@@ -3677,6 +3721,62 @@ fn main() {
         .with_assets(gpui_component_assets::Assets::default());
     let launch = move |cx: &mut App| {
         gpui_component::init(cx);
+
+        // The keymap for app commands; menu items show these as their
+        // key equivalents.
+        cx.bind_keys([
+            gpui::KeyBinding::new("cmd-o", OpenFont, None),
+            gpui::KeyBinding::new("cmd-s", SaveFont, None),
+            gpui::KeyBinding::new("cmd-z", Undo, None),
+            gpui::KeyBinding::new("cmd-shift-z", Redo, None),
+            gpui::KeyBinding::new("cmd-c", CopyContours, None),
+            gpui::KeyBinding::new("cmd-v", PasteContours, None),
+            gpui::KeyBinding::new("cmd-shift-o", RemoveOverlap, None),
+            gpui::KeyBinding::new("cmd-shift-d", Decompose, None),
+            gpui::KeyBinding::new("cmd-q", Quit, None),
+        ]);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+
+        // GPUI leaves the macOS menu bar empty unless the app
+        // declares menus; this is where the native ports should feel
+        // native, so declare them.
+        #[cfg(not(target_family = "wasm"))]
+        cx.set_menus(vec![
+            gpui::Menu {
+                name: "Runebender".into(),
+                items: vec![gpui::MenuItem::action("Quit Runebender", Quit)],
+                disabled: false,
+            },
+            gpui::Menu {
+                name: "File".into(),
+                items: vec![
+                    gpui::MenuItem::action("Open…", OpenFont),
+                    gpui::MenuItem::separator(),
+                    gpui::MenuItem::action("Save", SaveFont),
+                ],
+                disabled: false,
+            },
+            gpui::Menu {
+                name: "Edit".into(),
+                items: vec![
+                    gpui::MenuItem::action("Undo", Undo),
+                    gpui::MenuItem::action("Redo", Redo),
+                    gpui::MenuItem::separator(),
+                    gpui::MenuItem::action("Copy Contours", CopyContours),
+                    gpui::MenuItem::action("Paste Contours", PasteContours),
+                ],
+                disabled: false,
+            },
+            gpui::Menu {
+                name: "Glyph".into(),
+                items: vec![
+                    gpui::MenuItem::action("Remove Overlap", RemoveOverlap),
+                    gpui::MenuItem::action("Decompose Components", Decompose),
+                ],
+                disabled: false,
+            },
+        ]);
+
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
             WindowOptions {
