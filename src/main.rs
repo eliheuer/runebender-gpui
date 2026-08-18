@@ -2821,15 +2821,27 @@ fn default_font_path() -> PathBuf {
 }
 
 fn main() {
-    let font_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(default_font_path);
+    #[cfg(target_family = "wasm")]
+    gpui_platform::web_init();
 
-    let (project, load_error) = match Project::load(&font_path) {
-        Ok(p) => (Some(p), None),
-        Err(e) => (None, Some(e.into())),
+    #[cfg(not(target_family = "wasm"))]
+    let (project, load_error) = {
+        let font_path = std::env::args()
+            .nth(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(default_font_path);
+        match Project::load(&font_path) {
+            Ok(p) => (Some(p), None),
+            Err(e) => (None, Some(e.into())),
+        }
     };
+    // The web build has no filesystem: fonts will arrive through a
+    // host data layer (fetch), like runebender-web's serve loop.
+    #[cfg(target_family = "wasm")]
+    let (project, load_error): (Option<Project>, Option<SharedString>) = (
+        None,
+        Some("Web build: host font loading not wired yet".into()),
+    );
 
     // QA hook: RB_OPEN_GLYPH=<name> starts in the editor on that
     // glyph, so agent screenshots can reach it without clicks.
@@ -2845,9 +2857,10 @@ fn main() {
         .map(Mode::Editor)
         .unwrap_or(Mode::Grid);
 
-    gpui_platform::application()
-        .with_assets(gpui_component_assets::Assets)
-        .run(move |cx: &mut App| {
+    let app = gpui_platform::application();
+    #[cfg(not(target_family = "wasm"))]
+    let app = app.with_assets(gpui_component_assets::Assets);
+    app.run(move |cx: &mut App| {
         gpui_component::init(cx);
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
