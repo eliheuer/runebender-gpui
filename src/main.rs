@@ -1119,6 +1119,10 @@ struct Workspace {
     preview_input: gpui::Entity<gpui_component::input::InputState>,
     preview_text: SharedString,
     preview_bounds: Arc<Mutex<Bounds<gpui::Pixels>>>,
+    /// Filesystem watcher over the open masters' UFO directories.
+    _watcher: Option<notify::RecommendedWatcher>,
+    /// Set at save time so the watcher ignores our own writes.
+    last_save: Arc<Mutex<std::time::Instant>>,
     /// A selected kern pair in the preview strip: indices into the
     /// resolved preview line (glyph indices of the pair).
     selected_pair: Option<(usize, usize)>,
@@ -2243,6 +2247,105 @@ impl Workspace {
             .child(text)
     }
 
+    /// Watch every master's UFO directory; external changes reload
+    /// the affected masters (in-memory edits are never clobbered:
+    /// dirty masters skip the reload with a status note). Our own
+    /// saves are suppressed via the last_save timestamp.
+    fn start_watching(&mut self, cx: &mut Context<Self>) {
+        use futures::StreamExt;
+        self._watcher = None;
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<()>();
+        let mut watcher = match notify::recommended_watcher(
+            move |res: Result<notify::Event, notify::Error>| {
+                if res.is_ok() {
+                    let _ = tx.unbounded_send(());
+                }
+            },
+        ) {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+        for master in &project.masters {
+            let _ = notify::Watcher::watch(
+                &mut watcher,
+                &master.source_path,
+                notify::RecursiveMode::Recursive,
+            );
+        }
+        self._watcher = Some(watcher);
+        let last_save = self.last_save.clone();
+        cx.spawn(async move |this, cx| {
+            while rx.next().await.is_some() {
+                // Debounce: drain everything arriving in the next
+                // half second into one reload.
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(500))
+                    .await;
+                while rx.try_next().ok().flatten().is_some() {}
+                if last_save.lock().unwrap().elapsed()
+                    < std::time::Duration::from_secs(2)
+                {
+                    continue;
+                }
+                if this
+                    .update(cx, |workspace, cx| {
+                        workspace.reload_from_disk();
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Re-read every clean master from disk, keeping the open glyph.
+    fn reload_from_disk(&mut self) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        let open_glyph_name = match self.mode {
+            Mode::Editor(i) => Some(project.active_font().glyphs[i].name.clone()),
+            Mode::Grid => None,
+        };
+        let mut skipped_dirty = false;
+        for master in project.masters.iter_mut() {
+            if master.dirty {
+                skipped_dirty = true;
+                continue;
+            }
+            if let Ok(fresh) = FontModel::load(&master.source_path) {
+                *master = fresh;
+            }
+        }
+        if let Some(name) = open_glyph_name {
+            match project
+                .active_font()
+                .glyphs
+                .iter()
+                .position(|g| g.name == name)
+            {
+                Some(index) => {
+                    self.mode = Mode::Editor(index);
+                    self.editor.selected.clear();
+                    self.editor.selected_anchor = None;
+                    self.editor.drag = None;
+                }
+                None => self.mode = Mode::Grid,
+            }
+        }
+        self.status_note = Some(if skipped_dirty {
+            "Changed on disk · dirty masters kept your unsaved edits".into()
+        } else {
+            "Reloaded from disk".into()
+        });
+    }
+
     /// Cmd+O: native open dialog for a .designspace, .ufo, or folder.
     fn open_dialog(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -2268,6 +2371,7 @@ impl Workspace {
                         workspace.selected = None;
                         workspace.status_note = None;
                         workspace.search_query.clear();
+                        workspace.start_watching(cx);
                     }
                     Err(e) => workspace.load_error = Some(e.into()),
                 }
@@ -2401,6 +2505,7 @@ impl Workspace {
                             Err(e) => failed.push(format!("{e}")),
                         }
                     }
+                    *self.last_save.lock().unwrap() = std::time::Instant::now();
                     self.status_note = Some(if !failed.is_empty() {
                         format!("Save failed: {}", failed.join("; ")).into()
                     } else if saved.is_empty() {
@@ -2614,7 +2719,7 @@ fn main() {
                             }
                         }
                     });
-                    Workspace {
+                    let mut workspace = Workspace {
                         project,
                         load_error,
                         selected: None,
@@ -2633,8 +2738,12 @@ fn main() {
                         preview_text: "hamburgevons".into(),
                         preview_bounds: Arc::new(Mutex::new(Bounds::default())),
                         selected_pair: None,
+                        _watcher: None,
+                        last_save: Arc::new(Mutex::new(std::time::Instant::now())),
                         _subscriptions: vec![subscription, sub_w, sub_l, sub_r, sub_p],
-                    }
+                    };
+                    workspace.start_watching(cx);
+                    workspace
                 });
                 cx.new(|cx| gpui_component::Root::new(workspace, window, cx))
             },
