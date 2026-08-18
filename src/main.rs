@@ -834,6 +834,16 @@ impl FontModel {
 // PROJECT (designspace or single UFO)
 // ============================================================================
 
+/// One designspace axis, in design coordinates.
+#[derive(Clone)]
+struct AxisInfo {
+    name: String,
+    tag: SharedString,
+    min: f64,
+    default: f64,
+    max: f64,
+}
+
 /// An open project: one or more master UFOs, optionally tied together
 /// by a designspace document.
 struct Project {
@@ -841,6 +851,12 @@ struct Project {
     active: usize,
     /// Style names for the master switcher, one per master.
     master_names: Vec<SharedString>,
+    axes: Vec<AxisInfo>,
+    /// Normalized (-1..1) location of each master, by axis name.
+    master_locations: Vec<runebender_core::var_model::Location>,
+    model: Option<runebender_core::var_model::VariationModel>,
+    /// Current preview location, normalized, by axis name.
+    location: runebender_core::var_model::Location,
 }
 
 impl Project {
@@ -860,6 +876,20 @@ impl Project {
                 .iter()
                 .map(|a| (a.name.as_str(), a.default))
                 .collect();
+            // Axis metadata (design coordinates; avar maps ignored
+            // for now, which matches sources that don't use them).
+            let axes: Vec<AxisInfo> = doc
+                .axes
+                .iter()
+                .map(|a| AxisInfo {
+                    name: a.name.clone(),
+                    tag: a.tag.clone().into(),
+                    min: a.minimum.unwrap_or(a.default) as f64,
+                    default: a.default as f64,
+                    max: a.maximum.unwrap_or(a.default) as f64,
+                })
+                .collect();
+            let mut master_locations = Vec::new();
             for source in &doc.sources {
                 if !seen.insert(source.filename.clone()) {
                     continue; // per-layer duplicate source entries
@@ -876,6 +906,24 @@ impl Project {
                 if is_default {
                     default_index = masters.len();
                 }
+                // Normalized location for the interpolation model.
+                let mut location = runebender_core::var_model::Location::new();
+                for axis in &axes {
+                    let raw = source
+                        .location
+                        .iter()
+                        .find(|d| d.name == axis.name)
+                        .and_then(|d| d.xvalue.or(d.uservalue))
+                        .map(|v| v as f64)
+                        .unwrap_or(axis.default);
+                    location.insert(
+                        axis.name.clone(),
+                        runebender_core::var_model::normalize_value(
+                            raw, axis.min, axis.default, axis.max,
+                        ),
+                    );
+                }
+                master_locations.push(location);
                 let name = source
                     .stylename
                     .clone()
@@ -886,10 +934,20 @@ impl Project {
             if masters.is_empty() {
                 return Err(format!("{}: no sources", path.display()));
             }
+            let model = (masters.len() > 1)
+                .then(|| runebender_core::var_model::VariationModel::new(&master_locations));
+            let location = axes
+                .iter()
+                .map(|a| (a.name.clone(), 0.0))
+                .collect();
             Ok(Self {
                 active: default_index,
                 masters,
                 master_names,
+                axes,
+                master_locations,
+                model,
+                location,
             })
         } else {
             let model =
@@ -905,8 +963,53 @@ impl Project {
                 masters: vec![model],
                 active: 0,
                 master_names: vec![name],
+                axes: Vec::new(),
+                master_locations: Vec::new(),
+                model: None,
+                location: runebender_core::var_model::Location::new(),
             })
         }
+    }
+
+    /// Interpolated outline + advance of a glyph at the current
+    /// location. None when at the default location, when masters are
+    /// point-incompatible, or when there is no model.
+    fn interpolated_glyph(&self, glyph_name: &str) -> Option<(BezPath, f64)> {
+        let model = self.model.as_ref()?;
+        if self.location.values().all(|v| v.abs() < 1e-9) {
+            return None;
+        }
+        // Flatten [advance, x0, y0, x1, y1, ...] per master.
+        let mut values: Vec<Vec<f64>> = Vec::with_capacity(self.masters.len());
+        for master in &self.masters {
+            let glyph = master.font.get_glyph(glyph_name)?;
+            let mut v = vec![glyph.width];
+            for contour in &glyph.contours {
+                for p in &contour.points {
+                    v.push(p.x);
+                    v.push(p.y);
+                }
+            }
+            values.push(v);
+        }
+        let len = values[0].len();
+        if values.iter().any(|v| v.len() != len) {
+            return None; // point-incompatible masters
+        }
+        let out = model.interpolate(&values, &self.location);
+        // Rebuild on the default master's structure.
+        let base = &self.masters[self.active];
+        let mut glyph = base.font.get_glyph(glyph_name)?.clone();
+        let mut it = out.iter().copied();
+        let advance = it.next()?;
+        for contour in glyph.contours.iter_mut() {
+            for p in contour.points.iter_mut() {
+                p.x = it.next()?;
+                p.y = it.next()?;
+            }
+        }
+        glyph.width = advance;
+        Some((glyph_path::glyph_to_bezpath(&glyph, &base.font), advance))
     }
 
     fn active_font(&self) -> &FontModel {
@@ -1119,6 +1222,8 @@ struct Workspace {
     preview_input: gpui::Entity<gpui_component::input::InputState>,
     preview_text: SharedString,
     preview_bounds: Arc<Mutex<Bounds<gpui::Pixels>>>,
+    /// One slider per designspace axis, created lazily in render.
+    axis_sliders: Vec<gpui::Entity<gpui_component::slider::SliderState>>,
     /// Filesystem watcher over the open masters' UFO directories.
     _watcher: Option<notify::RecommendedWatcher>,
     /// Set at save time so the watcher ignores our own writes.
@@ -1307,6 +1412,11 @@ impl Workspace {
         let font = self.font().unwrap();
         let entry = &font.glyphs[index];
         let outline = entry.path.clone();
+        let ghost: Option<Arc<BezPath>> = self
+            .project
+            .as_ref()
+            .and_then(|p| p.interpolated_glyph(entry.name.as_ref()))
+            .map(|(path, _)| Arc::new(path));
         let points = entry.points.clone();
         let anchors = entry.anchors.clone();
         let selected_anchor = self.editor.selected_anchor;
@@ -1474,6 +1584,18 @@ impl Workspace {
 
                         if let Some(path) = build_fill_path(&outline, transform, origin) {
                             window.paint_path(path, t::editor_fill());
+                        }
+                        // Interpolated instance at the axes-bar
+                        // location, as a ghost outline.
+                        if let Some(ghost) = &ghost {
+                            if let Some(p) = build_path(
+                                ghost,
+                                transform,
+                                origin,
+                                PathBuilder::stroke(px(1.0)),
+                            ) {
+                                window.paint_path(p, t::ghost());
+                            }
                         }
                         if let Some(path) =
                             build_path(&outline, transform, origin, PathBuilder::stroke(px(1.5)))
@@ -2085,6 +2207,84 @@ impl Workspace {
         ))
     }
 
+    /// Create the axis sliders once a project with axes exists.
+    fn ensure_axis_sliders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        if !self.axis_sliders.is_empty() || project.axes.is_empty() || project.model.is_none() {
+            return;
+        }
+        let axes = project.axes.clone();
+        for (i, axis) in axes.iter().enumerate() {
+            let slider = cx.new(|_| {
+                gpui_component::slider::SliderState::new()
+                    .min(axis.min as f32)
+                    .max(axis.max as f32)
+                    .step(1.0)
+                    .default_value(axis.default as f32)
+            });
+            let axis_info = axis.clone();
+            let sub = cx.subscribe_in(&slider, window, {
+                move |this: &mut Workspace,
+                      _,
+                      event: &gpui_component::slider::SliderEvent,
+                      _window,
+                      cx| {
+                    let gpui_component::slider::SliderEvent::Change(value) = event else {
+                        return;
+                    };
+                    let raw = value.start() as f64;
+                    if let Some(project) = this.project.as_mut() {
+                        project.location.insert(
+                            axis_info.name.clone(),
+                            runebender_core::var_model::normalize_value(
+                                raw,
+                                axis_info.min,
+                                axis_info.default,
+                                axis_info.max,
+                            ),
+                        );
+                    }
+                    cx.notify();
+                }
+            });
+            self._subscriptions.push(sub);
+            self.axis_sliders.push(slider);
+            let _ = i;
+        }
+    }
+
+    /// Axis slider row (designspaces only).
+    fn axes_bar(&self) -> impl IntoElement + use<> {
+        let Some(project) = self.project.as_ref() else {
+            return div().into_any_element();
+        };
+        if self.axis_sliders.is_empty() {
+            return div().into_any_element();
+        }
+        let mut row = div()
+            .flex()
+            .items_center()
+            .gap_4()
+            .px_4()
+            .py_1()
+            .bg(t::panel_bg())
+            .border_t_1()
+            .border_color(t::cell_border());
+        for (axis, slider) in project.axes.iter().zip(&self.axis_sliders) {
+            row = row.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_sm().text_color(t::text_muted()).child(axis.tag.clone()))
+                    .child(div().w(px(160.0)).child(gpui_component::slider::Slider::new(slider))),
+            );
+        }
+        row.into_any_element()
+    }
+
     /// Bottom bar in editor mode: Width / LSB / RSB fields.
     fn metrics_bar(&self) -> impl IntoElement + use<> {
         let field = |label_text: &'static str,
@@ -2585,6 +2785,7 @@ impl Render for Workspace {
             window.focus(&self.focus_handle, cx);
         }
 
+        self.ensure_axis_sliders(window, cx);
         if matches!(self.mode, Mode::Editor(_)) {
             self.refresh_metric_inputs(false, window, cx);
         }
@@ -2649,6 +2850,7 @@ impl Render for Workspace {
             }))
             .child(self.header(cx))
             .child(content)
+            .child(self.axes_bar())
             .child(self.preview_strip(cx))
             .child(self.status_bar())
     }
@@ -2795,6 +2997,7 @@ fn main() {
                         preview_text: "hamburgevons".into(),
                         preview_bounds: Arc::new(Mutex::new(Bounds::default())),
                         selected_pair: None,
+                        axis_sliders: Vec::new(),
                         _watcher: None,
                         last_save: Arc::new(Mutex::new(std::time::Instant::now())),
                         _subscriptions: vec![subscription, sub_w, sub_l, sub_r, sub_p],
@@ -3157,6 +3360,35 @@ mod tests {
         assert!(model.dirty);
         // Unrelated pair unaffected by the exception.
         let _ = model.kern_value("o", "o");
+    }
+
+    #[test]
+    fn interpolation_at_midpoint() {
+        let mut project = Project::load(&default_font_path()).expect("designspace");
+        assert!(project.model.is_some(), "two masters, model expected");
+        // Move every axis to its normalized midpoint toward max.
+        let axis_names: Vec<String> =
+            project.axes.iter().map(|a| a.name.clone()).collect();
+        for name in &axis_names {
+            project.location.insert(name.clone(), 0.5);
+        }
+        let (path, advance) = project
+            .interpolated_glyph("n")
+            .expect("compatible masters interpolate");
+        assert!(!path.elements().is_empty());
+        // The interpolated advance sits between the two masters'.
+        let a0 = project.masters[0].font.get_glyph("n").unwrap().width;
+        let a1 = project.masters[1].font.get_glyph("n").unwrap().width;
+        let (lo, hi) = (a0.min(a1), a0.max(a1));
+        assert!(
+            advance >= lo - 1e-6 && advance <= hi + 1e-6,
+            "advance {advance} outside [{lo}, {hi}]"
+        );
+        // Default location yields no ghost.
+        for name in &axis_names {
+            project.location.insert(name.clone(), 0.0);
+        }
+        assert!(project.interpolated_glyph("n").is_none());
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).

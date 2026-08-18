@@ -56,3 +56,6 @@ pub fn marquee_fill() -> Rgba {
 pub fn anchor() -> Rgba {
     rgb(0xc75f5f)
 }
+pub fn ghost() -> Rgba {
+    rgb(0x6f9fc7)
+}
