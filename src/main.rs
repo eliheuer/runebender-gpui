@@ -2524,7 +2524,10 @@ mod tests {
             .position(|g| g.name.as_ref() == "a")
             .expect("glyph a");
         let before = model.glyphs[index].points[0];
-        model.move_point_to(index, before.contour, before.index, before.x + 10.0, before.y + 5.0);
+        model.set_points(
+            index,
+            &[((before.contour, before.index), (before.x + 10.0, before.y + 5.0))],
+        );
         assert!(model.dirty);
         let after = model.glyphs[index].points[0];
         assert_eq!(after.x, before.x + 10.0);
