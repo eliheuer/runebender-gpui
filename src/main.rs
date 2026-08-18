@@ -122,6 +122,12 @@ impl FontModel {
 
     fn load(path: &std::path::Path) -> Result<Self, norad::error::FontLoadError> {
         let font = norad::Font::load(path)?;
+        Ok(Self::from_font(font, path.to_path_buf()))
+    }
+
+    /// Build the model from an already-assembled font (in-memory
+    /// hosts: web builds, embedded demo data).
+    fn from_font(font: norad::Font, source_path: PathBuf) -> Self {
         let info = &font.font_info;
         let units_per_em = info.units_per_em.map(|v| v.as_f64()).unwrap_or(1000.0);
         let ascender = info.ascender.unwrap_or(units_per_em * 0.8);
@@ -159,17 +165,17 @@ impl FontModel {
             .filter_map(|(i, g)| g.codepoint.map(|c| (c, i)))
             .collect();
 
-        Ok(Self {
+        Self {
             font,
             codepoint_map,
             family_name: family_name.into(),
-            source_path: path.to_path_buf(),
+            source_path,
             units_per_em,
             ascender,
             descender,
             glyphs,
             dirty: false,
-        })
+        }
     }
 
     fn rebuild_entry(&mut self, glyph_index: usize) {
@@ -507,7 +513,42 @@ impl Project {
         if path.extension().is_some_and(|e| e == "designspace") {
             let doc = norad::designspace::DesignSpaceDocument::load(path)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
-            let dir = path.parent().unwrap_or(std::path::Path::new("."));
+            let dir = path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+            return Self::from_designspace(doc, move |filename| {
+                let ufo_path = dir.join(filename);
+                FontModel::load(&ufo_path).map_err(|e| format!("{}: {e}", ufo_path.display()))
+            });
+        }
+        {
+            let model =
+                FontModel::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let name: SharedString = model
+                .font
+                .font_info
+                .style_name
+                .clone()
+                .unwrap_or_else(|| "Regular".into())
+                .into();
+            Ok(Self {
+                masters: vec![model],
+                active: 0,
+                master_names: vec![name],
+                axes: Vec::new(),
+                master_locations: Vec::new(),
+                model: None,
+                location: runebender_core::var_model::Location::new(),
+                compat: std::collections::HashMap::new(),
+            })
+        }
+    }
+
+    /// Assemble a designspace project; `load_master` maps a source
+    /// filename to its font model (filesystem or in-memory host).
+    fn from_designspace(
+        doc: norad::designspace::DesignSpaceDocument,
+        mut load_master: impl FnMut(&str) -> Result<FontModel, String>,
+    ) -> Result<Self, String> {
+        {
             let mut seen = std::collections::HashSet::new();
             let mut masters = Vec::new();
             let mut master_names = Vec::new();
@@ -537,9 +578,7 @@ impl Project {
                 if !seen.insert(source.filename.clone()) {
                     continue; // per-layer duplicate source entries
                 }
-                let ufo_path = dir.join(&source.filename);
-                let model = FontModel::load(&ufo_path)
-                    .map_err(|e| format!("{}: {e}", ufo_path.display()))?;
+                let model = load_master(&source.filename)?;
                 let is_default = source.location.iter().all(|d| {
                     let value = d.xvalue.or(d.uservalue).unwrap_or(0.0);
                     defaults
@@ -575,7 +614,7 @@ impl Project {
                 master_names.push(name.into());
             }
             if masters.is_empty() {
-                return Err(format!("{}: no sources", path.display()));
+                return Err("designspace has no sources".into());
             }
             let model = (masters.len() > 1)
                 .then(|| runebender_core::var_model::VariationModel::new(&master_locations));
@@ -593,27 +632,49 @@ impl Project {
                 location,
                 compat: std::collections::HashMap::new(),
             })
-        } else {
-            let model =
-                FontModel::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let name: SharedString = model
-                .font
-                .font_info
-                .style_name
-                .clone()
-                .unwrap_or_else(|| "Regular".into())
-                .into();
-            Ok(Self {
-                masters: vec![model],
-                active: 0,
-                master_names: vec![name],
-                axes: Vec::new(),
-                master_locations: Vec::new(),
-                model: None,
-                location: runebender_core::var_model::Location::new(),
-                compat: std::collections::HashMap::new(),
-            })
         }
+    }
+
+    /// The embedded demo project for hosts without a filesystem
+    /// (web builds): the Virtua Grotesk designspace and both master
+    /// UFOs compiled into the binary.
+    #[cfg(target_family = "wasm")]
+    fn demo_embedded() -> Result<Self, String> {
+        static DEMO: include_dir::Dir<'_> = include_dir::include_dir!(
+            "$CARGO_MANIFEST_DIR/../runebender-web/assets/test-fonts"
+        );
+        let ds_text = DEMO
+            .get_file("VirtuaGrotesk.designspace")
+            .and_then(|f| f.contents_utf8())
+            .ok_or("embedded designspace missing")?;
+        let doc = runebender_core::font_memory::designspace_from_str(ds_text)?;
+        let mut project = Self::from_designspace(doc, |filename| {
+            let ufo = DEMO
+                .get_dir(filename)
+                .ok_or_else(|| format!("embedded UFO missing: {filename}"))?;
+            let mut files: Vec<(String, &[u8])> = Vec::new();
+            fn walk<'a>(
+                dir: &'a include_dir::Dir<'a>,
+                prefix: &str,
+                out: &mut Vec<(String, &'a [u8])>,
+            ) {
+                for file in dir.files() {
+                    let name = file.path().file_name().unwrap().to_string_lossy();
+                    out.push((format!("{prefix}{name}"), file.contents()));
+                }
+                for sub in dir.dirs() {
+                    let name = sub.path().file_name().unwrap().to_string_lossy();
+                    walk(sub, &format!("{prefix}{name}/"), out);
+                }
+            }
+            walk(ufo, "", &mut files);
+            let font = runebender_core::font_memory::font_from_files(
+                files.iter().map(|(p, b)| (p.as_str(), *b)),
+            )?;
+            Ok(FontModel::from_font(font, PathBuf::from(filename)))
+        })?;
+        project.compute_compat();
+        Ok(project)
     }
 
     /// Structural signature used for interpolation compatibility:
@@ -914,7 +975,7 @@ struct Workspace {
     /// Filesystem watcher over the open masters' UFO directories.
     _watcher: Option<notify::RecommendedWatcher>,
     /// Set at save time so the watcher ignores our own writes.
-    last_save: Arc<Mutex<std::time::Instant>>,
+    last_save: Arc<Mutex<web_time::Instant>>,
     /// A selected kern pair in the preview strip: indices into the
     /// resolved preview line (glyph indices of the pair).
     selected_pair: Option<(usize, usize)>,
@@ -2367,6 +2428,13 @@ impl Workspace {
     /// the affected masters (in-memory edits are never clobbered:
     /// dirty masters skip the reload with a status note). Our own
     /// saves are suppressed via the last_save timestamp.
+    #[cfg(target_family = "wasm")]
+    fn start_watching(&mut self, _cx: &mut Context<Self>) {
+        // No filesystem on the web: live reload will ride the host
+        // data layer instead.
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     fn start_watching(&mut self, cx: &mut Context<Self>) {
         use futures::StreamExt;
         self._watcher = None;
@@ -2707,7 +2775,7 @@ impl Workspace {
                             Err(e) => failed.push(format!("{e}")),
                         }
                     }
-                    *self.last_save.lock().unwrap() = std::time::Instant::now();
+                    *self.last_save.lock().unwrap() = web_time::Instant::now();
                     self.status_note = Some(if !failed.is_empty() {
                         format!("Save failed: {}", failed.join("; ")).into()
                     } else if saved.is_empty() {
@@ -2820,6 +2888,15 @@ fn default_font_path() -> PathBuf {
         .join("../runebender-web/assets/test-fonts/VirtuaGrotesk.designspace")
 }
 
+#[cfg(target_family = "wasm")]
+thread_local! {
+    /// Keeps the gpui application alive: on the web the event loop
+    /// belongs to the browser, so run_embedded returns a handle that
+    /// must not drop.
+    static APPLICATION: std::cell::RefCell<Option<gpui::ApplicationHandle>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 fn main() {
     #[cfg(target_family = "wasm")]
     gpui_platform::web_init();
@@ -2835,13 +2912,14 @@ fn main() {
             Err(e) => (None, Some(e.into())),
         }
     };
-    // The web build has no filesystem: fonts will arrive through a
-    // host data layer (fetch), like runebender-web's serve loop.
+    // The web build has no filesystem: open the embedded demo
+    // designspace (a host data layer over fetch comes later).
     #[cfg(target_family = "wasm")]
-    let (project, load_error): (Option<Project>, Option<SharedString>) = (
-        None,
-        Some("Web build: host font loading not wired yet".into()),
-    );
+    let (project, load_error): (Option<Project>, Option<SharedString>) =
+        match Project::demo_embedded() {
+            Ok(p) => (Some(p), None),
+            Err(e) => (None, Some(e.into())),
+        };
 
     // QA hook: RB_OPEN_GLYPH=<name> starts in the editor on that
     // glyph, so agent screenshots can reach it without clicks.
@@ -2857,10 +2935,12 @@ fn main() {
         .map(Mode::Editor)
         .unwrap_or(Mode::Grid);
 
-    let app = gpui_platform::application();
     #[cfg(not(target_family = "wasm"))]
-    let app = app.with_assets(gpui_component_assets::Assets);
-    app.run(move |cx: &mut App| {
+    let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
+    #[cfg(target_family = "wasm")]
+    let app = gpui_platform::single_threaded_web()
+        .with_assets(gpui_component_assets::Assets::default());
+    let launch = move |cx: &mut App| {
         gpui_component::init(cx);
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
@@ -2968,7 +3048,7 @@ fn main() {
                         axis_sliders: Vec::new(),
                         clipboard: Vec::new(),
                         _watcher: None,
-                        last_save: Arc::new(Mutex::new(std::time::Instant::now())),
+                        last_save: Arc::new(Mutex::new(web_time::Instant::now())),
                         _subscriptions: vec![subscription, sub_w, sub_l, sub_r, sub_p],
                     };
                     workspace.start_watching(cx);
@@ -2979,7 +3059,13 @@ fn main() {
         )
         .unwrap();
         cx.activate(true);
+    };
+    #[cfg(target_family = "wasm")]
+    APPLICATION.with(|application| {
+        *application.borrow_mut() = Some(app.run_embedded(launch));
     });
+    #[cfg(not(target_family = "wasm"))]
+    app.run(launch);
 }
 
 #[cfg(test)]
