@@ -41,6 +41,7 @@ struct GlyphEntry {
     codepoint: Option<char>,
     path: Arc<BezPath>,
     points: Arc<Vec<GlyphPoint>>,
+    anchors: Arc<Vec<(SharedString, f64, f64)>>,
     advance: f64,
 }
 
@@ -55,6 +56,24 @@ struct FontModel {
     descender: f64,
     glyphs: Vec<GlyphEntry>,
     dirty: bool,
+}
+
+fn extract_anchors(glyph: &norad::Glyph) -> Vec<(SharedString, f64, f64)> {
+    glyph
+        .anchors
+        .iter()
+        .map(|a| {
+            (
+                a.name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_default()
+                    .into(),
+                a.x,
+                a.y,
+            )
+        })
+        .collect()
 }
 
 fn extract_points(glyph: &norad::Glyph) -> Vec<GlyphPoint> {
@@ -91,6 +110,7 @@ impl FontModel {
                 codepoint: glyph.codepoints.iter().next(),
                 path: Arc::new(glyph_path::glyph_to_bezpath(glyph, &font)),
                 points: Arc::new(extract_points(glyph)),
+                anchors: Arc::new(extract_anchors(glyph)),
                 advance: glyph.width,
             })
             .collect();
@@ -149,26 +169,68 @@ impl FontModel {
         let glyph_advance = glyph.width;
         let path = Arc::new(glyph_path::glyph_to_bezpath(glyph, &self.font));
         let points = Arc::new(extract_points(glyph));
+        let anchors = Arc::new(extract_anchors(glyph));
         let entry = &mut self.glyphs[glyph_index];
         entry.path = path;
         entry.points = points;
+        entry.anchors = anchors;
         entry.advance = glyph_advance;
     }
 
-    /// Clone a glyph's contours for undo snapshots.
-    fn snapshot_contours(&self, glyph_index: usize) -> Option<Vec<norad::Contour>> {
+    /// Clone a glyph's editable state for undo snapshots.
+    fn snapshot_contours(&self, glyph_index: usize) -> Option<GlyphSnapshot> {
         let name = self.glyphs[glyph_index].name.to_string();
-        self.font
-            .get_glyph(name.as_str())
-            .map(|g| g.contours.clone())
+        self.font.get_glyph(name.as_str()).map(|g| GlyphSnapshot {
+            contours: g.contours.clone(),
+            anchors: g.anchors.clone(),
+            width: g.width,
+        })
     }
 
-    /// Replace a glyph's contours (undo/redo) and rebuild caches.
-    fn restore_contours(&mut self, glyph_index: usize, contours: Vec<norad::Contour>) {
+    /// Replace a glyph's editable state (undo/redo) and rebuild caches.
+    fn restore_contours(&mut self, glyph_index: usize, snapshot: GlyphSnapshot) {
         let name = self.glyphs[glyph_index].name.to_string();
         if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
-            glyph.contours = contours;
+            glyph.contours = snapshot.contours;
+            glyph.anchors = snapshot.anchors;
+            glyph.width = snapshot.width;
             self.dirty = true;
+        }
+        self.rebuild_entry(glyph_index);
+    }
+
+    fn set_anchor(&mut self, glyph_index: usize, anchor: usize, x: f64, y: f64) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
+            if let Some(a) = glyph.anchors.get_mut(anchor) {
+                a.x = x;
+                a.y = y;
+                self.dirty = true;
+            }
+        }
+        self.rebuild_entry(glyph_index);
+    }
+
+    fn add_anchor(&mut self, glyph_index: usize, x: f64, y: f64) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
+            let n = glyph.anchors.len();
+            let anchor_name = norad::Name::new(&format!("anchor.{n}")).ok();
+            glyph
+                .anchors
+                .push(norad::Anchor::new(x, y, anchor_name, None, None));
+            self.dirty = true;
+        }
+        self.rebuild_entry(glyph_index);
+    }
+
+    fn delete_anchor(&mut self, glyph_index: usize, anchor: usize) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
+            if anchor < glyph.anchors.len() {
+                glyph.anchors.remove(anchor);
+                self.dirty = true;
+            }
         }
         self.rebuild_entry(glyph_index);
     }
@@ -804,6 +866,14 @@ fn build_fill_path(
 // EDITOR VIEWPORT
 // ============================================================================
 
+/// One undo step: a glyph's full editable state.
+#[derive(Clone)]
+struct GlyphSnapshot {
+    contours: Vec<norad::Contour>,
+    anchors: Vec<norad::Anchor>,
+    width: f64,
+}
+
 /// Which metric field is being edited.
 #[derive(Clone, Copy)]
 enum MetricField {
@@ -850,6 +920,12 @@ enum Drag {
         start: (f64, f64),
         current: (f64, f64),
     },
+    /// Dragging an anchor.
+    Anchor {
+        index: usize,
+        start: (f64, f64),
+        orig: (f64, f64),
+    },
 }
 
 /// Editor viewport and interaction state. `zoom` is pixels per font
@@ -862,10 +938,13 @@ struct EditorState {
     tool: Tool,
     pen: Option<PenState>,
     selected: std::collections::HashSet<(usize, usize)>,
+    selected_anchor: Option<usize>,
+    /// Last cursor position in design space (for A = add anchor).
+    cursor: (f64, f64),
     drag: Option<Drag>,
-    /// Undo/redo stacks of contour snapshots for the open glyph.
-    undo: Vec<Vec<norad::Contour>>,
-    redo: Vec<Vec<norad::Contour>>,
+    /// Undo/redo stacks of glyph snapshots for the open glyph.
+    undo: Vec<GlyphSnapshot>,
+    redo: Vec<GlyphSnapshot>,
     /// Canvas bounds in window coordinates, written during paint so
     /// mouse handlers can map window→design coordinates.
     bounds: Arc<Mutex<Bounds<gpui::Pixels>>>,
@@ -880,6 +959,8 @@ impl EditorState {
             tool: Tool::Select,
             pen: None,
             selected: std::collections::HashSet::new(),
+            selected_anchor: None,
+            cursor: (0.0, 0.0),
             drag: None,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -1001,6 +1082,7 @@ impl Workspace {
         self.editor.redo.clear();
         self.editor.tool = Tool::Select;
         self.editor.pen = None;
+        self.editor.selected_anchor = None;
     }
 
     fn glyph_cell(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1073,6 +1155,8 @@ impl Workspace {
         let entry = &font.glyphs[index];
         let outline = entry.path.clone();
         let points = entry.points.clone();
+        let anchors = entry.anchors.clone();
+        let selected_anchor = self.editor.selected_anchor;
         let advance = entry.advance;
         let ascender = font.ascender;
         let descender = font.descender;
@@ -1270,6 +1354,28 @@ impl Workspace {
                                 color,
                             ));
                         }
+                        // Anchors: diamonds (rotated squares drawn as
+                        // two overlapping quads approximate; use a
+                        // filled path).
+                        for (ai, (_, ax, ay)) in anchors.iter().enumerate() {
+                            let c = to_screen(*ax, *ay);
+                            let r = px(5.0);
+                            let mut pb = PathBuilder::fill();
+                            pb.move_to(gpui::point(c.x, c.y - r));
+                            pb.line_to(gpui::point(c.x + r, c.y));
+                            pb.line_to(gpui::point(c.x, c.y + r));
+                            pb.line_to(gpui::point(c.x - r, c.y));
+                            pb.close();
+                            if let Ok(pth) = pb.build() {
+                                let color = if selected_anchor == Some(ai) {
+                                    t::accent()
+                                } else {
+                                    t::anchor()
+                                };
+                                window.paint_path(pth, color);
+                            }
+                        }
+
                         // Marquee rectangle.
                         if let Some((a, b)) = marquee {
                             let pa = to_screen(a.0, a.1);
@@ -1325,6 +1431,30 @@ impl Workspace {
             .iter()
             .map(|p| ((p.contour, p.index), (p.x, p.y)))
             .collect();
+        // Anchors take priority over points.
+        let anchor_hit = font.glyphs[index]
+            .anchors
+            .iter()
+            .enumerate()
+            .map(|(i, (_, x, y))| {
+                let dist = ((x - dx).powi(2) + (y - dy).powi(2)).sqrt();
+                (dist, i, (*x, *y))
+            })
+            .filter(|(dist, _, _)| *dist <= tolerance)
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, ai, orig)) = anchor_hit {
+            self.editor.selected_anchor = Some(ai);
+            self.editor.selected.clear();
+            self.push_undo_snapshot(index);
+            self.editor.drag = Some(Drag::Anchor {
+                index: ai,
+                start: (dx, dy),
+                orig,
+            });
+            return;
+        }
+        self.editor.selected_anchor = None;
+
         let hit = all_points
             .iter()
             .map(|(id, (x, y))| {
@@ -1377,7 +1507,20 @@ impl Workspace {
             return self.pen_mouse_drag(index, pos);
         }
         let (dx, dy) = self.editor.window_to_design(pos);
+        self.editor.cursor = (dx, dy);
         match &mut self.editor.drag {
+            Some(Drag::Anchor { index: ai, start, orig }) => {
+                let (ai, start, orig) = (*ai, *start, *orig);
+                let target = (
+                    (orig.0 + dx - start.0).round(),
+                    (orig.1 + dy - start.1).round(),
+                );
+                if let Some(font) = self.font_mut() {
+                    font.set_anchor(index, ai, target.0, target.1);
+                    return true;
+                }
+                false
+            }
             Some(Drag::Points { start, originals }) => {
                 let (sx, sy) = *start;
                 let updates: Vec<((usize, usize), (f64, f64))> = originals
@@ -1974,6 +2117,28 @@ impl Workspace {
                 }
                 true
             }
+            ("a", false) if in_editor => {
+                let Mode::Editor(index) = self.mode else {
+                    return false;
+                };
+                self.push_undo_snapshot(index);
+                let (cx_, cy_) = self.editor.cursor;
+                if let Some(font) = self.font_mut() {
+                    font.add_anchor(index, cx_.round(), cy_.round());
+                }
+                true
+            }
+            ("backspace" | "delete", false) if in_editor && self.editor.selected_anchor.is_some() => {
+                let Mode::Editor(index) = self.mode else {
+                    return false;
+                };
+                let ai = self.editor.selected_anchor.take().unwrap();
+                self.push_undo_snapshot(index);
+                if let Some(font) = self.font_mut() {
+                    font.delete_anchor(index, ai);
+                }
+                true
+            }
             ("backspace" | "delete", false) if in_editor => {
                 if self.editor.selected.is_empty() {
                     false
@@ -2352,7 +2517,7 @@ mod tests {
             .iter()
             .position(|g| g.name.as_ref() == "space")
             .unwrap();
-        let base_contours = model.snapshot_contours(index).unwrap().len();
+        let base_contours = model.snapshot_contours(index).unwrap().contours.len();
 
         let c = model.start_contour(index, 0.0, 0.0).unwrap();
         model.append_segment(index, c, None, 100.0, 0.0, false); // line
@@ -2366,7 +2531,7 @@ mod tests {
         ); // curve
         model.close_contour(index, c, None);
 
-        let contours = model.snapshot_contours(index).unwrap();
+        let contours = model.snapshot_contours(index).unwrap().contours;
         assert_eq!(contours.len(), base_contours + 1);
         let new = &contours[c];
         assert!(new.is_closed(), "contour should be closed");
@@ -2381,7 +2546,7 @@ mod tests {
         let c2 = model.start_contour(index, 5.0, 5.0).unwrap();
         model.remove_contour_if_degenerate(index, c2);
         assert_eq!(
-            model.snapshot_contours(index).unwrap().len(),
+            model.snapshot_contours(index).unwrap().contours.len(),
             base_contours + 1
         );
     }
@@ -2410,7 +2575,7 @@ mod tests {
         );
         model.close_contour(index, c, None);
         let count_points = |m: &FontModel| {
-            m.snapshot_contours(index).unwrap()[c].points.len()
+            m.snapshot_contours(index).unwrap().contours[c].points.len()
         };
         assert_eq!(count_points(&model), 6); // 4 on + 2 off
 
@@ -2434,7 +2599,8 @@ mod tests {
         let sel: std::collections::HashSet<_> = [off].into();
         assert!(model.delete_points(index, &sel));
         assert_eq!(count_points(&model), 4); // pure quad now
-        let contour_data = &model.snapshot_contours(index).unwrap()[c];
+        let snapshot = model.snapshot_contours(index).unwrap();
+        let contour_data = &snapshot.contours[c];
         assert!(contour_data.is_closed());
         assert!(contour_data
             .points
@@ -2460,7 +2626,7 @@ mod tests {
             .map(|p| (p.contour, p.index))
             .collect();
         assert!(model.delete_points(index, &all));
-        assert!(model.snapshot_contours(index).unwrap().len() <= c);
+        assert!(model.snapshot_contours(index).unwrap().contours.len() <= c);
     }
 
     #[test]
@@ -2515,6 +2681,32 @@ mod tests {
         assert_eq!(ink2.x1, ink.x1 + 10.0);
         assert_eq!(model.glyphs[index].advance, advance + 20.0);
         assert!(model.dirty);
+    }
+
+    #[test]
+    fn anchor_lifecycle_with_undo_snapshot() {
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
+        let index = model
+            .glyphs
+            .iter()
+            .position(|g| g.name.as_ref() == "n")
+            .unwrap();
+        let before = model.snapshot_contours(index).unwrap();
+        let base = model.glyphs[index].anchors.len();
+
+        model.add_anchor(index, 200.0, 500.0);
+        assert_eq!(model.glyphs[index].anchors.len(), base + 1);
+        model.set_anchor(index, base, 210.0, 490.0);
+        assert_eq!(model.glyphs[index].anchors[base].1, 210.0);
+        model.delete_anchor(index, base);
+        assert_eq!(model.glyphs[index].anchors.len(), base);
+
+        // Snapshot restore also brings anchors and width back.
+        model.add_anchor(index, 1.0, 2.0);
+        model.set_advance(index, 999.0);
+        model.restore_contours(index, before);
+        assert_eq!(model.glyphs[index].anchors.len(), base);
+        assert_ne!(model.glyphs[index].advance, 999.0);
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).
