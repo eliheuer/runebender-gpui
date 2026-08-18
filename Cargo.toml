@@ -15,3 +15,8 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 kurbo = "0.13.1"
 norad = "0.18"
+
+# Shared editing/model crate used by all Runebender editors. Sibling
+# checkout, same convention as runebender-xilem and runebender-web.
+[dependencies.runebender-core]
+path = "../runebender-core"

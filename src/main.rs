@@ -502,6 +502,115 @@ impl FontModel {
         changed
     }
 
+    /// Apply a curve-quality operation (shared geometry from
+    /// runebender-core) to the selected points, or to the whole glyph
+    /// when the selection is empty. Only closed all-cubic contours
+    /// participate.
+    fn curve_op(
+        &mut self,
+        glyph_index: usize,
+        selected: &std::collections::HashSet<(usize, usize)>,
+        op: CurveOp,
+    ) -> bool {
+        use runebender_core::curve::{OptPoint, balance, harmonize, optimize_contour};
+        let all = selected.is_empty();
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return false;
+        };
+        let mut changed = false;
+        for (ci, contour) in glyph.contours.iter_mut().enumerate() {
+            if !contour.is_closed() {
+                continue;
+            }
+            let pts = &mut contour.points;
+            let n = pts.len();
+            if n < 4 {
+                continue;
+            }
+            let on = |p: &norad::ContourPoint| p.typ != norad::PointType::OffCurve;
+            let in_scope = |i: usize| all || selected.contains(&(ci, i));
+            match op {
+                CurveOp::Harmonize => {
+                    let mut updates: Vec<(usize, kurbo::Point)> = Vec::new();
+                    for i in 0..n {
+                        if !on(&pts[i]) || !pts[i].smooth || !in_scope(i) {
+                            continue;
+                        }
+                        let (a1, a2, b1, b2) =
+                            ((i + n - 2) % n, (i + n - 1) % n, (i + 1) % n, (i + 2) % n);
+                        if on(&pts[a1]) || on(&pts[a2]) || on(&pts[b1]) || on(&pts[b2]) {
+                            continue;
+                        }
+                        let point = |k: usize| kurbo::Point::new(pts[k].x, pts[k].y);
+                        if let Some((na2, nb1)) =
+                            harmonize(point(a1), point(a2), point(i), point(b1), point(b2))
+                        {
+                            updates.push((a2, na2.round()));
+                            updates.push((b1, nb1.round()));
+                        }
+                    }
+                    for (k, p) in updates {
+                        pts[k].x = p.x;
+                        pts[k].y = p.y;
+                        changed = true;
+                    }
+                }
+                CurveOp::Balance => {
+                    let mut updates: Vec<(usize, kurbo::Point)> = Vec::new();
+                    for i in 0..n {
+                        let (b, c, d) = ((i + 1) % n, (i + 2) % n, (i + 3) % n);
+                        if !on(&pts[i]) || on(&pts[b]) || on(&pts[c]) || !on(&pts[d]) {
+                            continue;
+                        }
+                        if !(in_scope(i) || in_scope(b) || in_scope(c) || in_scope(d)) {
+                            continue;
+                        }
+                        let point = |k: usize| kurbo::Point::new(pts[k].x, pts[k].y);
+                        if let Some((np1, np2)) = balance(point(i), point(b), point(c), point(d))
+                        {
+                            updates.push((b, np1.round()));
+                            updates.push((c, np2.round()));
+                        }
+                    }
+                    for (k, p) in updates {
+                        pts[k].x = p.x;
+                        pts[k].y = p.y;
+                        changed = true;
+                    }
+                }
+                CurveOp::Optimize(tol) => {
+                    if !all && !(0..n).any(in_scope) {
+                        continue;
+                    }
+                    let opts: Vec<OptPoint> = pts
+                        .iter()
+                        .map(|p| OptPoint {
+                            p: kurbo::Point::new(p.x, p.y),
+                            on: on(p),
+                            smooth: p.smooth,
+                        })
+                        .collect();
+                    let newpos = optimize_contour(&opts, tol);
+                    for (i, p) in pts.iter_mut().enumerate() {
+                        if p.typ == norad::PointType::OffCurve
+                            && (kurbo::Point::new(p.x, p.y) - newpos[i]).hypot() > 1e-6
+                        {
+                            p.x = newpos[i].x;
+                            p.y = newpos[i].y;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            self.dirty = true;
+            self.rebuild_entry(glyph_index);
+        }
+        changed
+    }
+
     fn save(&mut self) -> Result<(), norad::error::FontWriteError> {
         self.font.save(&self.source_path)?;
         self.dirty = false;
@@ -638,6 +747,14 @@ fn build_fill_path(
 // ============================================================================
 // EDITOR VIEWPORT
 // ============================================================================
+
+/// A curve-quality operation from `runebender_core::curve`.
+#[derive(Clone, Copy)]
+enum CurveOp {
+    Harmonize,
+    Balance,
+    Optimize(f64),
+}
 
 /// The active editor tool.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -896,6 +1013,19 @@ impl Workspace {
         let bounds_slot = self.editor.bounds.clone();
         let needs_fit = !self.editor.initialized;
 
+        let op_button = |id: &'static str, label_text: &'static str| {
+            div()
+                .id(id)
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(t::cell_border())
+                .text_color(t::text_muted())
+                .text_sm()
+                .cursor_pointer()
+                .child(label_text)
+        };
         let tool = self.editor.tool;
         let tool_button = |id: &'static str, label_text: &'static str, this_tool: Tool| {
             div()
@@ -931,6 +1061,25 @@ impl Workspace {
                     .child(tool_button("tool-pen", "Pen", Tool::Pen).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.editor.tool = Tool::Pen;
+                            cx.notify();
+                        },
+                    )))
+                    .child(div().w_2())
+                    .child(op_button("op-harmonize", "Harmonize").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply_curve_op(CurveOp::Harmonize);
+                            cx.notify();
+                        },
+                    )))
+                    .child(op_button("op-balance", "Balance").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply_curve_op(CurveOp::Balance);
+                            cx.notify();
+                        },
+                    )))
+                    .child(op_button("op-optimize", "Optimize").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply_curve_op(CurveOp::Optimize(0.12));
                             cx.notify();
                         },
                     ))),
@@ -1311,6 +1460,21 @@ impl Workspace {
             if let Some(font) = self.font_mut() {
                 font.remove_contour_if_degenerate(index, pen.contour);
             }
+        }
+    }
+
+    fn apply_curve_op(&mut self, op: CurveOp) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        self.push_undo_snapshot(index);
+        let selected = self.editor.selected.clone();
+        let changed = self
+            .font_mut()
+            .is_some_and(|f| f.curve_op(index, &selected, op));
+        if !changed {
+            // Nothing moved: drop the useless snapshot.
+            self.editor.undo.pop();
         }
     }
 
@@ -1967,6 +2131,35 @@ mod tests {
             .collect();
         assert!(model.delete_points(index, &all));
         assert!(model.snapshot_contours(index).unwrap().len() <= c);
+    }
+
+    #[test]
+    fn curve_ops_run_via_shared_core() {
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
+        let index = model
+            .glyphs
+            .iter()
+            .position(|g| g.name.as_ref() == "o")
+            .unwrap();
+        let none = std::collections::HashSet::new();
+        let before: Vec<(f64, f64)> = model.glyphs[index].points.iter().map(|p| (p.x, p.y)).collect();
+        // Balance evens handle tension; on a real glyph something moves.
+        let changed = model.curve_op(index, &none, CurveOp::Balance);
+        let after: Vec<(f64, f64)> = model.glyphs[index].points.iter().map(|p| (p.x, p.y)).collect();
+        if changed {
+            assert_ne!(before, after);
+        }
+        // On-curve points never move under balance.
+        for (i, p) in model.glyphs[index].points.iter().enumerate() {
+            if p.on_curve {
+                assert_eq!(before[i], (p.x, p.y), "on-curve moved at {i}");
+            }
+        }
+        // Harmonize and optimize execute without panicking and keep
+        // the outline drawable.
+        model.curve_op(index, &none, CurveOp::Harmonize);
+        model.curve_op(index, &none, CurveOp::Optimize(0.12));
+        assert!(!model.glyphs[index].path.elements().is_empty());
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).
