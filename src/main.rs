@@ -1188,19 +1188,34 @@ impl Workspace {
     }
 
     fn glyph_cell(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        self.glyph_cell_sized(index, CELL, false, cx)
+    }
+
+    fn glyph_cell_sized(
+        &self,
+        index: usize,
+        cell: f32,
+        jump_on_click: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let font = self.font().unwrap();
         let entry = &font.glyphs[index];
         let name = entry.name.clone();
-        let selected = self.selected == Some(index);
+        let selected = if jump_on_click {
+            matches!(self.mode, Mode::Editor(i) if i == index)
+        } else {
+            self.selected == Some(index)
+        };
         let outline = entry.path.clone();
         let advance = entry.advance;
         let ascender = font.ascender;
         let descender = font.descender;
+        let label_h = if cell >= 90.0 { 20.0 } else { 14.0 };
 
         div()
             .id(index)
-            .w(px(CELL))
-            .h(px(CELL + 20.0))
+            .w(px(cell))
+            .h(px(cell + label_h))
             .flex()
             .flex_col()
             .bg(if selected { t::cell_selected_bg() } else { t::cell_bg() })
@@ -1209,9 +1224,13 @@ impl Workspace {
             .rounded_md()
             .cursor_pointer()
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                this.selected = Some(index);
-                if event.click_count() >= 2 {
+                if jump_on_click {
                     this.open_editor(index);
+                } else {
+                    this.selected = Some(index);
+                    if event.click_count() >= 2 {
+                        this.open_editor(index);
+                    }
                 }
                 cx.notify();
             }))
@@ -1241,12 +1260,44 @@ impl Workspace {
             )
             .child(
                 div()
-                    .h(px(20.0))
+                    .h(px(label_h))
                     .px_1()
-                    .text_size(px(10.0))
+                    .text_size(px(if cell >= 90.0 { 10.0 } else { 8.0 }))
                     .text_color(t::text_muted())
                     .overflow_hidden()
                     .child(name),
+            )
+    }
+
+    /// Editor sidebar: search + scrollable mini glyph grid, so glyph
+    /// switching doesn't require leaving the editor.
+    fn editor_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let query = self.search_query.clone();
+        let cells: Vec<_> = match self.font() {
+            Some(font) => (0..font.glyphs.len())
+                .filter(|&i| {
+                    query.is_empty() || font.glyphs[i].name.to_lowercase().contains(&query)
+                })
+                .map(|i| self.glyph_cell_sized(i, 44.0, true, cx).into_any_element())
+                .collect(),
+            None => Vec::new(),
+        };
+        div()
+            .w(px(224.0))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_2()
+            .bg(t::panel_bg())
+            .border_r_1()
+            .border_color(t::cell_border())
+            .child(gpui_component::input::Input::new(&self.search))
+            .child(
+                div()
+                    .id("editor-sidebar-grid")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .child(div().flex().flex_wrap().gap_1().children(cells)),
             )
     }
 
@@ -2542,7 +2593,13 @@ impl Render for Workspace {
                 .flex()
                 .flex_col()
                 .flex_1()
-                .child(self.editor_view(index, cx).into_any_element())
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .child(self.editor_sidebar(cx))
+                        .child(self.editor_view(index, cx).into_any_element()),
+                )
                 .child(self.metrics_bar())
                 .into_any_element(),
             _ => {
