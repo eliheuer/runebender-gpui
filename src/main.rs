@@ -887,6 +887,37 @@ fn build_path(
     builder.build().ok()
 }
 
+/// A shared toolbar icon painted to fit its element, centered with
+/// padding. Icon geometry comes from runebender-core (the same icon
+/// UFO the web toolbar uses).
+fn icon_svg(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| bounds,
+        move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+            let Some(icon) = runebender_core::theme_oklch::toolbar_icons().get(name)
+            else {
+                return;
+            };
+            let w: f32 = bounds.size.width.into();
+            let h: f32 = bounds.size.height.into();
+            let pad = 5.0_f64;
+            let vb = icon.view_box;
+            let scale = ((w as f64 - pad * 2.0) / vb.width())
+                .min((h as f64 - pad * 2.0) / vb.height());
+            let dx = (w as f64 - vb.width() * scale) / 2.0;
+            let dy = (h as f64 - vb.height() * scale) / 2.0;
+            // Icon space is Y-down SVG, same as gpui.
+            let transform = Affine::translate((dx, dy))
+                * Affine::scale(scale)
+                * Affine::translate((-vb.x0, -vb.y0));
+            if let Some(path) = build_fill_path(&icon.path, transform, bounds.origin) {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .size_full()
+}
+
 fn build_fill_path(
     outline: &BezPath,
     transform: Affine,
@@ -1566,19 +1597,30 @@ impl Workspace {
                 .cursor_pointer()
                 .child(label_text)
         };
-        let tool = self.editor.tool;
-        let tool_button = |id: &'static str, label_text: &'static str, this_tool: Tool| {
+        // Icon tile, like the web toolbar (icon geometry shared via core).
+        let icon_op_button = |id: &'static str, icon: &'static str| {
             div()
                 .id(id)
-                .px_2()
-                .py_1()
+                .w(px(34.0))
+                .h(px(34.0))
                 .rounded_md()
                 .border_1()
-                .border_color(if tool == this_tool { t::accent() } else { t::cell_border() })
-                .text_color(if tool == this_tool { t::text() } else { t::text_muted() })
-                .text_sm()
+                .border_color(t::cell_border())
                 .cursor_pointer()
-                .child(label_text)
+                .child(icon_svg(icon, t::text_muted()))
+        };
+        let tool = self.editor.tool;
+        let tool_button = |id: &'static str, icon: &'static str, this_tool: Tool| {
+            let active = tool == this_tool;
+            div()
+                .id(id)
+                .w(px(34.0))
+                .h(px(34.0))
+                .rounded_md()
+                .border_1()
+                .border_color(if active { t::accent() } else { t::cell_border() })
+                .cursor_pointer()
+                .child(icon_svg(icon, if active { t::accent() } else { t::text() }))
         };
 
         div()
@@ -1591,14 +1633,14 @@ impl Workspace {
                     .left_2()
                     .flex()
                     .gap_1()
-                    .child(tool_button("tool-select", "Select", Tool::Select).on_click(
+                    .child(tool_button("tool-select", "select", Tool::Select).on_click(
                         cx.listener(|this, _, _, cx| {
                             this.pen_finish();
                             this.editor.tool = Tool::Select;
                             cx.notify();
                         }),
                     ))
-                    .child(tool_button("tool-pen", "Pen", Tool::Pen).on_click(cx.listener(
+                    .child(tool_button("tool-pen", "pen", Tool::Pen).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.editor.tool = Tool::Pen;
                             cx.notify();
@@ -1607,7 +1649,7 @@ impl Workspace {
                     .child(
                         tool_button(
                             "tool-shapes",
-                            if self.editor.shape_ellipse { "Ellipse" } else { "Rect" },
+                            if self.editor.shape_ellipse { "shape-ellipse" } else { "shape-rectangle" },
                             Tool::Shapes,
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -1620,7 +1662,7 @@ impl Workspace {
                         })),
                     )
                     .child(
-                        tool_button("tool-measure", "Measure", Tool::Measure).on_click(
+                        tool_button("tool-measure", "measure", Tool::Measure).on_click(
                             cx.listener(|this, _, _, cx| {
                                 this.pen_finish();
                                 this.editor.tool = Tool::Measure;
@@ -1647,7 +1689,7 @@ impl Workspace {
                             cx.notify();
                         },
                     )))
-                    .child(op_button("op-overlap", "Overlap").on_click(cx.listener(
+                    .child(icon_op_button("op-overlap", "union").on_click(cx.listener(
                         |this, _, _, cx| {
                             if let Mode::Editor(index) = this.mode {
                                 this.push_undo_snapshot(index);
@@ -1663,19 +1705,19 @@ impl Workspace {
                         },
                     )))
                     .child(div().w_2())
-                    .child(op_button("op-flip-h", "Flip H").on_click(cx.listener(
+                    .child(icon_op_button("op-flip-h", "flip-h").on_click(cx.listener(
                         |this, _, _, cx| {
                             this.apply_transform(Affine::scale_non_uniform(-1.0, 1.0));
                             cx.notify();
                         },
                     )))
-                    .child(op_button("op-flip-v", "Flip V").on_click(cx.listener(
+                    .child(icon_op_button("op-flip-v", "flip-v").on_click(cx.listener(
                         |this, _, _, cx| {
                             this.apply_transform(Affine::scale_non_uniform(1.0, -1.0));
                             cx.notify();
                         },
                     )))
-                    .child(op_button("op-rot-ccw", "Rot L").on_click(cx.listener(
+                    .child(icon_op_button("op-rot-ccw", "rot-ccw").on_click(cx.listener(
                         |this, _, _, cx| {
                             this.apply_transform(Affine::rotate(
                                 std::f64::consts::FRAC_PI_2,
@@ -1683,7 +1725,7 @@ impl Workspace {
                             cx.notify();
                         },
                     )))
-                    .child(op_button("op-rot-cw", "Rot R").on_click(cx.listener(
+                    .child(icon_op_button("op-rot-cw", "rot-cw").on_click(cx.listener(
                         |this, _, _, cx| {
                             this.apply_transform(Affine::rotate(
                                 -std::f64::consts::FRAC_PI_2,
