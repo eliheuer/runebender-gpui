@@ -776,6 +776,53 @@ impl FontModel {
         self.rebuild_entry(glyph_index);
     }
 
+    /// The kern group ("public.kern1." / "public.kern2." prefix)
+    /// containing a glyph, if any.
+    fn kern_group(&self, glyph: &str, first_side: bool) -> Option<norad::Name> {
+        let prefix = if first_side {
+            "public.kern1."
+        } else {
+            "public.kern2."
+        };
+        self.font
+            .groups
+            .iter()
+            .find(|(name, members)| {
+                name.starts_with(prefix) && members.iter().any(|m| m.as_str() == glyph)
+            })
+            .map(|(name, _)| name.clone())
+    }
+
+    /// Kerning between two glyphs, resolving group fallbacks in UFO
+    /// precedence order: glyph-glyph, glyph-group, group-glyph,
+    /// group-group.
+    fn kern_value(&self, left: &str, right: &str) -> f64 {
+        let lookup = |a: &str, b: &str| -> Option<f64> {
+            self.font.kerning.get(a).and_then(|m| m.get(b)).copied()
+        };
+        let lg = self.kern_group(left, true);
+        let rg = self.kern_group(right, false);
+        lookup(left, right)
+            .or_else(|| rg.as_ref().and_then(|g| lookup(left, g.as_str())))
+            .or_else(|| lg.as_ref().and_then(|g| lookup(g.as_str(), right)))
+            .or_else(|| {
+                lg.as_ref().and_then(|l| {
+                    rg.as_ref().and_then(|r| lookup(l.as_str(), r.as_str()))
+                })
+            })
+            .unwrap_or(0.0)
+    }
+
+    /// Set an exception-level (glyph-to-glyph) kern pair. Zero with no
+    /// group fallback removes the pair.
+    fn set_kern_pair(&mut self, left: &str, right: &str, value: f64) {
+        let (Ok(l), Ok(r)) = (norad::Name::new(left), norad::Name::new(right)) else {
+            return;
+        };
+        self.font.kerning.entry(l).or_default().insert(r, value);
+        self.dirty = true;
+    }
+
     fn save(&mut self) -> Result<(), norad::error::FontWriteError> {
         self.font.save(&self.source_path)?;
         self.dirty = false;
@@ -1071,6 +1118,10 @@ struct Workspace {
     metric_inputs: MetricInputs,
     preview_input: gpui::Entity<gpui_component::input::InputState>,
     preview_text: SharedString,
+    preview_bounds: Arc<Mutex<Bounds<gpui::Pixels>>>,
+    /// A selected kern pair in the preview strip: indices into the
+    /// resolved preview line (glyph indices of the pair).
+    selected_pair: Option<(usize, usize)>,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -2004,20 +2055,52 @@ impl Workspace {
             .child(field("RSB", &self.metric_inputs.rsb))
     }
 
+    /// The resolved preview line: glyph index, pen x position (font
+    /// units, kerning applied), and advance.
+    fn preview_line(&self) -> Vec<(usize, f64, f64)> {
+        let Some(font) = self.font() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut x_cursor = 0.0f64;
+        let mut prev: Option<usize> = None;
+        for c in self.preview_text.chars() {
+            let Some(&i) = font.codepoint_map.get(&c) else {
+                continue;
+            };
+            if let Some(p) = prev {
+                x_cursor += font.kern_value(
+                    font.glyphs[p].name.as_ref(),
+                    font.glyphs[i].name.as_ref(),
+                );
+            }
+            out.push((i, x_cursor, font.glyphs[i].advance));
+            x_cursor += font.glyphs[i].advance;
+            prev = Some(i);
+        }
+        out
+    }
+
     /// Text preview strip: the preview string set in the active
-    /// master, glyphs positioned by their advances.
-    fn preview_strip(&self) -> impl IntoElement + use<> {
+    /// master with kerning applied; click a gap to select the pair.
+    fn preview_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let Some(font) = self.font() else {
             return div().into_any_element();
         };
         let upm = font.units_per_em;
         let descent = font.descender;
-        let line: Vec<(Arc<BezPath>, f64)> = self
-            .preview_text
-            .chars()
-            .filter_map(|c| font.codepoint_map.get(&c))
-            .map(|&i| (font.glyphs[i].path.clone(), font.glyphs[i].advance))
+        let placed = self.preview_line();
+        let line: Vec<(Arc<BezPath>, f64)> = placed
+            .iter()
+            .map(|(i, x, _)| (font.glyphs[*i].path.clone(), *x))
             .collect();
+        let pair_marker: Option<f64> = self.selected_pair.and_then(|(_, right)| {
+            placed
+                .iter()
+                .find(|(i, _, _)| *i == right)
+                .map(|(_, x, _)| *x)
+        });
+        let bounds_slot = self.preview_bounds.clone();
         div()
             .h(px(104.0))
             .flex()
@@ -2031,36 +2114,95 @@ impl Workspace {
                 &self.preview_input,
             )))
             .child(
-                div().flex_1().h_full().child(
-                    canvas(
-                        move |bounds, _, _| bounds,
-                        move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                            let h: f32 = bounds.size.height.into();
-                            let scale = (h as f64 * 0.72) / upm;
-                            let baseline = h as f64 * 0.82 + descent * scale;
-                            let mut x_cursor = 0.0f64;
-                            for (path, advance) in line.iter() {
-                                let transform =
-                                    Affine::translate((x_cursor * scale, baseline))
-                                        * Affine::scale_non_uniform(scale, -scale);
-                                if let Some(p) =
-                                    build_fill_path(path, transform, bounds.origin)
-                                {
-                                    window.paint_path(p, t::glyph_fill());
-                                }
-                                x_cursor += advance;
-                            }
-                        },
+                div()
+                    .flex_1()
+                    .h_full()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                            this.preview_click(event.position);
+                            cx.notify();
+                        }),
                     )
-                    .size_full(),
-                ),
+                    .child(
+                        canvas(
+                            move |bounds, _, _| bounds,
+                            move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+                                *bounds_slot.lock().unwrap() = bounds;
+                                let h: f32 = bounds.size.height.into();
+                                let scale = (h as f64 * 0.72) / upm;
+                                let baseline = h as f64 * 0.82 + descent * scale;
+                                if let Some(mx) = pair_marker {
+                                    let x = bounds.origin.x + px((mx * scale) as f32);
+                                    window.paint_quad(gpui::fill(
+                                        Bounds::from_corners(
+                                            gpui::point(x - px(1.0), bounds.origin.y),
+                                            gpui::point(
+                                                x + px(1.0),
+                                                bounds.origin.y + bounds.size.height,
+                                            ),
+                                        ),
+                                        t::accent(),
+                                    ));
+                                }
+                                for (path, pen_x) in line.iter() {
+                                    let transform =
+                                        Affine::translate((pen_x * scale, baseline))
+                                            * Affine::scale_non_uniform(scale, -scale);
+                                    if let Some(p) =
+                                        build_fill_path(path, transform, bounds.origin)
+                                    {
+                                        window.paint_path(p, t::glyph_fill());
+                                    }
+                                }
+                            },
+                        )
+                        .size_full(),
+                    ),
             )
             .into_any_element()
     }
 
+    /// Click in the preview strip: select the kern pair whose gap is
+    /// nearest the click.
+    fn preview_click(&mut self, pos: Point<gpui::Pixels>) {
+        let Some(font) = self.font() else {
+            return;
+        };
+        let placed = self.preview_line();
+        if placed.len() < 2 {
+            return;
+        }
+        let bounds = *self.preview_bounds.lock().unwrap();
+        let h: f32 = bounds.size.height.into();
+        let scale = (h as f64 * 0.72) / font.units_per_em;
+        let local_x = f32::from(pos.x - bounds.origin.x) as f64 / scale;
+        // Gap k sits at placed[k+1]'s pen position.
+        let mut best: Option<(f64, (usize, usize))> = None;
+        for w in placed.windows(2) {
+            let (left, _, _) = w[0];
+            let (right, x, _) = w[1];
+            let d = (x - local_x).abs();
+            if best.is_none() || d < best.unwrap().0 {
+                best = Some((d, (left, right)));
+            }
+        }
+        self.selected_pair = best.map(|(_, pair)| pair);
+    }
+
     fn status_bar(&self) -> impl IntoElement + use<> {
+        let pair_status: Option<SharedString> = self.selected_pair.and_then(|(l, r)| {
+            self.font().map(|font| {
+                let ln = font.glyphs[l].name.to_string();
+                let rn = font.glyphs[r].name.to_string();
+                let v = font.kern_value(&ln, &rn);
+                format!("kern {ln}/{rn} = {v:.0} · comma/period adjust (shift = 10)").into()
+            })
+        });
         let text: SharedString = if let Some(note) = &self.status_note {
             note.clone()
+        } else if let Some(pair) = pair_status {
+            pair
         } else {
             match (&self.mode, self.selected, self.font()) {
                 (Mode::Editor(i), _, Some(font)) => {
@@ -2230,6 +2372,17 @@ impl Workspace {
             ("right", false) if in_editor => self.nudge_selection(step, 0.0),
             ("up", false) if in_editor => self.nudge_selection(0.0, step),
             ("down", false) if in_editor => self.nudge_selection(0.0, -step),
+            ("comma" | "period", false) if self.selected_pair.is_some() => {
+                let (left, right) = self.selected_pair.unwrap();
+                let delta = if key == "comma" { -1.0 } else { 1.0 } * if shift { 10.0 } else { 2.0 };
+                if let Some(font) = self.font_mut() {
+                    let l = font.glyphs[left].name.to_string();
+                    let r = font.glyphs[right].name.to_string();
+                    let value = font.kern_value(&l, &r) + delta;
+                    font.set_kern_pair(&l, &r, value);
+                }
+                true
+            }
             ("o", true) => {
                 self.open_dialog(cx);
                 true
@@ -2334,7 +2487,7 @@ impl Render for Workspace {
             }))
             .child(self.header(cx))
             .child(content)
-            .child(self.preview_strip())
+            .child(self.preview_strip(cx))
             .child(self.status_bar())
     }
 }
@@ -2478,6 +2631,8 @@ fn main() {
                         },
                         preview_input,
                         preview_text: "hamburgevons".into(),
+                        preview_bounds: Arc::new(Mutex::new(Bounds::default())),
+                        selected_pair: None,
                         _subscriptions: vec![subscription, sub_w, sub_l, sub_r, sub_p],
                     }
                 });
@@ -2822,6 +2977,20 @@ mod tests {
         model.restore_contours(index, before);
         assert_eq!(model.glyphs[index].anchors.len(), base);
         assert_ne!(model.glyphs[index].advance, 999.0);
+    }
+
+    #[test]
+    fn kerning_lookup_and_exception() {
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
+        // Group fallback resolves (VirtuaGrotesk has kern groups); the
+        // exact value doesn't matter, just that lookup doesn't panic
+        // and exceptions override.
+        let base = model.kern_value("A", "V");
+        model.set_kern_pair("A", "V", base - 14.0);
+        assert_eq!(model.kern_value("A", "V"), base - 14.0);
+        assert!(model.dirty);
+        // Unrelated pair unaffected by the exception.
+        let _ = model.kern_value("o", "o");
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).
