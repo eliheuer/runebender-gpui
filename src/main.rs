@@ -7,6 +7,8 @@
 
 mod glyph_path;
 mod theme;
+#[cfg(target_family = "wasm")]
+mod web_host;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -56,6 +58,12 @@ struct GlyphEntry {
 
 struct FontModel {
     font: norad::Font,
+    /// Names of glyphs edited since load/save (partial saves).
+    modified_glyphs: std::collections::HashSet<String>,
+    /// glyph name → glif path relative to the UFO root (memory hosts).
+    glif_paths: std::collections::HashMap<String, String>,
+    /// Kerning changed since load/save.
+    kerning_dirty: bool,
     /// codepoint → index into `glyphs`, for the text preview.
     codepoint_map: std::collections::HashMap<char, usize>,
     family_name: SharedString,
@@ -116,6 +124,7 @@ impl FontModel {
             .get_glyph_mut(name.as_str())
             .map(op)?;
         self.dirty = true;
+        self.modified_glyphs.insert(name);
         self.rebuild_entry(glyph_index);
         Some(result)
     }
@@ -167,6 +176,9 @@ impl FontModel {
 
         Self {
             font,
+            modified_glyphs: std::collections::HashSet::new(),
+            glif_paths: std::collections::HashMap::new(),
+            kerning_dirty: false,
             codepoint_map,
             family_name: family_name.into(),
             source_path,
@@ -359,6 +371,7 @@ impl FontModel {
     fn set_kern_pair(&mut self, left: &str, right: &str, value: f64) {
         ops::set_kern_pair(&mut self.font, left, right, value);
         self.dirty = true;
+        self.kerning_dirty = true;
     }
 
     /// Replace a glyph's components with their resolved contours.
@@ -433,6 +446,8 @@ impl FontModel {
     fn save(&mut self) -> Result<(), norad::error::FontWriteError> {
         self.font.save(&self.source_path)?;
         self.dirty = false;
+        self.modified_glyphs.clear();
+        self.kerning_dirty = false;
         Ok(())
     }
 }
@@ -633,6 +648,74 @@ impl Project {
                 compat: std::collections::HashMap::new(),
             })
         }
+    }
+
+    /// Assemble a project from a fetched workspace (web host).
+    /// Returns the project plus per-master UFO path prefixes
+    /// (workspace-root relative), aligned with `masters`.
+    #[cfg(target_family = "wasm")]
+    fn from_fetched(
+        fetched: &web_host::FetchedWorkspace,
+    ) -> Result<(Self, Vec<String>), String> {
+        use std::cell::RefCell;
+        let prefixes: RefCell<Vec<String>> = RefCell::new(Vec::new());
+        let build_master = |prefix: String| -> Result<FontModel, String> {
+            let files: Vec<(&str, &[u8])> = fetched
+                .files
+                .iter()
+                .filter_map(|(path, bytes)| {
+                    path.strip_prefix(&prefix)
+                        .map(|rel| (rel, bytes.as_slice()))
+                })
+                .collect();
+            if files.is_empty() {
+                return Err(format!("no files under {prefix}"));
+            }
+            let ufo = runebender_core::font_memory::ufo_from_files(
+                files.iter().map(|(p, b)| (*p, *b)),
+            )?;
+            let mut model = FontModel::from_font(
+                ufo.font,
+                PathBuf::from(prefix.trim_end_matches('/')),
+            );
+            model.glif_paths = ufo.glif_paths;
+            prefixes.borrow_mut().push(prefix);
+            Ok(model)
+        };
+
+        let project = if let Some(ds_text) = &fetched.designspace_text {
+            let doc = runebender_core::font_memory::designspace_from_str(ds_text)?;
+            let ds_dir = match fetched.entry.rfind('/') {
+                Some(i) => &fetched.entry[..=i],
+                None => "",
+            };
+            Self::from_designspace(doc, |filename| {
+                build_master(format!("{ds_dir}{filename}/"))
+            })?
+        } else {
+            // Bare UFO entry.
+            let model = build_master(format!("{}/", fetched.entry.trim_end_matches('/')))?;
+            let name: SharedString = model
+                .font
+                .font_info
+                .style_name
+                .clone()
+                .unwrap_or_else(|| "Regular".into())
+                .into();
+            Self {
+                masters: vec![model],
+                active: 0,
+                master_names: vec![name],
+                axes: Vec::new(),
+                master_locations: Vec::new(),
+                model: None,
+                location: runebender_core::var_model::Location::new(),
+                compat: std::collections::HashMap::new(),
+            }
+        };
+        let mut project = project;
+        project.compute_compat();
+        Ok((project, prefixes.into_inner()))
     }
 
     /// The embedded demo project for hosts without a filesystem
@@ -972,6 +1055,10 @@ struct Workspace {
     axis_sliders: Vec<(usize, gpui::Entity<gpui_component::slider::SliderState>)>,
     /// Internal outline clipboard: whole contours.
     clipboard: Vec<norad::Contour>,
+    /// Web host connection (server base + file ETags), when the page
+    /// was opened with ?server=.
+    #[cfg(target_family = "wasm")]
+    web_host: Option<web_host::WebHost>,
     /// Filesystem watcher over the open masters' UFO directories.
     _watcher: Option<notify::RecommendedWatcher>,
     /// Set at save time so the watcher ignores our own writes.
@@ -2530,6 +2617,149 @@ impl Workspace {
         });
     }
 
+    /// Connect to the workspace server named by ?server= and load
+    /// its fonts (web builds).
+    #[cfg(target_family = "wasm")]
+    fn connect_web_host(&mut self, base: String, cx: &mut Context<Self>) {
+        self.status_note = Some(format!("Connecting to {base}…").into());
+        let client = cx.http_client();
+        cx.spawn(async move |this, cx| {
+            let fetched = web_host::fetch_workspace(client, base.clone()).await;
+            this.update(cx, |workspace, cx| {
+                match fetched.and_then(|fetched| {
+                    Project::from_fetched(&fetched).map(|built| (fetched, built))
+                }) {
+                    Ok((fetched, (project, ufo_prefixes))) => {
+                        let n = project.masters.len();
+                        workspace.project = Some(project);
+                        workspace.load_error = None;
+                        workspace.mode = Mode::Grid;
+                        workspace.selected = None;
+                        workspace.web_host = Some(web_host::WebHost {
+                            base,
+                            etags: fetched.etags,
+                            ufo_prefixes,
+                        });
+                        workspace.status_note =
+                            Some(format!("Connected · {n} masters · Cmd+S saves to the server").into());
+                    }
+                    Err(e) => {
+                        workspace.load_error = Some(format!("{e}").into());
+                        workspace.status_note = None;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Save dirty masters to the workspace server (web builds):
+    /// modified glifs and kerning, each PUT with its If-Match ETag.
+    #[cfg(target_family = "wasm")]
+    fn save_to_web_host(&mut self, cx: &mut Context<Self>) {
+        let Some(host) = self.web_host.as_ref() else {
+            self.status_note =
+                Some("No server connected: open with ?server=http://…".into());
+            return;
+        };
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        // Collect the files to write while we hold &self.
+        let mut to_save: Vec<web_host::SaveFile> = Vec::new();
+        let mut saved_masters: Vec<usize> = Vec::new();
+        for (mi, master) in project.masters.iter().enumerate() {
+            if !master.dirty {
+                continue;
+            }
+            let Some(prefix) = host.ufo_prefixes.get(mi) else {
+                continue;
+            };
+            for name in &master.modified_glyphs {
+                let Some(glyph) = master.font.get_glyph(name.as_str()) else {
+                    continue;
+                };
+                let Some(rel) = master.glif_paths.get(name) else {
+                    continue;
+                };
+                match runebender_core::font_memory::glif_bytes(glyph) {
+                    Ok(bytes) => to_save.push(web_host::SaveFile {
+                        path: format!("{prefix}{rel}"),
+                        bytes,
+                    }),
+                    Err(e) => {
+                        self.status_note = Some(format!("{e}").into());
+                        return;
+                    }
+                }
+            }
+            if master.kerning_dirty {
+                match runebender_core::font_memory::kerning_plist_bytes(&master.font) {
+                    Ok(bytes) => to_save.push(web_host::SaveFile {
+                        path: format!("{prefix}kerning.plist"),
+                        bytes,
+                    }),
+                    Err(e) => {
+                        self.status_note = Some(format!("{e}").into());
+                        return;
+                    }
+                }
+            }
+            saved_masters.push(mi);
+        }
+        if to_save.is_empty() {
+            self.status_note = Some("Nothing to save".into());
+            return;
+        }
+        let base = host.base.clone();
+        let etags: std::collections::HashMap<String, String> = host.etags.clone();
+        let client = cx.http_client();
+        let count = to_save.len();
+        self.status_note = Some(format!("Saving {count} files…").into());
+        cx.spawn(async move |this, cx| {
+            let mut new_etags: Vec<(String, String)> = Vec::new();
+            let mut failure: Option<String> = None;
+            for file in &to_save {
+                match web_host::put_file(&client, &base, file, etags.get(&file.path).map(|s| s.as_str()))
+                    .await
+                {
+                    Ok(etag) => new_etags.push((file.path.clone(), etag)),
+                    Err(e) => {
+                        failure = Some(e);
+                        break;
+                    }
+                }
+            }
+            this.update(cx, |workspace, cx| {
+                if let Some(host) = workspace.web_host.as_mut() {
+                    for (path, etag) in new_etags {
+                        host.etags.insert(path, etag);
+                    }
+                }
+                workspace.status_note = Some(match failure {
+                    Some(e) => format!("Save failed: {e}").into(),
+                    None => {
+                        if let Some(project) = workspace.project.as_mut() {
+                            for mi in saved_masters {
+                                if let Some(master) = project.masters.get_mut(mi) {
+                                    master.dirty = false;
+                                    master.modified_glyphs.clear();
+                                    master.kerning_dirty = false;
+                                }
+                            }
+                        }
+                        format!("Saved {count} files to the server").into()
+                    }
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Cmd+O: native open dialog for a .designspace, .ufo, or folder.
     fn open_dialog(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -2594,6 +2824,14 @@ impl Workspace {
             ("enter", _) if in_editor && self.editor.pen.is_some() => {
                 self.pen_finish();
                 true
+            }
+            ("enter", false) if !in_editor => {
+                if let Some(index) = self.selected {
+                    self.open_editor(index);
+                    true
+                } else {
+                    false
+                }
             }
             ("v", false) if in_editor => {
                 self.pen_finish();
@@ -2762,6 +3000,12 @@ impl Workspace {
                 true
             }
             ("s", true) => {
+                #[cfg(target_family = "wasm")]
+                {
+                    self.save_to_web_host(cx);
+                    return true;
+                }
+                #[cfg(not(target_family = "wasm"))]
                 // Save every dirty master.
                 if let Some(project) = self.project.as_mut() {
                     let mut saved = Vec::new();
@@ -3047,11 +3291,22 @@ fn main() {
                         selected_pair: None,
                         axis_sliders: Vec::new(),
                         clipboard: Vec::new(),
+                        #[cfg(target_family = "wasm")]
+                        web_host: None,
                         _watcher: None,
                         last_save: Arc::new(Mutex::new(web_time::Instant::now())),
                         _subscriptions: vec![subscription, sub_w, sub_l, sub_r, sub_p],
                     };
                     workspace.start_watching(cx);
+                    #[cfg(target_family = "wasm")]
+                    if let Some(base) = web_host::server_from_location() {
+                        workspace.connect_web_host(base, cx);
+                    } else {
+                        workspace.status_note = Some(
+                            "Embedded demo font (read-only) · open with ?server=http://… to edit real fonts"
+                                .into(),
+                        );
+                    }
                     workspace
                 });
                 cx.new(|cx| gpui_component::Root::new(workspace, window, cx))

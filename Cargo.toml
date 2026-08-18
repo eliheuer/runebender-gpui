@@ -25,3 +25,14 @@ include_dir = "0.7.4"
 # checkout, same convention as runebender-xilem and runebender-web.
 [dependencies.runebender-core]
 path = "../runebender-core"
+
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+
+[dependencies.serde_json]
+version = "1.0"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Location"] }
+js-sys = "0.3"
