@@ -1371,23 +1371,22 @@ impl Workspace {
             );
         }
         div()
-            .w(px(200.0))
+            .size_full()
             .flex()
             .flex_col()
-            .gap_2()
-            .p_2()
-            .bg(t::panel_bg())
-            .border_1()
-            .border_color(t::panel_outline())
-            .rounded_lg()
-            .child(gpui_component::input::Input::new(&self.search))
-            .child(div().text_sm().text_color(t::text_muted()).child("Categories"))
-            .child(list)
+            .child(
+                div()
+                    .p_2()
+                    .border_b_1()
+                    .border_color(t::panel_outline())
+                    .child(gpui_component::input::Input::new(&self.search)),
+            )
+            .child(Self::section("Categories", list))
     }
 
     /// Right tile: details of the selected glyph, like
     /// runebender-web's GlyphInfoSidebar.
-    fn glyph_info_panel(&self) -> impl IntoElement + use<> {
+    fn glyph_info_panel(&self) -> gpui::Div {
         let row = |header: &'static str, value: SharedString| {
             div()
                 .flex()
@@ -1395,18 +1394,10 @@ impl Workspace {
                 .child(div().text_sm().text_color(t::info_header()).child(header))
                 .child(div().text_sm().text_color(t::text()).child(value))
         };
-        let mut panel = div()
-            .w(px(200.0))
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_3()
-            .bg(t::panel_bg())
-            .border_1()
-            .border_color(t::panel_outline())
-            .rounded_lg();
+        let mut panel = div().flex().flex_col().gap_2();
         let (Some(project), Some(index)) = (self.project.as_ref(), self.selected) else {
-            return panel.child(
+            return Self::section(
+                "Glyph",
                 div()
                     .text_sm()
                     .text_color(t::text_muted())
@@ -1415,7 +1406,7 @@ impl Workspace {
         };
         let font = project.active_font();
         let Some(entry) = font.glyphs.get(index) else {
-            return panel.child(div());
+            return Self::section("Glyph", div());
         };
         let name = entry.name.to_string();
         let master = project.master_names[project.active].clone();
@@ -1447,12 +1438,12 @@ impl Workspace {
                     .into(),
             ))
             .child(row("Contours", format!("{contours}").into()));
-        panel
+        Self::section("Glyph", panel)
     }
 
     /// Colors panel: mark-color swatches for the selected glyph, like
     /// the web grid's bottom-right panel.
-    fn mark_colors_panel(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn mark_colors_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
         let current = self
             .selected
             .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))
@@ -1504,18 +1495,7 @@ impl Workspace {
                     cx.notify();
                 })),
         );
-        div()
-            .w(px(200.0))
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_3()
-            .bg(t::panel_bg())
-            .border_1()
-            .border_color(t::panel_outline())
-            .rounded_lg()
-            .child(div().text_sm().text_color(t::info_header()).child("Colors"))
-            .child(swatches)
+        Self::section("Colors", swatches)
     }
 
     /// Set or clear the selected glyph's mark color.
@@ -1541,29 +1521,250 @@ impl Workspace {
             None => Vec::new(),
         };
         div()
-            .w(px(224.0))
-            .h_full()
+            .size_full()
             .flex()
             .flex_col()
             .min_h(px(0.0))
-            .gap_2()
-            .p_2()
-            .bg(t::panel_bg())
-            .border_r_1()
-            .border_color(t::cell_border())
-            .child(gpui_component::input::Input::new(&self.search))
+            .child(
+                div()
+                    .p_2()
+                    .border_b_1()
+                    .border_color(t::panel_outline())
+                    .child(gpui_component::input::Input::new(&self.search)),
+            )
             .child(
                 div()
                     .id("editor-sidebar-grid")
                     .flex_1()
                     .min_h(px(0.0))
                     .overflow_y_scroll()
-                    .child(div().flex().flex_wrap().gap_1().children(cells)),
+                    .child(div().flex().flex_wrap().gap_1().p_2().children(cells)),
             )
     }
 
     /// The glyph editor: metrics lines, stroked outline over a dim
     /// fill, draggable control points, wheel pan, Cmd+wheel zoom.
+    /// A flat docked sidebar section: small muted header, hairline
+    /// divider below (Glyphs-style, no floating container).
+    fn section(
+        title: &'static str,
+        body: impl IntoElement,
+    ) -> gpui::Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(t::panel_outline())
+            .child(div().text_xs().text_color(t::text_muted()).child(title))
+            .child(body)
+    }
+
+    /// A 30px icon tile (header tools, transform section).
+    fn icon_tile(id: &'static str, icon: &'static str, active: bool) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .w(px(30.0))
+            .h(px(30.0))
+            .rounded_md()
+            .cursor_pointer()
+            .when(active, |el| el.bg(t::cell_selected_bg()))
+            .child(icon_svg(icon, if active { t::accent() } else { t::text() }))
+    }
+
+    /// Tool icons for the header bar (editor mode only).
+    fn header_tools(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let tool = self.editor.tool;
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                Self::icon_tile("tool-select", "select", tool == Tool::Select).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.pen_finish();
+                        this.editor.tool = Tool::Select;
+                        cx.notify();
+                    }),
+                ),
+            )
+            .child(Self::icon_tile("tool-pen", "pen", tool == Tool::Pen).on_click(
+                cx.listener(|this, _, _, cx| {
+                    this.editor.tool = Tool::Pen;
+                    cx.notify();
+                }),
+            ))
+            .child(
+                Self::icon_tile(
+                    "tool-shapes",
+                    if self.editor.shape_ellipse { "shape-ellipse" } else { "shape-rectangle" },
+                    tool == Tool::Shapes,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if this.editor.tool == Tool::Shapes {
+                        this.editor.shape_ellipse = !this.editor.shape_ellipse;
+                    }
+                    this.pen_finish();
+                    this.editor.tool = Tool::Shapes;
+                    cx.notify();
+                })),
+            )
+            .child(
+                Self::icon_tile("tool-measure", "measure", tool == Tool::Measure).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.pen_finish();
+                        this.editor.tool = Tool::Measure;
+                        cx.notify();
+                    }),
+                ),
+            )
+    }
+
+    /// Transformations section for the right sidebar (editor mode).
+    fn transform_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let text_op = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .text_sm()
+                .text_color(t::text())
+                .cursor_pointer()
+                .border_1()
+                .border_color(t::cell_border())
+                .child(label)
+        };
+        Self::section(
+            "Transformations",
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .child(Self::icon_tile("op-flip-h", "flip-h", false).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.apply_transform(Affine::scale_non_uniform(-1.0, 1.0));
+                                cx.notify();
+                            }),
+                        ))
+                        .child(Self::icon_tile("op-flip-v", "flip-v", false).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.apply_transform(Affine::scale_non_uniform(1.0, -1.0));
+                                cx.notify();
+                            }),
+                        ))
+                        .child(Self::icon_tile("op-rot-ccw", "rot-ccw", false).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.apply_transform(Affine::rotate(
+                                    std::f64::consts::FRAC_PI_2,
+                                ));
+                                cx.notify();
+                            }),
+                        ))
+                        .child(Self::icon_tile("op-rot-cw", "rot-cw", false).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.apply_transform(Affine::rotate(
+                                    -std::f64::consts::FRAC_PI_2,
+                                ));
+                                cx.notify();
+                            }),
+                        ))
+                        .child(Self::icon_tile("op-overlap", "union", false).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.command_remove_overlap();
+                                cx.notify();
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .child(text_op("op-harmonize", "Harmonize").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.apply_curve_op(CurveOp::Harmonize);
+                                cx.notify();
+                            },
+                        )))
+                        .child(text_op("op-balance", "Balance").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.apply_curve_op(CurveOp::Balance);
+                                cx.notify();
+                            },
+                        )))
+                        .child(text_op("op-optimize", "Optimize").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.apply_curve_op(CurveOp::Optimize(0.12));
+                                cx.notify();
+                            },
+                        )))
+                        .child(text_op("op-reverse", "Reverse").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                if let Mode::Editor(index) = this.mode {
+                                    this.push_undo_snapshot(index);
+                                    let selected = this.editor.selected.clone();
+                                    let changed = this
+                                        .font_mut()
+                                        .and_then(|f| {
+                                            f.edit_glyph(index, |g| {
+                                                runebender_core::glyph_ops::reverse_contours(
+                                                    g, &selected,
+                                                )
+                                            })
+                                        })
+                                        .unwrap_or(false);
+                                    if !changed {
+                                        this.editor.undo.pop();
+                                    } else {
+                                        this.editor.selected.clear();
+                                    }
+                                }
+                                cx.notify();
+                            },
+                        ))),
+                ),
+        )
+    }
+
+    /// Layers section: one row per master, the active one highlighted.
+    fn layers_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let (names, active): (Vec<SharedString>, usize) = match &self.project {
+            Some(p) => (p.master_names.clone(), p.active),
+            None => (Vec::new(), 0),
+        };
+        Self::section(
+            "Layers",
+            div().flex().flex_col().children(names.into_iter().enumerate().map(
+                move |(i, name)| {
+                    let is_active = i == active;
+                    div()
+                        .id(("layer", i))
+                        .px_2()
+                        .py_0p5()
+                        .rounded_sm()
+                        .text_sm()
+                        .cursor_pointer()
+                        .when(is_active, |el| {
+                            el.bg(t::cell_selected_bg()).text_color(t::text())
+                        })
+                        .when(!is_active, |el| el.text_color(t::text_muted()))
+                        .child(name)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.switch_master(i);
+                            cx.notify();
+                        }))
+                },
+            )),
+        )
+    }
+
     fn editor_view(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let font = self.font().unwrap();
         let entry = &font.glyphs[index];
@@ -1602,180 +1803,9 @@ impl Workspace {
         let bounds_slot = self.editor.bounds.clone();
         let needs_fit = !self.editor.initialized;
 
-        let op_button = |id: &'static str, label_text: &'static str| {
-            div()
-                .id(id)
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(t::cell_border())
-                .text_color(t::text_muted())
-                .text_sm()
-                .cursor_pointer()
-                .child(label_text)
-        };
-        // Icon tile, like the web toolbar (icon geometry shared via core).
-        let icon_op_button = |id: &'static str, icon: &'static str| {
-            div()
-                .id(id)
-                .w(px(34.0))
-                .h(px(34.0))
-                .rounded_md()
-                .border_1()
-                .border_color(t::cell_border())
-                .cursor_pointer()
-                .child(icon_svg(icon, t::text_muted()))
-        };
-        let tool = self.editor.tool;
-        let tool_button = |id: &'static str, icon: &'static str, this_tool: Tool| {
-            let active = tool == this_tool;
-            div()
-                .id(id)
-                .w(px(34.0))
-                .h(px(34.0))
-                .rounded_md()
-                .border_1()
-                .border_color(if active { t::accent() } else { t::cell_border() })
-                .cursor_pointer()
-                .child(icon_svg(icon, if active { t::accent() } else { t::text() }))
-        };
-
         div()
             .flex_1()
             .relative()
-            .child(
-                div()
-                    .absolute()
-                    .top_2()
-                    .left_2()
-                    .flex()
-                    .gap_1()
-                    .child(tool_button("tool-select", "select", Tool::Select).on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.pen_finish();
-                            this.editor.tool = Tool::Select;
-                            cx.notify();
-                        }),
-                    ))
-                    .child(tool_button("tool-pen", "pen", Tool::Pen).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.editor.tool = Tool::Pen;
-                            cx.notify();
-                        },
-                    )))
-                    .child(
-                        tool_button(
-                            "tool-shapes",
-                            if self.editor.shape_ellipse { "shape-ellipse" } else { "shape-rectangle" },
-                            Tool::Shapes,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if this.editor.tool == Tool::Shapes {
-                                this.editor.shape_ellipse = !this.editor.shape_ellipse;
-                            }
-                            this.pen_finish();
-                            this.editor.tool = Tool::Shapes;
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        tool_button("tool-measure", "measure", Tool::Measure).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.pen_finish();
-                                this.editor.tool = Tool::Measure;
-                                cx.notify();
-                            }),
-                        ),
-                    )
-                    .child(div().w_2())
-                    .child(op_button("op-harmonize", "Harmonize").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.apply_curve_op(CurveOp::Harmonize);
-                            cx.notify();
-                        },
-                    )))
-                    .child(op_button("op-balance", "Balance").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.apply_curve_op(CurveOp::Balance);
-                            cx.notify();
-                        },
-                    )))
-                    .child(op_button("op-optimize", "Optimize").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.apply_curve_op(CurveOp::Optimize(0.12));
-                            cx.notify();
-                        },
-                    )))
-                    .child(icon_op_button("op-overlap", "union").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            if let Mode::Editor(index) = this.mode {
-                                this.push_undo_snapshot(index);
-                                let changed =
-                                    this.font_mut().is_some_and(|f| f.remove_overlap(index));
-                                if !changed {
-                                    this.editor.undo.pop();
-                                } else {
-                                    this.editor.selected.clear();
-                                }
-                            }
-                            cx.notify();
-                        },
-                    )))
-                    .child(div().w_2())
-                    .child(icon_op_button("op-flip-h", "flip-h").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.apply_transform(Affine::scale_non_uniform(-1.0, 1.0));
-                            cx.notify();
-                        },
-                    )))
-                    .child(icon_op_button("op-flip-v", "flip-v").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.apply_transform(Affine::scale_non_uniform(1.0, -1.0));
-                            cx.notify();
-                        },
-                    )))
-                    .child(icon_op_button("op-rot-ccw", "rot-ccw").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.apply_transform(Affine::rotate(
-                                std::f64::consts::FRAC_PI_2,
-                            ));
-                            cx.notify();
-                        },
-                    )))
-                    .child(icon_op_button("op-rot-cw", "rot-cw").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.apply_transform(Affine::rotate(
-                                -std::f64::consts::FRAC_PI_2,
-                            ));
-                            cx.notify();
-                        },
-                    )))
-                    .child(op_button("op-reverse", "Reverse").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            if let Mode::Editor(index) = this.mode {
-                                this.push_undo_snapshot(index);
-                                let selected = this.editor.selected.clone();
-                                let changed = this
-                                    .font_mut()
-                                    .and_then(|f| {
-                                        f.edit_glyph(index, |g| {
-                                            runebender_core::glyph_ops::reverse_contours(
-                                                g, &selected,
-                                            )
-                                        })
-                                    })
-                                    .unwrap_or(false);
-                                if !changed {
-                                    this.editor.undo.pop();
-                                } else {
-                                    this.editor.selected.clear();
-                                }
-                            }
-                            cx.notify();
-                        },
-                    ))),
-            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
@@ -2697,22 +2727,23 @@ impl Workspace {
                 (None, Some(err)) => ("Load failed".into(), err.clone()),
                 (None, None) => ("Runebender".into(), "No font loaded".into()),
             };
+        let in_editor = matches!(self.mode, Mode::Editor(_));
         div()
             .flex()
-            .gap_2()
+            .items_center()
+            .gap_3()
             .px_3()
-            .pt_3()
+            .py_1p5()
+            .bg(t::panel_bg())
+            .border_b_1()
+            .border_color(t::panel_outline())
             .child(
                 div()
                     .flex_1()
                     .flex()
-                    .flex_col()
-                    .px_3()
-                    .py_2()
-                    .bg(t::panel_bg())
-                    .border_1()
-                    .border_color(t::panel_outline())
-                    .rounded_lg()
+                    .items_center()
+                    .gap_2()
+                    .overflow_hidden()
                     .child(div().text_sm().text_color(t::text()).child(title))
                     .child(
                         div()
@@ -2721,18 +2752,8 @@ impl Workspace {
                             .child(status),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .bg(t::panel_bg())
-                    .border_1()
-                    .border_color(t::panel_outline())
-                    .rounded_lg()
-                    .child(self.master_switcher(cx)),
-            )
+            .when(in_editor, |el| el.child(self.header_tools(cx)))
+            .child(self.master_switcher(cx))
     }
 
     /// One button per master; the active one gets the accent border.
@@ -3533,22 +3554,22 @@ impl Render for Workspace {
         if matches!(self.mode, Mode::Editor(_)) {
             self.refresh_metric_inputs(false, window, cx);
         }
-        let content = match self.mode {
-            Mode::Editor(index) if self.project.is_some() => div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h(px(0.0))
-                .child(
-                    div()
-                        .flex()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .child(self.editor_sidebar(cx))
-                        .child(self.editor_view(index, cx).into_any_element()),
-                )
-                .child(self.metrics_bar())
-                .into_any_element(),
+        use gpui_component::resizable::{h_resizable, resizable_panel};
+
+        // Glyphs-style docked layout: left sidebar | center | right
+        // sidebar as flat resizable panels, no floating containers.
+        let (left, center): (gpui::AnyElement, gpui::AnyElement) = match self.mode {
+            Mode::Editor(index) if self.project.is_some() => (
+                self.editor_sidebar(cx).into_any_element(),
+                div()
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .min_h(px(0.0))
+                    .child(self.editor_view(index, cx).into_any_element())
+                    .child(self.metrics_bar())
+                    .into_any_element(),
+            ),
             _ => {
                 let query = self.search_query.clone();
                 let category = self.category;
@@ -3574,39 +3595,70 @@ impl Render for Workspace {
                         .collect(),
                     None => Vec::new(),
                 };
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .gap_2()
-                    .p_3()
-                    .child(self.category_sidebar(cx))
-                    .child(
-                        div()
-                            .id("glyph-grid")
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .overflow_y_scroll()
-                            .bg(t::panel_bg())
-                            .border_1()
-                            .border_color(t::panel_outline())
-                            .rounded_lg()
-                            .child(div().flex().flex_wrap().gap_2().p_3().children(grid)),
-                    )
-                    .child(
-                        div()
-                            .id("info-column")
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .min_h(px(0.0))
-                            .overflow_y_scroll()
-                            .child(self.glyph_info_panel())
-                            .child(self.mark_colors_panel(cx)),
-                    )
-                    .into_any_element()
+                (
+                    self.category_sidebar(cx).into_any_element(),
+                    div()
+                        .id("glyph-grid")
+                        .size_full()
+                        .min_h(px(0.0))
+                        .overflow_y_scroll()
+                        .child(div().flex().flex_wrap().gap_2().p_3().children(grid))
+                        .into_any_element(),
+                )
             }
         };
+        let in_editor = matches!(self.mode, Mode::Editor(_)) && self.project.is_some();
+        let right = div()
+            .id("right-sidebar")
+            .size_full()
+            .min_h(px(0.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .when(in_editor, |el| {
+                el.child(self.transform_section(cx))
+                    .child(self.layers_section(cx))
+                    .child(self.mark_colors_panel(cx))
+            })
+            .when(!in_editor, |el| {
+                el.child(self.glyph_info_panel())
+                    .child(self.layers_section(cx))
+                    .child(self.mark_colors_panel(cx))
+            });
+        let content = div()
+            .flex_1()
+            .min_h(px(0.0))
+            .child(
+                h_resizable("workspace")
+                    .child(
+                        resizable_panel()
+                            .size(px(224.0))
+                            .size_range(px(140.0)..px(440.0))
+                            .child(
+                                div()
+                                    .size_full()
+                                    .bg(t::panel_bg())
+                                    .border_r_1()
+                                    .border_color(t::panel_outline())
+                                    .child(left),
+                            ),
+                    )
+                    .child(resizable_panel().child(center))
+                    .child(
+                        resizable_panel()
+                            .size(px(230.0))
+                            .size_range(px(170.0)..px(440.0))
+                            .child(
+                                div()
+                                    .size_full()
+                                    .bg(t::panel_bg())
+                                    .border_l_1()
+                                    .border_color(t::panel_outline())
+                                    .child(right),
+                            ),
+                    ),
+            )
+            .into_any_element();
 
         div()
             .flex()
