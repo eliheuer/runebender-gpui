@@ -729,6 +729,71 @@ impl FontModel {
         }
     }
 
+    /// After moving one off-curve handle, keep its sibling handle
+    /// collinear through the shared smooth on-curve point (length
+    /// preserved). No-op when the shared point is a corner.
+    fn constrain_smooth_neighbor(&mut self, glyph_index: usize, contour: usize, index: usize) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return;
+        };
+        let Some(c) = glyph.contours.get_mut(contour) else {
+            return;
+        };
+        let n = c.points.len();
+        if n < 4 {
+            return;
+        }
+        let closed = c.points.first().is_none_or(|p| p.typ != norad::PointType::Move);
+        let step = |i: usize, d: isize| -> Option<usize> {
+            let j = i as isize + d;
+            if closed {
+                Some(((j % n as isize + n as isize) % n as isize) as usize)
+            } else if (0..n as isize).contains(&j) {
+                Some(j as usize)
+            } else {
+                None
+            }
+        };
+        let is_off = |p: &norad::ContourPoint| p.typ == norad::PointType::OffCurve;
+        if !is_off(&c.points[index]) {
+            return;
+        }
+        // Find the on-curve anchor this handle attaches to and the
+        // sibling handle on the anchor's other side.
+        let mut fix = None;
+        if let (Some(a), Some(sib)) = (step(index, 1), step(index, 2)) {
+            if !is_off(&c.points[a]) && c.points[a].smooth && is_off(&c.points[sib]) {
+                fix = Some((a, sib));
+            }
+        }
+        if fix.is_none() {
+            if let (Some(a), Some(sib)) = (step(index, -1), step(index, -2)) {
+                if !is_off(&c.points[a]) && c.points[a].smooth && is_off(&c.points[sib]) {
+                    fix = Some((a, sib));
+                }
+            }
+        }
+        let Some((a, sib)) = fix else {
+            return;
+        };
+        let anchor = kurbo::Point::new(c.points[a].x, c.points[a].y);
+        let dragged = kurbo::Point::new(c.points[index].x, c.points[index].y);
+        let sibling_pt = kurbo::Point::new(c.points[sib].x, c.points[sib].y);
+        let dir = anchor - dragged;
+        let len = dir.hypot();
+        if len < 1e-6 {
+            return;
+        }
+        let unit = dir / len;
+        let sib_len = (sibling_pt - anchor).hypot();
+        let new_sib = anchor + unit * sib_len;
+        c.points[sib].x = new_sib.x.round();
+        c.points[sib].y = new_sib.y.round();
+        self.dirty = true;
+        self.rebuild_entry(glyph_index);
+    }
+
     fn save(&mut self) -> Result<(), norad::error::FontWriteError> {
         self.font.save(&self.source_path)?;
         self.dirty = false;
@@ -1529,8 +1594,16 @@ impl Workspace {
                         (*id, ((ox + dx - sx).round(), (oy + dy - sy).round()))
                     })
                     .collect();
+                let single = if updates.len() == 1 {
+                    Some(updates[0].0)
+                } else {
+                    None
+                };
                 if let Some(font) = self.font_mut() {
                     font.set_points(index, &updates);
+                    if let Some((contour, point_index)) = single {
+                        font.constrain_smooth_neighbor(index, contour, point_index);
+                    }
                     return true;
                 }
                 false
@@ -2681,6 +2754,62 @@ mod tests {
         assert_eq!(ink2.x1, ink.x1 + 10.0);
         assert_eq!(model.glyphs[index].advance, advance + 20.0);
         assert!(model.dirty);
+    }
+
+    #[test]
+    fn smooth_handle_constraint_keeps_collinearity() {
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
+        let index = model
+            .glyphs
+            .iter()
+            .position(|g| g.name.as_ref() == "space")
+            .unwrap();
+        // Two curve segments joined at a smooth point (100,100):
+        let c = model.start_contour(index, 0.0, 0.0).unwrap();
+        model.append_segment(
+            index,
+            c,
+            Some(((40.0, 60.0), (60.0, 100.0))),
+            100.0,
+            100.0,
+            true,
+        );
+        model.append_segment(
+            index,
+            c,
+            Some(((140.0, 100.0), (180.0, 60.0))),
+            200.0,
+            0.0,
+            false,
+        );
+        model.close_contour(index, c, None);
+
+        // Points in contour c: find indices of the incoming handle
+        // (60,100), the smooth point (100,100), the outgoing (140,100).
+        let find = |m: &FontModel, x: f64, y: f64| {
+            m.glyphs[index]
+                .points
+                .iter()
+                .find(|p| p.contour == c && p.x == x && p.y == y)
+                .map(|p| p.index)
+                .unwrap()
+        };
+        let incoming = find(&model, 60.0, 100.0);
+        let outgoing = find(&model, 140.0, 100.0);
+
+        // Drag the incoming handle downward; the outgoing must rotate
+        // to stay collinear through (100,100).
+        model.set_points(index, &[((c, incoming), (60.0, 80.0))]);
+        model.constrain_smooth_neighbor(index, c, incoming);
+        let pts = &model.glyphs[index].points;
+        let out_pt = pts.iter().find(|p| p.contour == c && p.index == outgoing).unwrap();
+        // Collinearity: cross product of (anchor-incoming) and
+        // (outgoing-anchor) near zero (integer rounding allowed).
+        let cross = (100.0 - 60.0) * (out_pt.y - 100.0) - (100.0 - 80.0) * (out_pt.x - 100.0);
+        assert!(cross.abs() <= 60.0, "not collinear enough: {cross} ({}, {})", out_pt.x, out_pt.y);
+        // Length preserved (was 40).
+        let len = ((out_pt.x - 100.0f64).powi(2) + (out_pt.y - 100.0f64).powi(2)).sqrt();
+        assert!((len - 40.0).abs() < 2.0, "length changed: {len}");
     }
 
     #[test]
