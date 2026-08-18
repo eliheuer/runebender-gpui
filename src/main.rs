@@ -1276,6 +1276,22 @@ impl Workspace {
             (GC::Separator, "Separator"),
             (GC::Other, "Other"),
         ];
+        // Glyph counts per category, like the web sidebar.
+        let mut counts = [0usize; 8];
+        if let Some(font) = self.font() {
+            for entry in &font.glyphs {
+                counts[0] += 1;
+                let category = entry
+                    .codepoint
+                    .map(GC::from_codepoint)
+                    .unwrap_or(GC::Other);
+                if let Some(slot) =
+                    CATEGORIES.iter().position(|(c, _)| *c == category)
+                {
+                    counts[slot] += 1;
+                }
+            }
+        }
         let mut list = div().flex().flex_col().gap_1();
         for (i, (category, label)) in CATEGORIES.into_iter().enumerate() {
             let active = self.category == category;
@@ -1287,6 +1303,8 @@ impl Workspace {
                     .rounded_sm()
                     .text_sm()
                     .cursor_pointer()
+                    .flex()
+                    .justify_between()
                     .when(active, |el| {
                         el.border_1().border_color(t::accent()).text_color(t::accent())
                     })
@@ -1295,7 +1313,12 @@ impl Workspace {
                         this.category = category;
                         cx.notify();
                     }))
-                    .child(label),
+                    .child(label)
+                    .child(
+                        div()
+                            .text_color(if active { t::accent() } else { t::text_muted() })
+                            .child(format!("{}", counts[i])),
+                    ),
             );
         }
         div()
@@ -3445,9 +3468,12 @@ impl Render for Workspace {
                     )
                     .child(
                         div()
+                            .id("info-column")
                             .flex()
                             .flex_col()
                             .gap_2()
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
                             .child(self.glyph_info_panel())
                             .child(self.mark_colors_panel(cx)),
                     )
