@@ -19,9 +19,17 @@ The repo pins the stable Rust toolchain in `rust-toolchain.toml`. A
 GPUI dependency (`pathfinder_simd`) does not compile on current
 nightly toolchains.
 
+GPUI and `gpui_platform` come from the Zed git repository (not
+crates.io) because the editor shell uses
+[gpui-component](https://github.com/longbridge/gpui-component),
+which tracks Zed main.
+
 ## Status
 
-Early. The editor opens a window and nothing more yet.
+Early but usable for simple edits: glyph grid with search,
+double-click to edit, drag points or marquee-select, arrows nudge,
+Cmd+Z/Cmd+Shift+Z undo/redo, wheel pan, Cmd+wheel zoom, Cmd+S
+saves the UFO.
 
 ## License
 
