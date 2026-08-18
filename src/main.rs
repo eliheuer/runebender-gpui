@@ -23,6 +23,9 @@ use theme as t;
 // FONT MODEL
 // ============================================================================
 
+/// A batch of point moves: ((contour, index), (x, y)) pairs.
+type PointUpdates = [((usize, usize), (f64, f64))];
+
 /// One control point of a contour, in font units, with its identity
 /// inside the glyph so edits can address it.
 #[derive(Clone, Copy)]
@@ -141,26 +144,6 @@ impl FontModel {
         })
     }
 
-    /// Move one control point to a new design-space position and
-    /// rebuild the glyph's cached outline.
-    fn move_point_to(&mut self, glyph_index: usize, contour: usize, index: usize, x: f64, y: f64) {
-        let name = self.glyphs[glyph_index].name.to_string();
-        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
-            return;
-        };
-        let Some(point) = glyph
-            .contours
-            .get_mut(contour)
-            .and_then(|c| c.points.get_mut(index))
-        else {
-            return;
-        };
-        point.x = x;
-        point.y = y;
-        self.dirty = true;
-        self.rebuild_entry(glyph_index);
-    }
-
     fn rebuild_entry(&mut self, glyph_index: usize) {
         let name = self.glyphs[glyph_index].name.to_string();
         let Some(glyph) = self.font.get_glyph(name.as_str()) else {
@@ -201,12 +184,15 @@ impl FontModel {
 
     fn set_anchor(&mut self, glyph_index: usize, anchor: usize, x: f64, y: f64) {
         let name = self.glyphs[glyph_index].name.to_string();
-        if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
-            if let Some(a) = glyph.anchors.get_mut(anchor) {
-                a.x = x;
-                a.y = y;
-                self.dirty = true;
-            }
+        if let Some(a) = self
+            .font
+            .default_layer_mut()
+            .get_glyph_mut(name.as_str())
+            .and_then(|g| g.anchors.get_mut(anchor))
+        {
+            a.x = x;
+            a.y = y;
+            self.dirty = true;
         }
         self.rebuild_entry(glyph_index);
     }
@@ -226,18 +212,21 @@ impl FontModel {
 
     fn delete_anchor(&mut self, glyph_index: usize, anchor: usize) {
         let name = self.glyphs[glyph_index].name.to_string();
-        if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
-            if anchor < glyph.anchors.len() {
-                glyph.anchors.remove(anchor);
-                self.dirty = true;
-            }
+        if let Some(glyph) = self
+            .font
+            .default_layer_mut()
+            .get_glyph_mut(name.as_str())
+            .filter(|g| anchor < g.anchors.len())
+        {
+            glyph.anchors.remove(anchor);
+            self.dirty = true;
         }
         self.rebuild_entry(glyph_index);
     }
 
     /// Set several points at once (multi-point drag): each entry is
     /// ((contour, index), new position).
-    fn set_points(&mut self, glyph_index: usize, updates: &[((usize, usize), (f64, f64))]) {
+    fn set_points(&mut self, glyph_index: usize, updates: &PointUpdates) {
         let name = self.glyphs[glyph_index].name.to_string();
         let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
             return;
@@ -761,19 +750,12 @@ impl FontModel {
         }
         // Find the on-curve anchor this handle attaches to and the
         // sibling handle on the anchor's other side.
-        let mut fix = None;
-        if let (Some(a), Some(sib)) = (step(index, 1), step(index, 2)) {
-            if !is_off(&c.points[a]) && c.points[a].smooth && is_off(&c.points[sib]) {
-                fix = Some((a, sib));
-            }
-        }
-        if fix.is_none() {
-            if let (Some(a), Some(sib)) = (step(index, -1), step(index, -2)) {
-                if !is_off(&c.points[a]) && c.points[a].smooth && is_off(&c.points[sib]) {
-                    fix = Some((a, sib));
-                }
-            }
-        }
+        let arm = |d: isize| -> Option<(usize, usize)> {
+            let (a, sib) = (step(index, d)?, step(index, 2 * d)?);
+            (!is_off(&c.points[a]) && c.points[a].smooth && is_off(&c.points[sib]))
+                .then_some((a, sib))
+        };
+        let fix = arm(1).or_else(|| arm(-1));
         let Some((a, sib)) = fix else {
             return;
         };
@@ -1656,14 +1638,14 @@ impl Workspace {
 
         match self.editor.pen.take() {
             None => {
-                if let Some(font) = self.font_mut() {
-                    if let Some(contour) = font.start_contour(index, x, y) {
-                        self.editor.pen = Some(PenState {
-                            contour,
-                            prev_out_handle: None,
-                            placing: Some((x, y)),
-                        });
-                    }
+                if let Some(contour) =
+                    self.font_mut().and_then(|f| f.start_contour(index, x, y))
+                {
+                    self.editor.pen = Some(PenState {
+                        contour,
+                        prev_out_handle: None,
+                        placing: Some((x, y)),
+                    });
                 }
             }
             Some(pen) => {
@@ -1718,6 +1700,7 @@ impl Workspace {
         let contour = pen.contour;
         // If the just-placed point ended a curve segment, move its
         // incoming control to the mirror and mark the point smooth.
+        #[allow(clippy::type_complexity)]
         let updates: Option<Vec<((usize, usize), (f64, f64))>> = self.font().map(|f| {
             let pts: Vec<_> = f.glyphs[index]
                 .points
@@ -1733,10 +1716,10 @@ impl Workspace {
                 Vec::new()
             }
         });
-        if let (Some(updates), Some(font)) = (updates, self.font_mut()) {
-            if !updates.is_empty() {
-                font.set_points(index, &updates);
-            }
+        if let (Some(updates), Some(font)) = (updates, self.font_mut())
+            && !updates.is_empty()
+        {
+            font.set_points(index, &updates);
         }
         true
     }
@@ -1746,10 +1729,10 @@ impl Workspace {
         let Mode::Editor(index) = self.mode else {
             return;
         };
-        if let Some(pen) = self.editor.pen.take() {
-            if let Some(font) = self.font_mut() {
-                font.remove_contour_if_degenerate(index, pen.contour);
-            }
+        if let Some(pen) = self.editor.pen.take()
+            && let Some(font) = self.font_mut()
+        {
+            font.remove_contour_if_degenerate(index, pen.contour);
         }
     }
 
