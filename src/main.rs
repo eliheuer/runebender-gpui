@@ -46,6 +46,8 @@ struct GlyphEntry {
 
 struct FontModel {
     font: norad::Font,
+    /// codepoint → index into `glyphs`, for the text preview.
+    codepoint_map: std::collections::HashMap<char, usize>,
     family_name: SharedString,
     source_path: PathBuf,
     units_per_em: f64,
@@ -100,8 +102,15 @@ impl FontModel {
             (None, None) => a.name.cmp(&b.name),
         });
 
+        let codepoint_map = glyphs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, g)| g.codepoint.map(|c| (c, i)))
+            .collect();
+
         Ok(Self {
             font,
+            codepoint_map,
             family_name: family_name.into(),
             source_path: path.to_path_buf(),
             units_per_em,
@@ -932,6 +941,8 @@ struct Workspace {
     search: gpui::Entity<gpui_component::input::InputState>,
     search_query: String,
     metric_inputs: MetricInputs,
+    preview_input: gpui::Entity<gpui_component::input::InputState>,
+    preview_text: SharedString,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -1794,6 +1805,60 @@ impl Workspace {
             .child(field("RSB", &self.metric_inputs.rsb))
     }
 
+    /// Text preview strip: the preview string set in the active
+    /// master, glyphs positioned by their advances.
+    fn preview_strip(&self) -> impl IntoElement + use<> {
+        let Some(font) = self.font() else {
+            return div().into_any_element();
+        };
+        let upm = font.units_per_em;
+        let descent = font.descender;
+        let line: Vec<(Arc<BezPath>, f64)> = self
+            .preview_text
+            .chars()
+            .filter_map(|c| font.codepoint_map.get(&c))
+            .map(|&i| (font.glyphs[i].path.clone(), font.glyphs[i].advance))
+            .collect();
+        div()
+            .h(px(104.0))
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_4()
+            .bg(t::panel_bg())
+            .border_t_1()
+            .border_color(t::cell_border())
+            .child(div().w(px(180.0)).child(gpui_component::input::Input::new(
+                &self.preview_input,
+            )))
+            .child(
+                div().flex_1().h_full().child(
+                    canvas(
+                        move |bounds, _, _| bounds,
+                        move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+                            let h: f32 = bounds.size.height.into();
+                            let scale = (h as f64 * 0.72) / upm;
+                            let baseline = h as f64 * 0.82 + descent * scale;
+                            let mut x_cursor = 0.0f64;
+                            for (path, advance) in line.iter() {
+                                let transform =
+                                    Affine::translate((x_cursor * scale, baseline))
+                                        * Affine::scale_non_uniform(scale, -scale);
+                                if let Some(p) =
+                                    build_fill_path(path, transform, bounds.origin)
+                                {
+                                    window.paint_path(p, t::glyph_fill());
+                                }
+                                x_cursor += advance;
+                            }
+                        },
+                    )
+                    .size_full(),
+                ),
+            )
+            .into_any_element()
+    }
+
     fn status_bar(&self) -> impl IntoElement + use<> {
         let text: SharedString = if let Some(note) = &self.status_note {
             note.clone()
@@ -1823,7 +1888,7 @@ impl Workspace {
                         }
                     }
                 }
-                _ => "Click a glyph; double-click to edit".into(),
+                _ => "Click a glyph; double-click to edit · Cmd+O opens a font".into(),
             }
         };
         div()
@@ -1837,7 +1902,42 @@ impl Workspace {
             .child(text)
     }
 
-    fn handle_key(&mut self, event: &gpui::KeyDownEvent) -> bool {
+    /// Cmd+O: native open dialog for a .designspace, .ufo, or folder.
+    fn open_dialog(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let loaded = Project::load(&path);
+            this.update(cx, |workspace, cx| {
+                match loaded {
+                    Ok(project) => {
+                        workspace.project = Some(project);
+                        workspace.load_error = None;
+                        workspace.mode = Mode::Grid;
+                        workspace.selected = None;
+                        workspace.status_note = None;
+                        workspace.search_query.clear();
+                    }
+                    Err(e) => workspace.load_error = Some(e.into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn handle_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) -> bool {
         let key = event.keystroke.key.as_str();
         let cmd = event.keystroke.modifiers.platform;
         let shift = event.keystroke.modifiers.shift;
@@ -1909,6 +2009,10 @@ impl Workspace {
             ("right", false) if in_editor => self.nudge_selection(step, 0.0),
             ("up", false) if in_editor => self.nudge_selection(0.0, step),
             ("down", false) if in_editor => self.nudge_selection(0.0, -step),
+            ("o", true) => {
+                self.open_dialog(cx);
+                true
+            }
             ("s", true) => {
                 // Save every dirty master.
                 if let Some(project) = self.project.as_mut() {
@@ -2003,12 +2107,13 @@ impl Render for Workspace {
             .bg(t::window_bg())
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if this.handle_key(event) {
+                if this.handle_key(event, cx) {
                     cx.notify();
                 }
             }))
             .child(self.header(cx))
             .child(content)
+            .child(self.preview_strip())
             .child(self.status_bar())
     }
 }
@@ -2102,6 +2207,25 @@ fn main() {
                     let sub_w = metric_sub(cx, window, &width_input, MetricField::Width);
                     let sub_l = metric_sub(cx, window, &lsb_input, MetricField::Lsb);
                     let sub_r = metric_sub(cx, window, &rsb_input, MetricField::Rsb);
+                    let preview_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("Preview text")
+                            .default_value("hamburgevons")
+                    });
+                    let sub_p = cx.subscribe_in(&preview_input, window, {
+                        let preview_input = preview_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _window,
+                              cx| {
+                            if matches!(ev, gpui_component::input::InputEvent::Change) {
+                                this.preview_text =
+                                    preview_input.read(cx).value().to_string().into();
+                                cx.notify();
+                            }
+                        }
+                    });
                     let subscription = cx.subscribe_in(&search, window, {
                         let search = search.clone();
                         move |this: &mut Workspace,
@@ -2131,7 +2255,9 @@ fn main() {
                             lsb: lsb_input,
                             rsb: rsb_input,
                         },
-                        _subscriptions: vec![subscription, sub_w, sub_l, sub_r],
+                        preview_input,
+                        preview_text: "hamburgevons".into(),
+                        _subscriptions: vec![subscription, sub_w, sub_l, sub_r, sub_p],
                     }
                 });
                 cx.new(|cx| gpui_component::Root::new(workspace, window, cx))
