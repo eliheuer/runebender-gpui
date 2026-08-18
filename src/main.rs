@@ -17,6 +17,7 @@ use gpui::{
 };
 use kurbo::{Affine, BezPath, PathEl};
 
+use runebender_core::editing::ViewPort;
 use runebender_core::glyph_ops::{self as ops, CurveOp, GlyphSnapshot};
 
 use theme as t;
@@ -774,12 +775,10 @@ enum Drag {
     },
 }
 
-/// Editor viewport and interaction state. `zoom` is pixels per font
-/// unit; `pan` is the local-pixel position of the design origin
-/// (glyph left sidebearing at baseline).
+/// Editor viewport and interaction state, on the shared
+/// `runebender_core` viewport (design Y-up ↔ screen Y-down).
 struct EditorState {
-    zoom: f64,
-    pan: (f64, f64),
+    viewport: ViewPort,
     initialized: bool,
     tool: Tool,
     pen: Option<PenState>,
@@ -801,8 +800,7 @@ struct EditorState {
 impl EditorState {
     fn new() -> Self {
         Self {
-            zoom: 1.0,
-            pan: (0.0, 0.0),
+            viewport: ViewPort::new(),
             initialized: false,
             tool: Tool::Select,
             pen: None,
@@ -819,19 +817,25 @@ impl EditorState {
 
     /// design → local pixels
     fn transform(&self) -> Affine {
-        Affine::translate((self.pan.0, self.pan.1))
-            * Affine::scale_non_uniform(self.zoom, -self.zoom)
+        self.viewport.affine()
+    }
+
+    fn zoom(&self) -> f64 {
+        self.viewport.zoom
+    }
+
+    /// window position → local canvas pixels
+    fn window_to_local(&self, pos: Point<gpui::Pixels>) -> kurbo::Point {
+        let origin = self.bounds.lock().unwrap().origin;
+        let lx: f32 = (pos.x - origin.x).into();
+        let ly: f32 = (pos.y - origin.y).into();
+        kurbo::Point::new(lx as f64, ly as f64)
     }
 
     /// window position → design coordinates
     fn window_to_design(&self, pos: Point<gpui::Pixels>) -> (f64, f64) {
-        let origin = self.bounds.lock().unwrap().origin;
-        let lx: f32 = (pos.x - origin.x).into();
-        let ly: f32 = (pos.y - origin.y).into();
-        (
-            (lx as f64 - self.pan.0) / self.zoom,
-            (self.pan.1 - ly as f64) / self.zoom,
-        )
+        let p = self.viewport.screen_to_design(self.window_to_local(pos));
+        (p.x, p.y)
     }
 
     fn fit(&mut self, advance: f64, ascender: f64, descender: f64) {
@@ -841,12 +845,8 @@ impl EditorState {
         if w <= 0.0 || h <= 0.0 {
             return;
         }
-        let zoom = (h as f64 * 0.62) / (ascender - descender);
-        self.zoom = zoom;
-        self.pan = (
-            (w as f64 - advance * zoom) / 2.0,
-            h as f64 * 0.80 + descender * zoom,
-        );
+        self.viewport
+            .fit_to_canvas(w as f64, h as f64, advance, ascender, descender, 0.62);
         self.initialized = true;
     }
 }
@@ -1102,7 +1102,7 @@ impl Workspace {
         let descender = font.descender;
 
         let transform = self.editor.transform();
-        let zoom = self.editor.zoom;
+        let zoom = self.editor.zoom();
         let selected_points = self.editor.selected.clone();
         let marquee = match &self.editor.drag {
             Some(Drag::Marquee { start, current }) => Some((*start, *current)),
@@ -1270,14 +1270,17 @@ impl Workspace {
                             // the same bounds slot.
                             let h: f32 = bounds.size.height.into();
                             let w: f32 = bounds.size.width.into();
-                            let z = (h as f64 * 0.62) / (ascender - descender);
-                            let pan = (
-                                (w as f64 - advance * z) / 2.0,
-                                h as f64 * 0.80 + descender * z,
+                            let mut vp = ViewPort::new();
+                            vp.fit_to_canvas(
+                                w as f64,
+                                h as f64,
+                                advance,
+                                ascender,
+                                descender,
+                                0.62,
                             );
-                            transform = Affine::translate(pan)
-                                * Affine::scale_non_uniform(z, -z);
-                            zoom = z;
+                            transform = vp.affine();
+                            zoom = vp.zoom;
                         }
                         let _ = cx;
                         let origin = bounds.origin;
@@ -1480,7 +1483,7 @@ impl Workspace {
             return;
         };
         let (dx, dy) = self.editor.window_to_design(pos);
-        let tolerance = HIT_RADIUS_PX / self.editor.zoom;
+        let tolerance = HIT_RADIUS_PX / self.editor.zoom();
         // Copy the point data out so selection can mutate afterwards.
         let all_points: Vec<((usize, usize), (f64, f64))> = font.glyphs[index]
             .points
@@ -1663,7 +1666,7 @@ impl Workspace {
     fn pen_mouse_down(&mut self, index: usize, pos: Point<gpui::Pixels>) {
         let (dx, dy) = self.editor.window_to_design(pos);
         let (x, y) = (dx.round(), dy.round());
-        let tolerance = HIT_RADIUS_PX / self.editor.zoom;
+        let tolerance = HIT_RADIUS_PX / self.editor.zoom();
         self.push_undo_snapshot(index);
 
         match self.editor.pen.take() {
@@ -1926,19 +1929,11 @@ impl Workspace {
         };
         if event.modifiers.platform {
             // Cmd+wheel: zoom about the cursor.
-            let (dx, dy) = self.editor.window_to_design(event.position);
+            let local = self.editor.window_to_local(event.position);
             let factor = (delta.1 * 0.01).exp();
-            self.editor.zoom = (self.editor.zoom * factor).clamp(0.01, 100.0);
-            let origin = self.editor.bounds.lock().unwrap().origin;
-            let lx: f32 = (event.position.x - origin.x).into();
-            let ly: f32 = (event.position.y - origin.y).into();
-            self.editor.pan = (
-                lx as f64 - dx * self.editor.zoom,
-                ly as f64 + dy * self.editor.zoom,
-            );
+            self.editor.viewport.zoom_about(local, factor, 0.01, 100.0);
         } else {
-            self.editor.pan.0 += delta.0;
-            self.editor.pan.1 += delta.1;
+            self.editor.viewport.pan(delta.0, delta.1);
         }
     }
 
