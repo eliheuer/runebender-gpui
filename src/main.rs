@@ -55,6 +55,8 @@ struct GlyphEntry {
     anchors: Arc<Vec<(SharedString, f64, f64)>>,
     advance: f64,
     component_names: Arc<Vec<SharedString>>,
+    /// Mark label ("red", "green", …) from the glyph lib, if any.
+    mark: Option<SharedString>,
 }
 
 struct FontModel {
@@ -160,6 +162,7 @@ impl FontModel {
                 component_names: Arc::new(
                     glyph.components.iter().map(|c| c.base.to_string().into()).collect(),
                 ),
+                mark: t::mark_label(glyph).map(SharedString::from),
             })
             .collect();
         // Unicode order, unencoded glyphs after, each group by name.
@@ -1164,6 +1167,7 @@ impl Workspace {
             .is_some_and(|ok| !ok);
 
         let label_h = if cell >= 90.0 { 32.0 } else { label_h };
+        let mark = entry.mark.as_deref().and_then(t::mark_color);
         div()
             .id(index)
             .w(px(cell))
@@ -1175,7 +1179,7 @@ impl Workspace {
             .border_color(if selected {
                 t::cell_selected_ring()
             } else {
-                t::cell_border()
+                mark.unwrap_or_else(t::cell_border)
             })
             .rounded_md()
             .cursor_pointer()
@@ -1205,7 +1209,7 @@ impl Workspace {
                                     * Affine::scale_non_uniform(scale as f64, -(scale as f64));
                             if let Some(path) = build_fill_path(&outline, transform, bounds.origin)
                             {
-                                window.paint_path(path, t::glyph_fill());
+                                window.paint_path(path, mark.unwrap_or_else(t::glyph_fill));
                             }
                         },
                     )
@@ -1230,7 +1234,7 @@ impl Workspace {
                             .text_color(if selected {
                                 t::cell_selected_ring()
                             } else {
-                                t::text()
+                                mark.unwrap_or_else(t::text)
                             })
                             .when(incompatible, |el| {
                                 el.child(
@@ -1249,7 +1253,7 @@ impl Workspace {
                                 .text_color(if selected {
                                     t::accent()
                                 } else {
-                                    t::text_muted()
+                                    mark.unwrap_or_else(t::text_muted)
                                 })
                                 .child(unicode_label.unwrap_or_else(|| "".into())),
                         )

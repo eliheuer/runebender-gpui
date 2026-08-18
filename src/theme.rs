@@ -128,6 +128,18 @@ pub fn marquee_stroke() -> Rgba {
     c(theme().role("selection"))
 }
 
+// ---- glyph mark colors ----
+
+/// The mark label a glyph carries (label key, else snapped color).
+pub fn mark_label(glyph: &norad::Glyph) -> Option<String> {
+    theme_oklch::mark_label_for_glyph(glyph, theme())
+}
+
+/// The display color for a mark label.
+pub fn mark_color(label: &str) -> Option<Rgba> {
+    theme().mark(label).map(c)
+}
+
 // ---- anchors ----
 
 pub fn anchor() -> Rgba {
