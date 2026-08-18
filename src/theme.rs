@@ -59,3 +59,11 @@ pub fn anchor() -> Rgba {
 pub fn ghost() -> Rgba {
     rgb(0x6f9fc7)
 }
+pub fn component_fill() -> Rgba {
+    Rgba {
+        r: 0.44,
+        g: 0.62,
+        b: 0.78,
+        a: 0.22,
+    }
+}

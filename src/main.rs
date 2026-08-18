@@ -42,10 +42,16 @@ struct GlyphPoint {
 struct GlyphEntry {
     name: SharedString,
     codepoint: Option<char>,
+    /// Contours + components combined (grid, preview).
     path: Arc<BezPath>,
+    /// The glyph's own contours only (editor fill).
+    contour_path: Arc<BezPath>,
+    /// Resolved components only (editor, distinct color).
+    component_path: Arc<BezPath>,
     points: Arc<Vec<GlyphPoint>>,
     anchors: Arc<Vec<(SharedString, f64, f64)>>,
     advance: f64,
+    component_names: Arc<Vec<SharedString>>,
 }
 
 struct FontModel {
@@ -112,9 +118,14 @@ impl FontModel {
                 name: glyph.name().to_string().into(),
                 codepoint: glyph.codepoints.iter().next(),
                 path: Arc::new(glyph_path::glyph_to_bezpath(glyph, &font)),
+                contour_path: Arc::new(glyph_path::contours_to_bezpath(glyph)),
+                component_path: Arc::new(glyph_path::components_to_bezpath(glyph, &font)),
                 points: Arc::new(extract_points(glyph)),
                 anchors: Arc::new(extract_anchors(glyph)),
                 advance: glyph.width,
+                component_names: Arc::new(
+                    glyph.components.iter().map(|c| c.base.to_string().into()).collect(),
+                ),
             })
             .collect();
         // Unicode order, unencoded glyphs after, each group by name.
@@ -151,10 +162,18 @@ impl FontModel {
         };
         let glyph_advance = glyph.width;
         let path = Arc::new(glyph_path::glyph_to_bezpath(glyph, &self.font));
+        let contour_path = Arc::new(glyph_path::contours_to_bezpath(glyph));
+        let component_path = Arc::new(glyph_path::components_to_bezpath(glyph, &self.font));
+        let component_names: Arc<Vec<SharedString>> = Arc::new(
+            glyph.components.iter().map(|c| c.base.to_string().into()).collect(),
+        );
         let points = Arc::new(extract_points(glyph));
         let anchors = Arc::new(extract_anchors(glyph));
         let entry = &mut self.glyphs[glyph_index];
         entry.path = path;
+        entry.contour_path = contour_path;
+        entry.component_path = component_path;
+        entry.component_names = component_names;
         entry.points = points;
         entry.anchors = anchors;
         entry.advance = glyph_advance;
@@ -165,6 +184,7 @@ impl FontModel {
         let name = self.glyphs[glyph_index].name.to_string();
         self.font.get_glyph(name.as_str()).map(|g| GlyphSnapshot {
             contours: g.contours.clone(),
+            components: g.components.clone(),
             anchors: g.anchors.clone(),
             width: g.width,
         })
@@ -175,6 +195,7 @@ impl FontModel {
         let name = self.glyphs[glyph_index].name.to_string();
         if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
             glyph.contours = snapshot.contours;
+            glyph.components = snapshot.components;
             glyph.anchors = snapshot.anchors;
             glyph.width = snapshot.width;
             self.dirty = true;
@@ -823,6 +844,55 @@ impl FontModel {
         self.dirty = true;
     }
 
+    /// Replace a glyph's components with their resolved contours.
+    fn decompose(&mut self, glyph_index: usize) -> bool {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.get_glyph(name.as_str()) else {
+            return false;
+        };
+        if glyph.components.is_empty() {
+            return false;
+        }
+        // Resolve recursively: collect (base contours × combined affine).
+        fn collect(
+            font: &norad::Font,
+            glyph: &norad::Glyph,
+            parent: kurbo::Affine,
+            depth: u8,
+            out: &mut Vec<norad::Contour>,
+        ) {
+            if depth > 8 {
+                return;
+            }
+            for component in &glyph.components {
+                let Some(base) = font.get_glyph(&component.base) else {
+                    continue;
+                };
+                let affine = parent * glyph_path::component_affine(&component.transform);
+                for contour in &base.contours {
+                    let mut c = contour.clone();
+                    for p in c.points.iter_mut() {
+                        let q = affine * kurbo::Point::new(p.x, p.y);
+                        p.x = q.x.round();
+                        p.y = q.y.round();
+                    }
+                    out.push(c);
+                }
+                collect(font, base, affine, depth + 1, out);
+            }
+        }
+        let mut new_contours = Vec::new();
+        collect(&self.font, glyph, kurbo::Affine::IDENTITY, 0, &mut new_contours);
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return false;
+        };
+        glyph.contours.extend(new_contours);
+        glyph.components.clear();
+        self.dirty = true;
+        self.rebuild_entry(glyph_index);
+        true
+    }
+
     /// Insert a rectangle or ellipse contour spanning `rect`.
     fn add_shape_contour(&mut self, glyph_index: usize, rect: kurbo::Rect, ellipse: bool) {
         let name = self.glyphs[glyph_index].name.to_string();
@@ -1172,6 +1242,7 @@ fn build_fill_path(
 #[derive(Clone)]
 struct GlyphSnapshot {
     contours: Vec<norad::Contour>,
+    components: Vec<norad::Component>,
     anchors: Vec<norad::Anchor>,
     width: f64,
 }
@@ -1548,7 +1619,9 @@ impl Workspace {
     fn editor_view(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let font = self.font().unwrap();
         let entry = &font.glyphs[index];
-        let outline = entry.path.clone();
+        let outline = entry.contour_path.clone();
+        let component_path = entry.component_path.clone();
+        let component_names = entry.component_names.clone();
         let ghost: Option<Arc<BezPath>> = self
             .project
             .as_ref()
@@ -1756,6 +1829,15 @@ impl Workspace {
                         if let Some(path) = build_fill_path(&outline, transform, origin) {
                             window.paint_path(path, t::editor_fill());
                         }
+                        // Components: dim distinct fill, not editable
+                        // directly (Cmd+Shift+D decomposes).
+                        if !component_path.elements().is_empty() {
+                            if let Some(p) =
+                                build_fill_path(&component_path, transform, origin)
+                            {
+                                window.paint_path(p, t::component_fill());
+                            }
+                        }
                         // Interpolated instance at the axes-bar
                         // location, as a ghost outline.
                         if let Some(ghost) = &ghost {
@@ -1867,7 +1949,7 @@ impl Workspace {
                                 gpui::outline(rect, t::accent(), gpui::BorderStyle::Solid),
                             );
                         }
-                        let _ = zoom;
+                        let _ = (zoom, &component_names);
                     },
                 )
                 .size_full(),
@@ -2705,6 +2787,18 @@ impl Workspace {
                         0 => String::new(),
                         n => format!(" · {n} selected"),
                     };
+                    let comps = if g.component_names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " · components: {} (Cmd+Shift+D decomposes)",
+                            g.component_names
+                                .iter()
+                                .map(|n| n.as_ref())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    };
                     let tool = match self.editor.tool {
                         Tool::Select => "V select",
                         Tool::Pen => "P pen: click adds, drag curves, click start closes, Enter ends",
@@ -2727,7 +2821,7 @@ impl Workspace {
                                 "dx {dx:.0} · dy {dy:.0} · length {len:.1} · angle {angle:.1}°"
                             )));
                     }
-                    format!("{}{} · {tool} · Cmd+Z undo · Cmd+S saves · Esc", g.name, sel).into()
+                    format!("{}{}{} · {tool} · Cmd+Z undo · Cmd+S saves · Esc", g.name, sel, comps).into()
                 }
                 (_, Some(i), Some(font)) => {
                     let g = &font.glyphs[i];
@@ -3016,6 +3110,17 @@ impl Workspace {
                     font.set_kern_pair(&l, &r, value);
                 }
                 true
+            }
+            ("d", true) if in_editor && shift => {
+                let Mode::Editor(index) = self.mode else {
+                    return false;
+                };
+                self.push_undo_snapshot(index);
+                let changed = self.font_mut().is_some_and(|f| f.decompose(index));
+                if !changed {
+                    self.editor.undo.pop();
+                }
+                changed
             }
             ("o", true) => {
                 self.open_dialog(cx);
@@ -3711,6 +3816,30 @@ mod tests {
         project.masters[0].add_shape_contour(idx, rect, false);
         project.recheck_compat("n");
         assert_eq!(project.compat.get("n"), Some(&false));
+    }
+
+    #[test]
+    fn decompose_components() {
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
+        let index = model
+            .glyphs
+            .iter()
+            .position(|g| !g.component_names.is_empty())
+            .expect("demo font has composite glyphs");
+        use kurbo::Shape;
+        let area_before = model.glyphs[index].path.area().abs();
+        let contours_before = model.snapshot_contours(index).unwrap().contours.len();
+        assert!(model.decompose(index));
+        let snap = model.snapshot_contours(index).unwrap();
+        assert!(snap.components.is_empty());
+        assert!(snap.contours.len() > contours_before);
+        // The rendered ink is essentially unchanged (integer rounding).
+        let area_after = model.glyphs[index].path.area().abs();
+        assert!(
+            (area_before - area_after).abs() / area_before.max(1.0) < 0.02,
+            "area changed too much: {area_before} -> {area_after}"
+        );
+        assert!(model.glyphs[index].component_names.is_empty());
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).

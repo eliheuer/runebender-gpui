@@ -18,6 +18,27 @@ pub fn glyph_to_bezpath(glyph: &Glyph, font: &Font) -> BezPath {
     path
 }
 
+/// Only the glyph's own contours (no components).
+pub fn contours_to_bezpath(glyph: &Glyph) -> BezPath {
+    let mut path = BezPath::new();
+    for contour in &glyph.contours {
+        append_contour(&mut path, contour);
+    }
+    path
+}
+
+/// Only the glyph's components, recursively resolved.
+pub fn components_to_bezpath(glyph: &Glyph, font: &Font) -> BezPath {
+    let mut path = BezPath::new();
+    append_components(&mut path, glyph, font, Affine::IDENTITY, 0);
+    path
+}
+
+/// The affine of a norad component transform.
+pub fn component_affine(t: &norad::AffineTransform) -> Affine {
+    Affine::new([t.x_scale, t.xy_scale, t.yx_scale, t.y_scale, t.x_offset, t.y_offset])
+}
+
 fn append_components(
     path: &mut BezPath,
     glyph: &Glyph,
