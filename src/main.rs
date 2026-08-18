@@ -823,6 +823,55 @@ impl FontModel {
         self.dirty = true;
     }
 
+    /// Insert a rectangle or ellipse contour spanning `rect`.
+    fn add_shape_contour(&mut self, glyph_index: usize, rect: kurbo::Rect, ellipse: bool) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return;
+        };
+        let on = |x: f64, y: f64, smooth: bool| {
+            norad::ContourPoint::new(x, y, norad::PointType::Curve, smooth, None, None)
+        };
+        let line = |x: f64, y: f64| {
+            norad::ContourPoint::new(x, y, norad::PointType::Line, false, None, None)
+        };
+        let off = |x: f64, y: f64| {
+            norad::ContourPoint::new(x, y, norad::PointType::OffCurve, false, None, None)
+        };
+        let points = if ellipse {
+            let (cx_, cy_) = (rect.center().x, rect.center().y);
+            let (rx, ry) = (rect.width() / 2.0, rect.height() / 2.0);
+            let (kx, ky) = (rx * 0.5522847498, ry * 0.5522847498);
+            let r = |v: f64| v.round();
+            // Four cubic quarters, wrap-around controls precede the
+            // first on-curve per UFO closed-contour convention.
+            vec![
+                on(r(cx_ + rx), r(cy_), true), // right
+                off(r(cx_ + rx), r(cy_ + ky)),
+                off(r(cx_ + kx), r(cy_ + ry)),
+                on(r(cx_), r(cy_ + ry), true), // top
+                off(r(cx_ - kx), r(cy_ + ry)),
+                off(r(cx_ - rx), r(cy_ + ky)),
+                on(r(cx_ - rx), r(cy_), true), // left
+                off(r(cx_ - rx), r(cy_ - ky)),
+                off(r(cx_ - kx), r(cy_ - ry)),
+                on(r(cx_), r(cy_ - ry), true), // bottom
+                off(r(cx_ + kx), r(cy_ - ry)),
+                off(r(cx_ + rx), r(cy_ - ky)),
+            ]
+        } else {
+            vec![
+                line(rect.x0.round(), rect.y0.round()),
+                line(rect.x1.round(), rect.y0.round()),
+                line(rect.x1.round(), rect.y1.round()),
+                line(rect.x0.round(), rect.y1.round()),
+            ]
+        };
+        glyph.contours.push(norad::Contour::new(points, None));
+        self.dirty = true;
+        self.rebuild_entry(glyph_index);
+    }
+
     fn save(&mut self) -> Result<(), norad::error::FontWriteError> {
         self.font.save(&self.source_path)?;
         self.dirty = false;
@@ -1092,6 +1141,8 @@ enum CurveOp {
 enum Tool {
     Select,
     Pen,
+    Shapes,
+    Measure,
 }
 
 /// Pen-tool drawing state: the open contour and the outgoing handle
@@ -1123,6 +1174,16 @@ enum Drag {
         start: (f64, f64),
         orig: (f64, f64),
     },
+    /// Dragging out a rectangle/ellipse (shapes tool).
+    Shape {
+        start: (f64, f64),
+        current: (f64, f64),
+    },
+    /// Measuring (measure tool).
+    Measure {
+        start: (f64, f64),
+        current: (f64, f64),
+    },
 }
 
 /// Editor viewport and interaction state. `zoom` is pixels per font
@@ -1134,6 +1195,8 @@ struct EditorState {
     initialized: bool,
     tool: Tool,
     pen: Option<PenState>,
+    /// Shapes tool draws ellipses instead of rectangles.
+    shape_ellipse: bool,
     selected: std::collections::HashSet<(usize, usize)>,
     selected_anchor: Option<usize>,
     /// Last cursor position in design space (for A = add anchor).
@@ -1155,6 +1218,7 @@ impl EditorState {
             initialized: false,
             tool: Tool::Select,
             pen: None,
+            shape_ellipse: false,
             selected: std::collections::HashSet::new(),
             selected_anchor: None,
             cursor: (0.0, 0.0),
@@ -1431,6 +1495,16 @@ impl Workspace {
             Some(Drag::Marquee { start, current }) => Some((*start, *current)),
             _ => None,
         };
+        let shape_preview = match &self.editor.drag {
+            Some(Drag::Shape { start, current }) => {
+                Some((*start, *current, self.editor.shape_ellipse))
+            }
+            _ => None,
+        };
+        let measure_line = match &self.editor.drag {
+            Some(Drag::Measure { start, current }) => Some((*start, *current)),
+            _ => None,
+        };
         let bounds_slot = self.editor.bounds.clone();
         let needs_fit = !self.editor.initialized;
 
@@ -1485,6 +1559,30 @@ impl Workspace {
                             cx.notify();
                         },
                     )))
+                    .child(
+                        tool_button(
+                            "tool-shapes",
+                            if self.editor.shape_ellipse { "Ellipse" } else { "Rect" },
+                            Tool::Shapes,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if this.editor.tool == Tool::Shapes {
+                                this.editor.shape_ellipse = !this.editor.shape_ellipse;
+                            }
+                            this.pen_finish();
+                            this.editor.tool = Tool::Shapes;
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        tool_button("tool-measure", "Measure", Tool::Measure).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.pen_finish();
+                                this.editor.tool = Tool::Measure;
+                                cx.notify();
+                            }),
+                        ),
+                    )
                     .child(div().w_2())
                     .child(op_button("op-harmonize", "Harmonize").on_click(cx.listener(
                         |this, _, _, cx| {
@@ -1651,6 +1749,38 @@ impl Workspace {
                             }
                         }
 
+                        // Shapes-tool live preview.
+                        if let Some((a, b, ellipse)) = shape_preview {
+                            use kurbo::Shape as _;
+                            let rect = kurbo::Rect::from_points(
+                                kurbo::Point::new(a.0, a.1),
+                                kurbo::Point::new(b.0, b.1),
+                            );
+                            let shape: BezPath = if ellipse {
+                                kurbo::Ellipse::from_rect(rect).to_path(0.1)
+                            } else {
+                                rect.to_path(0.1)
+                            };
+                            if let Some(p) = build_path(
+                                &shape,
+                                transform,
+                                origin,
+                                PathBuilder::stroke(px(1.0)),
+                            ) {
+                                window.paint_path(p, t::accent());
+                            }
+                        }
+                        // Measure-tool line.
+                        if let Some((a, b)) = measure_line {
+                            let mut pb = PathBuilder::stroke(px(1.0));
+                            let pa = to_screen(a.0, a.1);
+                            let pbp = to_screen(b.0, b.1);
+                            pb.move_to(pa);
+                            pb.line_to(pbp);
+                            if let Ok(p) = pb.build() {
+                                window.paint_path(p, t::accent());
+                            }
+                        }
                         // Marquee rectangle.
                         if let Some((a, b)) = marquee {
                             let pa = to_screen(a.0, a.1);
@@ -1693,6 +1823,21 @@ impl Workspace {
         };
         if self.editor.tool == Tool::Pen {
             self.pen_mouse_down(index, pos);
+            return;
+        }
+        if matches!(self.editor.tool, Tool::Shapes | Tool::Measure) {
+            let (dx, dy) = self.editor.window_to_design(pos);
+            self.editor.drag = Some(if self.editor.tool == Tool::Shapes {
+                Drag::Shape {
+                    start: (dx, dy),
+                    current: (dx, dy),
+                }
+            } else {
+                Drag::Measure {
+                    start: (dx, dy),
+                    current: (dx, dy),
+                }
+            });
             return;
         }
         let Some(font) = self.font() else {
@@ -1818,7 +1963,9 @@ impl Workspace {
                 }
                 false
             }
-            Some(Drag::Marquee { current, .. }) => {
+            Some(Drag::Marquee { current, .. })
+            | Some(Drag::Shape { current, .. })
+            | Some(Drag::Measure { current, .. }) => {
                 *current = (dx, dy);
                 true
             }
@@ -1837,6 +1984,25 @@ impl Workspace {
             self.editor.drag = None;
             return;
         };
+        if let Some(Drag::Shape { start, current }) = self.editor.drag.as_ref() {
+            let rect = kurbo::Rect::from_points(
+                kurbo::Point::new(start.0, start.1),
+                kurbo::Point::new(current.0, current.1),
+            );
+            self.editor.drag = None;
+            if rect.width() >= 2.0 && rect.height() >= 2.0 {
+                self.push_undo_snapshot(index);
+                let ellipse = self.editor.shape_ellipse;
+                if let Some(font) = self.font_mut() {
+                    font.add_shape_contour(index, rect, ellipse);
+                }
+            }
+            return;
+        }
+        if matches!(self.editor.drag, Some(Drag::Measure { .. })) {
+            self.editor.drag = None;
+            return;
+        }
         if let Some(Drag::Marquee { start, current }) = self.editor.drag.take() {
             let (x0, x1) = (start.0.min(current.0), start.0.max(current.0));
             let (y0, y1) = (start.1.min(current.1), start.1.max(current.1));
@@ -2469,7 +2635,25 @@ impl Workspace {
                     let tool = match self.editor.tool {
                         Tool::Select => "V select",
                         Tool::Pen => "P pen: click adds, drag curves, click start closes, Enter ends",
+                        Tool::Shapes => "R shapes: drag draws (press again for ellipse)",
+                        Tool::Measure => "M measure: drag to read distances",
                     };
+                    if let Some(Drag::Measure { start, current }) = &self.editor.drag {
+                        let (dx, dy) = (current.0 - start.0, current.1 - start.1);
+                        let len = (dx * dx + dy * dy).sqrt();
+                        let angle = dy.atan2(dx).to_degrees();
+                        return div()
+                            .px_4()
+                            .py_1()
+                            .bg(t::panel_bg())
+                            .border_t_1()
+                            .border_color(t::cell_border())
+                            .text_sm()
+                            .text_color(t::text_muted())
+                            .child(SharedString::from(format!(
+                                "dx {dx:.0} · dy {dy:.0} · length {len:.1} · angle {angle:.1}°"
+                            )));
+                    }
                     format!("{}{} · {tool} · Cmd+Z undo · Cmd+S saves · Esc", g.name, sel).into()
                 }
                 (_, Some(i), Some(font)) => {
@@ -2660,6 +2844,19 @@ impl Workspace {
             }
             ("p", false) if in_editor => {
                 self.editor.tool = Tool::Pen;
+                true
+            }
+            ("r", false) if in_editor => {
+                if self.editor.tool == Tool::Shapes {
+                    self.editor.shape_ellipse = !self.editor.shape_ellipse;
+                }
+                self.pen_finish();
+                self.editor.tool = Tool::Shapes;
+                true
+            }
+            ("m", false) if in_editor => {
+                self.pen_finish();
+                self.editor.tool = Tool::Measure;
                 true
             }
             ("z", true) if in_editor => {
@@ -3389,6 +3586,32 @@ mod tests {
             project.location.insert(name.clone(), 0.0);
         }
         assert!(project.interpolated_glyph("n").is_none());
+    }
+
+    #[test]
+    fn shape_contours() {
+        let mut model = FontModel::load(&test_ufo_path()).expect("load");
+        let index = model
+            .glyphs
+            .iter()
+            .position(|g| g.name.as_ref() == "space")
+            .unwrap();
+        let base = model.snapshot_contours(index).unwrap().contours.len();
+        let rect = kurbo::Rect::new(10.0, 20.0, 110.0, 220.0);
+        model.add_shape_contour(index, rect, false);
+        model.add_shape_contour(index, rect, true);
+        let contours = model.snapshot_contours(index).unwrap().contours;
+        assert_eq!(contours.len(), base + 2);
+        let square = &contours[base];
+        assert_eq!(square.points.len(), 4);
+        assert!(square.is_closed());
+        let circle = &contours[base + 1];
+        assert_eq!(circle.points.len(), 12); // 4 on + 8 off
+        assert!(circle.is_closed());
+        // Ellipse extremes touch the rect edges.
+        let xs: Vec<f64> = circle.points.iter().map(|p| p.x).collect();
+        assert_eq!(xs.iter().cloned().fold(f64::MAX, f64::min), 10.0);
+        assert_eq!(xs.iter().cloned().fold(f64::MIN, f64::max), 110.0);
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).
