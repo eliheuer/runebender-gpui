@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    canvas, div, prelude::*, px, size, App, Application, Bounds, Context, MouseButton,
+    canvas, div, prelude::*, px, size, App, Bounds, Context, MouseButton,
     PathBuilder, Point, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use kurbo::{Affine, BezPath, PathEl};
@@ -144,6 +144,45 @@ impl FontModel {
         entry.points = points;
     }
 
+    /// Clone a glyph's contours for undo snapshots.
+    fn snapshot_contours(&self, glyph_index: usize) -> Option<Vec<norad::Contour>> {
+        let name = self.glyphs[glyph_index].name.to_string();
+        self.font
+            .get_glyph(name.as_str())
+            .map(|g| g.contours.clone())
+    }
+
+    /// Replace a glyph's contours (undo/redo) and rebuild caches.
+    fn restore_contours(&mut self, glyph_index: usize, contours: Vec<norad::Contour>) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        if let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
+            glyph.contours = contours;
+            self.dirty = true;
+        }
+        self.rebuild_entry(glyph_index);
+    }
+
+    /// Set several points at once (multi-point drag): each entry is
+    /// ((contour, index), new position).
+    fn set_points(&mut self, glyph_index: usize, updates: &[((usize, usize), (f64, f64))]) {
+        let name = self.glyphs[glyph_index].name.to_string();
+        let Some(glyph) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) else {
+            return;
+        };
+        for ((contour, index), (x, y)) in updates {
+            if let Some(point) = glyph
+                .contours
+                .get_mut(*contour)
+                .and_then(|c| c.points.get_mut(*index))
+            {
+                point.x = *x;
+                point.y = *y;
+            }
+        }
+        self.dirty = true;
+        self.rebuild_entry(glyph_index);
+    }
+
     fn save(&mut self) -> Result<(), norad::error::FontWriteError> {
         self.font.save(&self.source_path)?;
         self.dirty = false;
@@ -193,6 +232,21 @@ fn build_fill_path(
 // EDITOR VIEWPORT
 // ============================================================================
 
+/// An in-progress mouse gesture on the editor canvas.
+enum Drag {
+    /// Moving the selected points: gesture start in design space and
+    /// each selected point's original position.
+    Points {
+        start: (f64, f64),
+        originals: Vec<((usize, usize), (f64, f64))>,
+    },
+    /// Rubber-band selection rectangle, in design space.
+    Marquee {
+        start: (f64, f64),
+        current: (f64, f64),
+    },
+}
+
 /// Editor viewport and interaction state. `zoom` is pixels per font
 /// unit; `pan` is the local-pixel position of the design origin
 /// (glyph left sidebearing at baseline).
@@ -200,8 +254,11 @@ struct EditorState {
     zoom: f64,
     pan: (f64, f64),
     initialized: bool,
-    selected: Option<(usize, usize)>,
-    dragging: bool,
+    selected: std::collections::HashSet<(usize, usize)>,
+    drag: Option<Drag>,
+    /// Undo/redo stacks of contour snapshots for the open glyph.
+    undo: Vec<Vec<norad::Contour>>,
+    redo: Vec<Vec<norad::Contour>>,
     /// Canvas bounds in window coordinates, written during paint so
     /// mouse handlers can map window→design coordinates.
     bounds: Arc<Mutex<Bounds<gpui::Pixels>>>,
@@ -213,8 +270,10 @@ impl EditorState {
             zoom: 1.0,
             pan: (0.0, 0.0),
             initialized: false,
-            selected: None,
-            dragging: false,
+            selected: std::collections::HashSet::new(),
+            drag: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
             bounds: Arc::new(Mutex::new(Bounds::default())),
         }
     }
@@ -270,6 +329,9 @@ struct Workspace {
     editor: EditorState,
     focus_handle: gpui::FocusHandle,
     status_note: Option<SharedString>,
+    search: gpui::Entity<gpui_component::input::InputState>,
+    search_query: String,
+    _subscriptions: Vec<gpui::Subscription>,
 }
 
 const CELL: f32 = 96.0;
@@ -279,8 +341,10 @@ impl Workspace {
     fn open_editor(&mut self, index: usize) {
         self.mode = Mode::Editor(index);
         self.editor.initialized = false;
-        self.editor.selected = None;
-        self.editor.dragging = false;
+        self.editor.selected.clear();
+        self.editor.drag = None;
+        self.editor.undo.clear();
+        self.editor.redo.clear();
     }
 
     fn glyph_cell(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -359,7 +423,11 @@ impl Workspace {
 
         let transform = self.editor.transform();
         let zoom = self.editor.zoom;
-        let selected_point = self.editor.selected;
+        let selected_points = self.editor.selected.clone();
+        let marquee = match &self.editor.drag {
+            Some(Drag::Marquee { start, current }) => Some((*start, *current)),
+            _ => None,
+        };
         let bounds_slot = self.editor.bounds.clone();
         let needs_fit = !self.editor.initialized;
 
@@ -368,7 +436,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    this.editor_mouse_down(event.position);
+                    this.editor_mouse_down(event.position, event.modifiers.shift);
                     cx.notify();
                 }),
             )
@@ -382,7 +450,7 @@ impl Workspace {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(move |this, _: &gpui::MouseUpEvent, _, cx| {
-                    this.editor.dragging = false;
+                    this.editor_mouse_up();
                     cx.notify();
                 }),
             )
@@ -454,7 +522,7 @@ impl Workspace {
                         for p in points.iter() {
                             let c = to_screen(p.x, p.y);
                             let is_selected =
-                                selected_point == Some((p.contour, p.index));
+                                selected_points.contains(&(p.contour, p.index));
                             let r = if is_selected {
                                 px(4.5)
                             } else if p.on_curve {
@@ -476,6 +544,19 @@ impl Workspace {
                                 ),
                                 color,
                             ));
+                        }
+                        // Marquee rectangle.
+                        if let Some((a, b)) = marquee {
+                            let pa = to_screen(a.0, a.1);
+                            let pb = to_screen(b.0, b.1);
+                            let rect = Bounds::from_corners(
+                                gpui::point(pa.x.min(pb.x), pa.y.min(pb.y)),
+                                gpui::point(pa.x.max(pb.x), pa.y.max(pb.y)),
+                            );
+                            window.paint_quad(gpui::fill(rect, t::marquee_fill()));
+                            window.paint_quad(
+                                gpui::outline(rect, t::accent(), gpui::BorderStyle::Solid),
+                            );
                         }
                         let _ = zoom;
                     },
@@ -499,7 +580,7 @@ impl Workspace {
         self.editor.fit(advance, asc, desc);
     }
 
-    fn editor_mouse_down(&mut self, pos: Point<gpui::Pixels>) {
+    fn editor_mouse_down(&mut self, pos: Point<gpui::Pixels>, shift: bool) {
         self.ensure_editor_fit();
         let Mode::Editor(index) = self.mode else {
             return;
@@ -519,26 +600,149 @@ impl Workspace {
             .filter(|(dist, _)| *dist <= tolerance)
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, id)| id);
-        self.editor.selected = hit;
-        self.editor.dragging = hit.is_some();
+
+        match hit {
+            Some(id) => {
+                if shift {
+                    if !self.editor.selected.remove(&id) {
+                        self.editor.selected.insert(id);
+                    }
+                } else if !self.editor.selected.contains(&id) {
+                    self.editor.selected.clear();
+                    self.editor.selected.insert(id);
+                }
+                if self.editor.selected.contains(&id) {
+                    let originals: Vec<((usize, usize), (f64, f64))> = font.glyphs[index]
+                        .points
+                        .iter()
+                        .filter(|p| self.editor.selected.contains(&(p.contour, p.index)))
+                        .map(|p| ((p.contour, p.index), (p.x, p.y)))
+                        .collect();
+                    self.push_undo_snapshot(index);
+                    self.editor.drag = Some(Drag::Points {
+                        start: (dx, dy),
+                        originals,
+                    });
+                }
+            }
+            None => {
+                if !shift {
+                    self.editor.selected.clear();
+                }
+                self.editor.drag = Some(Drag::Marquee {
+                    start: (dx, dy),
+                    current: (dx, dy),
+                });
+            }
+        }
     }
 
     fn editor_mouse_drag(&mut self, pos: Point<gpui::Pixels>) -> bool {
-        if !self.editor.dragging {
-            return false;
-        }
-        let (Mode::Editor(index), Some((contour, point_index))) =
-            (&self.mode, self.editor.selected)
-        else {
+        let Mode::Editor(index) = self.mode else {
             return false;
         };
-        let index = *index;
         let (dx, dy) = self.editor.window_to_design(pos);
-        if let Some(font) = self.font.as_mut() {
-            font.move_point_to(index, contour, point_index, dx.round(), dy.round());
-            return true;
+        match &mut self.editor.drag {
+            Some(Drag::Points { start, originals }) => {
+                let (sx, sy) = *start;
+                let updates: Vec<((usize, usize), (f64, f64))> = originals
+                    .iter()
+                    .map(|(id, (ox, oy))| {
+                        (*id, ((ox + dx - sx).round(), (oy + dy - sy).round()))
+                    })
+                    .collect();
+                if let Some(font) = self.font.as_mut() {
+                    font.set_points(index, &updates);
+                    return true;
+                }
+                false
+            }
+            Some(Drag::Marquee { current, .. }) => {
+                *current = (dx, dy);
+                true
+            }
+            None => false,
         }
-        false
+    }
+
+    fn editor_mouse_up(&mut self) {
+        let Mode::Editor(index) = self.mode else {
+            self.editor.drag = None;
+            return;
+        };
+        if let Some(Drag::Marquee { start, current }) = self.editor.drag.take() {
+            let (x0, x1) = (start.0.min(current.0), start.0.max(current.0));
+            let (y0, y1) = (start.1.min(current.1), start.1.max(current.1));
+            if let Some(font) = self.font.as_ref() {
+                for p in font.glyphs[index].points.iter() {
+                    if p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1 {
+                        self.editor.selected.insert((p.contour, p.index));
+                    }
+                }
+            }
+        }
+        self.editor.drag = None;
+    }
+
+    /// Push the open glyph's contours onto the undo stack and clear
+    /// the redo tail. Called at the start of every mutating gesture.
+    fn push_undo_snapshot(&mut self, index: usize) {
+        if let Some(snapshot) = self.font.as_ref().and_then(|f| f.snapshot_contours(index)) {
+            self.editor.undo.push(snapshot);
+            self.editor.redo.clear();
+        }
+    }
+
+    fn undo(&mut self) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        let Some(previous) = self.editor.undo.pop() else {
+            return;
+        };
+        if let Some(font) = self.font.as_mut() {
+            if let Some(current) = font.snapshot_contours(index) {
+                self.editor.redo.push(current);
+            }
+            font.restore_contours(index, previous);
+        }
+    }
+
+    fn redo(&mut self) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        let Some(next) = self.editor.redo.pop() else {
+            return;
+        };
+        if let Some(font) = self.font.as_mut() {
+            if let Some(current) = font.snapshot_contours(index) {
+                self.editor.undo.push(current);
+            }
+            font.restore_contours(index, next);
+        }
+    }
+
+    /// Nudge the selected points by (dx, dy) design units.
+    fn nudge_selection(&mut self, dx: f64, dy: f64) -> bool {
+        let Mode::Editor(index) = self.mode else {
+            return false;
+        };
+        if self.editor.selected.is_empty() {
+            return false;
+        }
+        self.push_undo_snapshot(index);
+        let Some(font) = self.font.as_mut() else {
+            return false;
+        };
+        let updates: Vec<((usize, usize), (f64, f64))> = font.glyphs[index]
+            .points
+            .iter()
+            .filter(|p| self.editor.selected.contains(&(p.contour, p.index)))
+            .map(|p| ((p.contour, p.index), (p.x + dx, p.y + dy)))
+            .collect();
+        font.set_points(index, &updates);
+        true
     }
 
     fn editor_scroll(&mut self, event: &gpui::ScrollWheelEvent) {
@@ -604,12 +808,12 @@ impl Workspace {
             match (&self.mode, self.selected, &self.font) {
                 (Mode::Editor(i), _, Some(font)) => {
                     let g = &font.glyphs[*i];
-                    let sel = match self.editor.selected {
-                        Some((c, p)) => format!(" · point {c}:{p}"),
-                        None => String::new(),
+                    let sel = match self.editor.selected.len() {
+                        0 => String::new(),
+                        n => format!(" · {n} selected"),
                     };
                     format!(
-                        "{}{} · wheel pans, Cmd+wheel zooms, drag points, Cmd+S saves, Esc exits",
+                        "{}{} · drag points or marquee, arrows nudge, Cmd+Z undo, Cmd+S saves, Esc exits",
                         g.name, sel
                     )
                     .into()
@@ -643,12 +847,27 @@ impl Workspace {
     fn handle_key(&mut self, event: &gpui::KeyDownEvent) -> bool {
         let key = event.keystroke.key.as_str();
         let cmd = event.keystroke.modifiers.platform;
+        let shift = event.keystroke.modifiers.shift;
+        let in_editor = matches!(self.mode, Mode::Editor(_));
+        let step = if shift { 10.0 } else { 1.0 };
         match (key, cmd) {
-            ("escape", _) if matches!(self.mode, Mode::Editor(_)) => {
+            ("escape", _) if in_editor => {
                 self.mode = Mode::Grid;
                 self.status_note = None;
                 true
             }
+            ("z", true) if in_editor => {
+                if shift {
+                    self.redo();
+                } else {
+                    self.undo();
+                }
+                true
+            }
+            ("left", false) if in_editor => self.nudge_selection(-step, 0.0),
+            ("right", false) if in_editor => self.nudge_selection(step, 0.0),
+            ("up", false) if in_editor => self.nudge_selection(0.0, step),
+            ("down", false) if in_editor => self.nudge_selection(0.0, -step),
             ("s", true) => {
                 if let Some(font) = self.font.as_mut() {
                     self.status_note = Some(match font.save() {
@@ -670,26 +889,46 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // No text inputs yet, so the workspace can hold focus for
-        // keyboard shortcuts unconditionally.
-        window.focus(&self.focus_handle);
+        // Claim focus only when nothing else has it, so text inputs
+        // (the search box) keep theirs while focused.
+        if window.focused(cx).is_none() {
+            window.focus(&self.focus_handle, cx);
+        }
 
         let content = match self.mode {
             Mode::Editor(index) if self.font.is_some() => {
                 self.editor_view(index, cx).into_any_element()
             }
             _ => {
+                let query = self.search_query.clone();
                 let grid: Vec<_> = match &self.font {
                     Some(font) => (0..font.glyphs.len())
+                        .filter(|&i| {
+                            query.is_empty()
+                                || font.glyphs[i].name.to_lowercase().contains(&query)
+                        })
                         .map(|i| self.glyph_cell(i, cx).into_any_element())
                         .collect(),
                     None => Vec::new(),
                 };
                 div()
-                    .id("glyph-grid")
+                    .flex()
+                    .flex_col()
                     .flex_1()
-                    .overflow_y_scroll()
-                    .child(div().flex().flex_wrap().gap_2().p_4().children(grid))
+                    .child(
+                        div()
+                            .px_4()
+                            .py_2()
+                            .w(px(320.0))
+                            .child(gpui_component::input::Input::new(&self.search)),
+                    )
+                    .child(
+                        div()
+                            .id("glyph-grid")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .child(div().flex().flex_wrap().gap_2().p_4().children(grid)),
+                    )
                     .into_any_element()
             }
         };
@@ -742,7 +981,10 @@ fn main() {
         .map(Mode::Editor)
         .unwrap_or(Mode::Grid);
 
-    Application::new().run(move |cx: &mut App| {
+    gpui_platform::application()
+        .with_assets(gpui_component_assets::Assets)
+        .run(move |cx: &mut App| {
+        gpui_component::init(cx);
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
             WindowOptions {
@@ -753,16 +995,40 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| {
-                cx.new(|cx| Workspace {
-                    font,
-                    load_error,
-                    selected: None,
-                    mode: start_mode,
-                    editor: EditorState::new(),
-                    focus_handle: cx.focus_handle(),
-                    status_note: None,
-                })
+            |window, cx| {
+                let workspace = cx.new(|cx| {
+                    let search = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("Search glyphs")
+                    });
+                    let subscription = cx.subscribe_in(&search, window, {
+                        let search = search.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _window,
+                              cx| {
+                            if matches!(ev, gpui_component::input::InputEvent::Change) {
+                                this.search_query =
+                                    search.read(cx).value().to_string().to_lowercase();
+                                cx.notify();
+                            }
+                        }
+                    });
+                    Workspace {
+                        font,
+                        load_error,
+                        selected: None,
+                        mode: start_mode,
+                        editor: EditorState::new(),
+                        focus_handle: cx.focus_handle(),
+                        status_note: None,
+                        search,
+                        search_query: String::new(),
+                        _subscriptions: vec![subscription],
+                    }
+                });
+                cx.new(|cx| gpui_component::Root::new(workspace, window, cx))
             },
         )
         .unwrap();
@@ -813,6 +1079,23 @@ mod tests {
         assert_eq!(p.x, before.x + 10.0);
         assert_eq!(p.y, before.y + 5.0);
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn snapshot_restore_roundtrip() {
+        let mut model = FontModel::load(&default_font_path()).expect("load");
+        let index = model
+            .glyphs
+            .iter()
+            .position(|g| g.name.as_ref() == "a")
+            .unwrap();
+        let before = model.snapshot_contours(index).unwrap();
+        let p0 = model.glyphs[index].points[0];
+        model.set_points(index, &[((p0.contour, p0.index), (p0.x + 25.0, p0.y))]);
+        assert_ne!(model.glyphs[index].points[0].x, p0.x);
+        model.restore_contours(index, before);
+        assert_eq!(model.glyphs[index].points[0].x, p0.x);
+        assert_eq!(model.glyphs[index].points[0].y, p0.y);
     }
 
     /// Minimal recursive dir copy (a UFO is a directory).

@@ -45,3 +45,11 @@ pub fn editor_fill() -> Rgba {
         a: 0.08,
     }
 }
+pub fn marquee_fill() -> Rgba {
+    Rgba {
+        r: 0.85,
+        g: 0.57,
+        b: 0.24,
+        a: 0.10,
+    }
+}
