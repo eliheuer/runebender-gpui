@@ -36,6 +36,8 @@ struct GlyphPoint {
     y: f64,
     on_curve: bool,
     smooth: bool,
+    /// Point in a hyperbezier contour (drawn in its own color).
+    hyper: bool,
     contour: usize,
     index: usize,
 }
@@ -197,11 +199,13 @@ fn extract_points(glyph: &norad::Glyph) -> Vec<GlyphPoint> {
         .iter()
         .enumerate()
         .flat_map(|(ci, c)| {
+            let hyper = runebender_core::model::workspace::norad_contour_is_hyper(c);
             c.points.iter().enumerate().map(move |(pi, p)| GlyphPoint {
                 x: p.x,
                 y: p.y,
                 on_curve: p.typ != norad::PointType::OffCurve,
                 smooth: p.smooth,
+                hyper,
                 contour: ci,
                 index: pi,
             })
@@ -363,6 +367,31 @@ impl FontModel {
     }
 
     /// Start a new open contour at (x, y). Returns its index.
+    fn start_hyper_contour(&mut self, glyph_index: usize, x: f64, y: f64) -> Option<usize> {
+        self.edit_glyph(glyph_index, |g| {
+            runebender_core::glyph_ops::start_hyper_contour(g, x, y)
+        })
+    }
+
+    fn append_hyper_point(
+        &mut self,
+        glyph_index: usize,
+        contour: usize,
+        x: f64,
+        y: f64,
+        corner: bool,
+    ) {
+        self.edit_glyph(glyph_index, |g| {
+            runebender_core::glyph_ops::append_hyper_point(g, contour, x, y, corner)
+        });
+    }
+
+    fn close_hyper_contour(&mut self, glyph_index: usize, contour: usize) {
+        self.edit_glyph(glyph_index, |g| {
+            runebender_core::glyph_ops::close_hyper_contour(g, contour)
+        });
+    }
+
     fn start_contour(&mut self, glyph_index: usize, x: f64, y: f64) -> Option<usize> {
         self.edit_glyph(glyph_index, |g| ops::start_contour(g, x, y))
     }
@@ -1048,6 +1077,7 @@ enum Tool {
     Text,
     Knife,
     Preview,
+    HyperPen,
     Measure,
 }
 
@@ -1105,6 +1135,8 @@ struct EditorState {
     sort_offset: (f64, f64),
     /// The tool to return to when space-hold preview ends.
     previous_tool: Tool,
+    /// The hyper pen's open contour, if drawing.
+    hyper_contour: Option<usize>,
     viewport: ViewPort,
     initialized: bool,
     tool: Tool,
@@ -1129,6 +1161,7 @@ impl EditorState {
         Self {
             sort_offset: (0.0, 0.0),
             previous_tool: Tool::Select,
+            hyper_contour: None,
             viewport: ViewPort::new(),
             initialized: false,
             tool: Tool::Select,
@@ -1308,6 +1341,7 @@ impl Workspace {
         self.editor.redo.clear();
         self.editor.tool = Tool::Select;
         self.editor.pen = None;
+        self.editor.hyper_contour = None;
         self.editor.selected_anchor = None;
     }
 
@@ -1817,6 +1851,14 @@ impl Workspace {
                         cx.notify();
                     }),
                 ),
+            )
+            .child(
+                Self::icon_tile("tool-hyperpen", "hyperpen", tool == Tool::HyperPen)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.pen_finish();
+                        this.editor.tool = Tool::HyperPen;
+                        cx.notify();
+                    })),
             )
             .child(
                 Self::icon_tile("tool-preview", "preview", tool == Tool::Preview)
@@ -2412,6 +2454,8 @@ impl Workspace {
                             // selected points fill solid yellow.
                             let (ring, inner) = if is_selected {
                                 (t::point_selected(), t::point_selected())
+                            } else if p.hyper {
+                                (t::point_hyper_outer(), t::point_inner())
                             } else if !p.on_curve {
                                 (t::point_offcurve_outer(), t::point_inner())
                             } else if p.smooth {
@@ -2552,6 +2596,10 @@ impl Workspace {
                 start: (dx, dy),
                 current: (dx, dy),
             });
+            return;
+        }
+        if self.editor.tool == Tool::HyperPen {
+            self.hyper_pen_mouse_down(index, pos, shift);
             return;
         }
         if self.editor.tool == Tool::Pen {
@@ -2884,7 +2932,65 @@ impl Workspace {
     }
 
     /// Finish an open pen contour without closing it.
+    /// Hyper pen click: extend the open hyperbezier contour
+    /// (shift-click adds a corner point), close it by clicking its
+    /// first point, or start a new one.
+    fn hyper_pen_mouse_down(
+        &mut self,
+        index: usize,
+        pos: Point<gpui::Pixels>,
+        corner: bool,
+    ) {
+        let (dx, dy) = self.editor.window_to_design(pos);
+        let (x, y) = (dx.round(), dy.round());
+        let tolerance = HIT_RADIUS_PX / self.editor.zoom();
+        self.push_undo_snapshot(index);
+
+        match self.editor.hyper_contour {
+            None => {
+                if let Some(contour) = self
+                    .font_mut()
+                    .and_then(|f| f.start_hyper_contour(index, x, y))
+                {
+                    self.editor.hyper_contour = Some(contour);
+                }
+            }
+            Some(contour) => {
+                let start = self.font().and_then(|f| {
+                    let c = f.font.get_glyph(f.glyphs[index].name.as_ref())?;
+                    let p = c.contours.get(contour)?.points.first()?;
+                    Some((p.x, p.y))
+                });
+                let closes = start.is_some_and(|(sx, sy)| {
+                    ((sx - x).powi(2) + (sy - y).powi(2)).sqrt() <= tolerance
+                });
+                if closes {
+                    if let Some(font) = self.font_mut() {
+                        font.close_hyper_contour(index, contour);
+                    }
+                    self.editor.hyper_contour = None;
+                } else if let Some(font) = self.font_mut() {
+                    font.append_hyper_point(index, contour, x, y, corner);
+                }
+            }
+        }
+    }
+
+    /// End the open hyper contour (Enter/Escape/tool switch), leaving
+    /// it open like an unfinished pen path; degenerate ones vanish.
+    fn hyper_pen_finish(&mut self) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        if let Some(contour) = self.editor.hyper_contour.take()
+            && let Some(font) = self.font_mut()
+        {
+            font.remove_contour_if_degenerate(index, contour);
+        }
+    }
+
     fn pen_finish(&mut self) {
+        self.hyper_pen_finish();
         let Mode::Editor(index) = self.mode else {
             return;
         };
@@ -3976,6 +4082,7 @@ impl Workspace {
                         Tool::Measure => "M measure: drag to read distances",
                         Tool::Text => "T text: type to compose · click a sort to edit it · Esc for select",
                         Tool::Knife => "K knife: drag a line to cut contours",
+                        Tool::HyperPen => "H hyper pen: click adds smooth, shift-click corner, click start closes, Enter ends",
                         Tool::Preview => "space preview: filled outline, no points",
                     };
                     if let Some(Drag::Measure { start, current }) = &self.editor.drag {
@@ -4327,7 +4434,7 @@ impl Workspace {
                 true
             }
             ("escape", _) if in_editor => {
-                if self.editor.pen.is_some() {
+                if self.editor.pen.is_some() || self.editor.hyper_contour.is_some() {
                     self.pen_finish();
                 } else {
                     let Mode::Editor(index) = self.mode else {
@@ -4344,7 +4451,11 @@ impl Workspace {
                 }
                 true
             }
-            ("enter", _) if in_editor && self.editor.pen.is_some() => {
+            ("enter", _)
+                if in_editor
+                    && (self.editor.pen.is_some()
+                        || self.editor.hyper_contour.is_some()) =>
+            {
                 self.pen_finish();
                 true
             }
@@ -4389,6 +4500,11 @@ impl Workspace {
             ("k", false) if in_editor => {
                 self.pen_finish();
                 self.editor.tool = Tool::Knife;
+                true
+            }
+            ("h", false) if in_editor => {
+                self.pen_finish();
+                self.editor.tool = Tool::HyperPen;
                 true
             }
             ("space", false) if in_editor => {

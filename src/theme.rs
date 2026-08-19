@@ -109,6 +109,9 @@ pub fn point_smooth_outer() -> Rgba {
 pub fn point_corner_outer() -> Rgba {
     c(theme().role("pointCorner"))
 }
+pub fn point_hyper_outer() -> Rgba {
+    c(theme().role("pointHyper"))
+}
 pub fn point_offcurve_outer() -> Rgba {
     c(theme().role("pointOffcurve"))
 }
