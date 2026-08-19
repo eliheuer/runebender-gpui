@@ -94,6 +94,9 @@ pub fn preview_glyph() -> Rgba {
 pub fn component_fill() -> Rgba {
     with_alpha(theme().role("component"), 0.35)
 }
+pub fn component_selected_fill() -> Rgba {
+    with_alpha(theme().role("componentSelected"), 0.45)
+}
 pub fn ghost() -> Rgba {
     c(theme().role("component"))
 }

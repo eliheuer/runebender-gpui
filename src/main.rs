@@ -61,6 +61,11 @@ gpui::actions!(
         RotateLeft,
         RotateRight,
         ReverseContours,
+        BooleanUnion,
+        BooleanSubtract,
+        BooleanIntersect,
+        BooleanExclude,
+        SetStartPoint,
         Harmonize,
         Balance,
         Optimize,
@@ -114,6 +119,12 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Rotate 90° Left", RotateLeft),
                 MenuItem::action("Rotate 90° Right", RotateRight),
                 MenuItem::action("Reverse Contours", ReverseContours),
+                MenuItem::action("Set Start Point", SetStartPoint),
+                MenuItem::separator(),
+                MenuItem::action("Union", BooleanUnion),
+                MenuItem::action("Subtract", BooleanSubtract),
+                MenuItem::action("Intersect", BooleanIntersect),
+                MenuItem::action("Exclude", BooleanExclude),
                 MenuItem::separator(),
                 MenuItem::action("Harmonize", Harmonize),
                 MenuItem::action("Balance", Balance),
@@ -1122,6 +1133,19 @@ enum Drag {
     TextKern,
     /// Alt-drag pans the viewport (select tool). Window-space anchor.
     Pan { last: (f64, f64) },
+    /// Dragging a sidebearing edge (false = left, true = right).
+    Sidebearing {
+        right: bool,
+        start_x: f64,
+        applied: f64,
+        start_width: f64,
+    },
+    /// Dragging the selected component.
+    Component {
+        index: usize,
+        start: (f64, f64),
+        orig: (f64, f64),
+    },
     /// Knife line, in design space.
     Knife {
         start: (f64, f64),
@@ -1162,6 +1186,10 @@ struct EditorState {
     hyper_contour: Option<usize>,
     /// Alt-hover segment preview (select tool), in glyph space.
     segment_hover: Option<kurbo::PathSeg>,
+    /// The selected component of the open glyph, if any.
+    selected_component: Option<usize>,
+    /// Sidebearing edge under the cursor (false = left, true = right).
+    sidebearing_hover: Option<bool>,
     /// Mouse position in window coords, for pen previews.
     pointer: Option<Point<gpui::Pixels>>,
     viewport: ViewPort,
@@ -1190,6 +1218,8 @@ impl EditorState {
             previous_tool: Tool::Select,
             hyper_contour: None,
             segment_hover: None,
+            selected_component: None,
+            sidebearing_hover: None,
             pointer: None,
             viewport: ViewPort::new(),
             initialized: false,
@@ -2010,10 +2040,35 @@ impl Workspace {
                                 ));
                                 cx.notify();
                             }),
-                        ))
-                        .child(Self::icon_tile("op-overlap", "union", false).on_click(
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .child(Self::icon_tile("op-union", "union", false).on_click(
                             cx.listener(|this, _, _, cx| {
-                                this.command_remove_overlap();
+                                this.command_boolean(linesweeper::BinaryOp::Union);
+                                cx.notify();
+                            }),
+                        ))
+                        .child(Self::icon_tile("op-subtract", "subtract", false).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.command_boolean(linesweeper::BinaryOp::Difference);
+                                cx.notify();
+                            }),
+                        ))
+                        .child(Self::icon_tile("op-intersect", "intersect", false).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.command_boolean(
+                                    linesweeper::BinaryOp::Intersection,
+                                );
+                                cx.notify();
+                            }),
+                        ))
+                        .child(Self::icon_tile("op-exclude", "exclude", false).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.command_boolean(linesweeper::BinaryOp::Xor);
                                 cx.notify();
                             }),
                         )),
@@ -2288,6 +2343,12 @@ impl Workspace {
         };
         // Alt-hover segment highlight (select tool).
         let hover_seg = self.editor.segment_hover;
+        // Sidebearing edge under the pointer (or mid-drag).
+        let sidebearing_hover = self.editor.sidebearing_hover.or(match &self.editor.drag {
+            Some(Drag::Sidebearing { right, .. }) => Some(*right),
+            _ => None,
+        });
+        let component_selected = self.editor.selected_component.is_some();
         // Pen rubber band: last on-curve of the open contour to the
         // pointer, with a ring on the start point when close would
         // land (web PenPreview).
@@ -2419,15 +2480,22 @@ impl Workspace {
                             hline(0.0, window);
                             hline(ascender, window);
                             hline(descender, window);
-                            for x in [0.0, advance] {
+                            for (right, x) in [(false, 0.0), (true, advance)] {
+                                let hovered = sidebearing_hover == Some(right);
                                 let a = to_screen(x, ascender);
                                 let b = to_screen(x, descender);
+                                let (grow_l, grow_r) =
+                                    if hovered { (1.0, 2.0) } else { (0.0, 1.0) };
                                 window.paint_quad(gpui::fill(
                                     Bounds::from_corners(
-                                        a,
-                                        gpui::point(a.x + px(1.0), b.y),
+                                        gpui::point(a.x - px(grow_l), a.y),
+                                        gpui::point(a.x + px(grow_r), b.y),
                                     ),
-                                    t::metrics_line(),
+                                    if hovered {
+                                        t::text_cursor()
+                                    } else {
+                                        t::metrics_line()
+                                    },
                                 ));
                             }
                         }
@@ -2608,7 +2676,12 @@ impl Workspace {
                             && let Some(p) =
                                 build_fill_path(&component_path, transform, origin)
                         {
-                            window.paint_path(p, t::component_fill());
+                            let color = if component_selected {
+                                t::component_selected_fill()
+                            } else {
+                                t::component_fill()
+                            };
+                            window.paint_path(p, color);
                         }
                         // Interpolated instance at the axes-bar
                         // location, as a ghost outline.
@@ -3029,6 +3102,7 @@ impl Workspace {
 
         match hit {
             Some(id) => {
+                self.editor.selected_component = None;
                 if shift {
                     if !self.editor.selected.remove(&id) {
                         self.editor.selected.insert(id);
@@ -3050,6 +3124,35 @@ impl Workspace {
                 }
             }
             None => {
+                // Sidebearing edge before segments: with a small or
+                // negative sidebearing the outline runs along the
+                // metric line, and a click on the line must not drag
+                // the stem that shares it (web ordering).
+                let (top_b, bottom_b) = self.text_sort_bounds();
+                let advance = self
+                    .font()
+                    .map(|f| f.glyphs[index].advance)
+                    .unwrap_or(0.0);
+                if dy >= bottom_b - tolerance && dy <= top_b + tolerance {
+                    let edge = if (dx - advance).abs() <= tolerance {
+                        Some(true)
+                    } else if dx.abs() <= tolerance {
+                        Some(false)
+                    } else {
+                        None
+                    };
+                    if let Some(right) = edge {
+                        self.push_undo_snapshot(index);
+                        self.editor.sidebearing_hover = Some(right);
+                        self.editor.drag = Some(Drag::Sidebearing {
+                            right,
+                            start_x: dx,
+                            applied: 0.0,
+                            start_width: advance,
+                        });
+                        return;
+                    }
+                }
                 // A click on a segment selects its points and drags
                 // them together, like the web select tool.
                 let seg = self
@@ -3080,6 +3183,32 @@ impl Workspace {
                     });
                     return;
                 }
+                let component_hit = self
+                    .font()
+                    .and_then(|f| {
+                        let g = f.font.get_glyph(f.glyphs[index].name.as_ref())?;
+                        runebender_core::glyph_ops::component_at(
+                            &f.font,
+                            g,
+                            kurbo::Point::new(dx, dy),
+                        )
+                        .map(|ci| {
+                            let t = &g.components[ci].transform;
+                            (ci, (t.x_offset, t.y_offset))
+                        })
+                    });
+                if let Some((ci, orig)) = component_hit {
+                    self.editor.selected_component = Some(ci);
+                    self.editor.selected.clear();
+                    self.push_undo_snapshot(index);
+                    self.editor.drag = Some(Drag::Component {
+                        index: ci,
+                        start: (dx, dy),
+                        orig,
+                    });
+                    return;
+                }
+                self.editor.selected_component = None;
                 if !shift {
                     self.editor.selected.clear();
                 }
@@ -3143,6 +3272,91 @@ impl Workspace {
                 }
                 changed
             }
+            Some(Drag::Sidebearing {
+                right,
+                start_x,
+                applied,
+                start_width,
+            }) => {
+                let (right, start_x, prev_applied, start_width) =
+                    (*right, *start_x, *applied, *start_width);
+                // Snap to the zoom-matched grid step like the web:
+                // 2 units zoomed close, 8 mid, whole units otherwise.
+                let zoom = self.editor.zoom();
+                let snap = if zoom > 8.0 {
+                    2.0
+                } else if zoom > 0.8 {
+                    8.0
+                } else {
+                    1.0
+                };
+                let total = dx - start_x;
+                let target = if right {
+                    ((start_width + total) / snap).round() * snap - start_width
+                } else {
+                    (total / snap).round() * snap
+                };
+                let step = target - prev_applied;
+                if step == 0.0 {
+                    return false;
+                }
+                if let Some(Drag::Sidebearing { applied, .. }) =
+                    &mut self.editor.drag
+                {
+                    *applied = target;
+                }
+                let changed = if right {
+                    self.font_mut().is_some_and(|f| {
+                        f.edit_glyph(index, |g| {
+                            g.width += step;
+                            g.width >= 0.0
+                        })
+                        .unwrap_or(false)
+                    })
+                } else {
+                    // The left edge moves: ink stays put on screen by
+                    // shifting glyph space and the viewport together.
+                    let ok = self.font_mut().is_some_and(|f| {
+                        f.edit_glyph(index, |g| {
+                            if g.width - step < 0.0 {
+                                return false;
+                            }
+                            runebender_core::glyph_ops::shift_ink(g, -step);
+                            g.width -= step;
+                            true
+                        })
+                        .unwrap_or(false)
+                    });
+                    if ok {
+                        self.editor.viewport.offset.x += step * self.editor.zoom();
+                    }
+                    ok
+                };
+                if changed {
+                    self.rebuild_text_models();
+                    self.sync_sort_offset();
+                }
+                changed
+            }
+            Some(Drag::Component { index: ci, start, orig }) => {
+                let (ci, start, orig) = (*ci, *start, *orig);
+                let target = (
+                    (orig.0 + dx - start.0).round(),
+                    (orig.1 + dy - start.1).round(),
+                );
+                self.font_mut().is_some_and(|f| {
+                    f.edit_glyph(index, |g| {
+                        if let Some(c) = g.components.get_mut(ci) {
+                            c.transform.x_offset = target.0;
+                            c.transform.y_offset = target.1;
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or(false)
+                })
+            }
             Some(Drag::Pan { last }) => {
                 let (lx, ly) = *last;
                 *last = (0.0, 0.0); // placeholder; recomputed below
@@ -3194,6 +3408,30 @@ impl Workspace {
             if moved
                 && (self.editor.pen.is_some() || self.editor.hyper_contour.is_some())
             {
+                changed = true;
+            }
+        }
+        if self.editor.tool == Tool::Select && self.editor.drag.is_none() {
+            let (dx, dy) = self.editor.window_to_design(pos);
+            let tolerance = HIT_RADIUS_PX / self.editor.zoom();
+            let (top_b, bottom_b) = self.text_sort_bounds();
+            let advance = self
+                .font()
+                .map(|f| f.glyphs[index].advance)
+                .unwrap_or(0.0);
+            let edge = if dy >= bottom_b - tolerance && dy <= top_b + tolerance {
+                if (dx - advance).abs() <= tolerance {
+                    Some(true)
+                } else if dx.abs() <= tolerance {
+                    Some(false)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if self.editor.sidebearing_hover != edge {
+                self.editor.sidebearing_hover = edge;
                 changed = true;
             }
         }
@@ -3809,6 +4047,60 @@ impl Workspace {
         }
     }
 
+    /// Boolean path op over the glyph's contours (web boolean tiles):
+    /// union merges everything; the others apply first contour vs the
+    /// rest combined.
+    fn command_boolean(&mut self, op: linesweeper::BinaryOp) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        self.push_undo_snapshot(index);
+        let changed = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    match runebender_core::glyph_ops::boolean_contours(g, op) {
+                        Some(contours) => {
+                            g.contours = contours;
+                            true
+                        }
+                        None => false,
+                    }
+                })
+            })
+            .unwrap_or(false);
+        if !changed {
+            self.editor.undo.pop();
+        } else {
+            self.editor.selected.clear();
+        }
+    }
+
+    /// Make the selected on-curve point the contour's start point.
+    fn command_set_start_point(&mut self) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        if self.editor.selected.len() != 1 {
+            return;
+        }
+        let (contour, point) = *self.editor.selected.iter().next().unwrap();
+        self.push_undo_snapshot(index);
+        let changed = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    runebender_core::glyph_ops::set_contour_start(g, contour, point)
+                })
+            })
+            .unwrap_or(false);
+        if !changed {
+            self.editor.undo.pop();
+        } else {
+            self.editor.selected = [(contour, 0)].into();
+        }
+    }
+
     /// Reverse the selected contours (all when none selected), undo.
     fn command_reverse(&mut self) {
         let Mode::Editor(index) = self.mode else {
@@ -4327,6 +4619,40 @@ impl Workspace {
                 .collect();
             return true;
         }
+        // A component under the cursor: open its base glyph beside
+        // the sort being edited (web openTextGlyphBesideActive) — the
+        // base belongs next to the glyph that uses it, not wherever
+        // the cursor was left.
+        let base = font
+            .font
+            .get_glyph(font.glyphs[index].name.as_ref())
+            .and_then(|g| {
+                runebender_core::glyph_ops::component_at(
+                    &font.font,
+                    g,
+                    kurbo::Point::new(dx, dy),
+                )
+                .map(|ci| g.components[ci].base.to_string())
+            });
+        if let Some(base_name) = base
+            && let Some(&target) = font.name_map.get(&base_name)
+        {
+            let codepoint = font.glyphs[target].codepoint;
+            let advance = font.glyphs[target].advance;
+            self.edit_buffer
+                .insert_glyph_after_active(base_name, codepoint, advance);
+            self.edit_buffer.shape_arabic_if_rtl();
+            self.mode = Mode::Editor(target);
+            self.selected = Some(target);
+            self.editor.selected.clear();
+            self.editor.selected_anchor = None;
+            self.editor.selected_component = None;
+            self.editor.drag = None;
+            self.editor.undo.clear();
+            self.editor.redo.clear();
+            self.sync_sort_offset();
+            return true;
+        }
         false
     }
 
@@ -4635,7 +4961,6 @@ impl Workspace {
     fn preview_click(&mut self, pos: Point<gpui::Pixels>) {
         let Some(font) = self.font() else { return };
         let upm = font.units_per_em;
-        let ascender = font.ascender;
         let descender = font.descender;
         let bounds = *self.preview_bounds.lock().unwrap();
         let h: f32 = bounds.size.height.into();
@@ -5253,6 +5578,64 @@ impl Workspace {
                 }
                 remaining.is_some()
             }
+            ("tab", false) if in_editor => {
+                // Web cycle_selected_point: walk the glyph's points in
+                // order; shift goes backwards.
+                let Mode::Editor(index) = self.mode else {
+                    return false;
+                };
+                let ids: Vec<(usize, usize)> = self
+                    .font()
+                    .map(|f| {
+                        f.glyphs[index]
+                            .points
+                            .iter()
+                            .map(|p| (p.contour, p.index))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if ids.is_empty() {
+                    return false;
+                }
+                let positions: Vec<usize> = ids
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, id)| self.editor.selected.contains(id))
+                    .map(|(i, _)| i)
+                    .collect();
+                let target = if positions.is_empty() {
+                    if shift { ids.len() - 1 } else { 0 }
+                } else if shift {
+                    let first = positions[0];
+                    if first == 0 { ids.len() - 1 } else { first - 1 }
+                } else {
+                    (positions[positions.len() - 1] + 1) % ids.len()
+                };
+                self.editor.selected_component = None;
+                self.editor.selected = [ids[target]].into();
+                true
+            }
+            ("backspace" | "delete", false)
+                if in_editor && self.editor.selected_component.is_some() =>
+            {
+                let Mode::Editor(index) = self.mode else {
+                    return false;
+                };
+                let ci = self.editor.selected_component.take().unwrap();
+                self.push_undo_snapshot(index);
+                let changed = self
+                    .font_mut()
+                    .and_then(|f| {
+                        f.edit_glyph(index, |g| {
+                            runebender_core::glyph_ops::delete_component(g, ci)
+                        })
+                    })
+                    .unwrap_or(false);
+                if !changed {
+                    self.editor.undo.pop();
+                }
+                changed
+            }
             ("backspace" | "delete", false) if in_editor && self.editor.selected_anchor.is_some() => {
                 let Mode::Editor(index) = self.mode else {
                     return false;
@@ -5489,6 +5872,26 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ReverseContours, _, cx| {
                 this.command_reverse();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &BooleanUnion, _, cx| {
+                this.command_boolean(linesweeper::BinaryOp::Union);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &BooleanSubtract, _, cx| {
+                this.command_boolean(linesweeper::BinaryOp::Difference);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &BooleanIntersect, _, cx| {
+                this.command_boolean(linesweeper::BinaryOp::Intersection);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &BooleanExclude, _, cx| {
+                this.command_boolean(linesweeper::BinaryOp::Xor);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SetStartPoint, _, cx| {
+                this.command_set_start_point();
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Harmonize, _, cx| {
