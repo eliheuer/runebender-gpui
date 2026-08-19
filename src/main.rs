@@ -1099,6 +1099,8 @@ enum Drag {
         start: (f64, f64),
         originals: Vec<((usize, usize), (f64, f64))>,
     },
+    /// Manual kerning drag in the text buffer (engine session).
+    TextKern,
     /// Knife line, in design space.
     Knife {
         start: (f64, f64),
@@ -1875,6 +1877,59 @@ impl Workspace {
             )
     }
 
+    /// Text direction control (text tool): LTR / RTL / Auto, like
+    /// the web editor's TextDirectionToolbar.
+    fn direction_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use runebender_core::text::TextDirection;
+        let auto = self.edit_buffer.direction_is_auto();
+        let dir = self.edit_buffer.direction();
+        let button = |id: &'static str, label: &'static str, active: bool| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .border_1()
+                .border_color(if active { t::accent() } else { t::cell_border() })
+                .text_sm()
+                .text_color(if active { t::accent() } else { t::text_muted() })
+                .cursor_pointer()
+                .child(label)
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                button("dir-ltr", "LTR", !auto && dir == TextDirection::LeftToRight)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.edit_buffer
+                            .set_direction(runebender_core::text::TextDirection::LeftToRight);
+                        this.edit_buffer.shape_arabic_if_rtl();
+                        this.sync_sort_offset();
+                        cx.notify();
+                    })),
+            )
+            .child(
+                button("dir-rtl", "RTL", !auto && dir == TextDirection::RightToLeft)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.edit_buffer
+                            .set_direction(runebender_core::text::TextDirection::RightToLeft);
+                        this.edit_buffer.shape_arabic_if_rtl();
+                        this.sync_sort_offset();
+                        cx.notify();
+                    })),
+            )
+            .child(button("dir-auto", "Auto", auto).on_click(cx.listener(
+                |this, _, _, cx| {
+                    this.edit_buffer.set_auto_direction();
+                    this.edit_buffer.shape_arabic_if_rtl();
+                    this.sync_sort_offset();
+                    cx.notify();
+                },
+            )))
+    }
+
     /// Transformations section for the right sidebar (editor mode).
     fn transform_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let text_op = |id: &'static str, label: &'static str| {
@@ -2103,41 +2158,58 @@ impl Workspace {
         let outline = entry.contour_path.clone();
         let component_path = entry.component_path.clone();
         let component_names = entry.component_names.clone();
-        // The text tool's buffer context: every sort but the active
-        // one, as (path, offset relative to the active sort). The
-        // caret comes along when the text tool is up.
-        let (buffer_sorts, text_caret): (
-            Vec<(Arc<BezPath>, f64, f64)>,
-            Option<(f64, f64)>,
-        ) = {
-            let line_height = font.units_per_em * 1.2;
+        // The text buffer, web-style: every sort's fill (the active
+        // one too while the text tool is up), its quiet metric box,
+        // corner marks (kern-colored during a kern drag), and the
+        // caret. Coordinates are relative to the active sort.
+        struct SortPaint {
+            path: Option<Arc<BezPath>>,
+            x: f64,
+            y: f64,
+            advance: f64,
+            active: bool,
+            /// 0 = normal, 1 = kern-active, 2 = kern-previous.
+            kern: u8,
+        }
+        let text_mode = self.editor.tool == Tool::Text;
+        let (sort_paints, text_caret): (Vec<SortPaint>, Option<(f64, f64)>) = {
+            let line_height = self.text_line_height();
             let layout = self.edit_buffer.layout(line_height);
             let active = self.edit_buffer.active_sort();
+            let kern_sort = self.edit_buffer.manual_kerning_sort();
             let off = self.editor.sort_offset;
-            let sorts = layout
+            let paints = layout
                 .items
                 .iter()
-                .filter(|item| Some(item.index) != active)
                 .filter_map(|item| {
                     let sort = self.edit_buffer.sort(item.index)?;
                     if sort.is_absorbed() {
                         return None;
                     }
-                    let name = sort.glyph_name()?;
-                    let glyph = *font.name_map.get(name)?;
-                    Some((
-                        font.glyphs[glyph].path.clone(),
-                        item.x - off.0,
-                        item.y - off.1,
-                    ))
+                    let is_active = Some(item.index) == active;
+                    let path = sort
+                        .glyph_name()
+                        .and_then(|n| font.name_map.get(n))
+                        .map(|&g| font.glyphs[g].path.clone());
+                    Some(SortPaint {
+                        path,
+                        x: item.x - off.0,
+                        y: item.y - off.1,
+                        advance: item.advance_width,
+                        active: is_active,
+                        kern: match kern_sort {
+                            Some(k) if k == item.index => 1,
+                            Some(k) if k == item.index + 1 => 2,
+                            _ => 0,
+                        },
+                    })
                 })
                 .collect();
-            let caret = (self.editor.tool == Tool::Text)
+            let caret = text_mode
                 .then(|| (layout.cursor_x - off.0, layout.cursor_y - off.1));
-            (sorts, caret)
+            (paints, caret)
         };
-        let font_ascender_for_caret = font.ascender;
-        let font_descender_for_caret = font.descender;
+        let (sort_top, sort_bottom) = self.text_sort_bounds();
 
         // Masters toggled visible in the Layers section, drawn as dim
         // reference underlays.
@@ -2216,7 +2288,11 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    this.editor_mouse_down(event.position, event.modifiers.shift);
+                    this.editor_mouse_down(
+                        event.position,
+                        event.modifiers.shift,
+                        event.click_count,
+                    );
                     cx.notify();
                 }),
             )
@@ -2281,16 +2357,21 @@ impl Workspace {
                                 t::metrics_line(),
                             ));
                         };
-                        hline(0.0, window);
-                        hline(ascender, window);
-                        hline(descender, window);
-                        for x in [0.0, advance] {
-                            let a = to_screen(x, ascender);
-                            let b = to_screen(x, descender);
-                            window.paint_quad(gpui::fill(
-                                Bounds::from_corners(a, gpui::point(a.x + px(1.0), b.y)),
-                                t::metrics_line(),
-                            ));
+                        if !text_mode {
+                            hline(0.0, window);
+                            hline(ascender, window);
+                            hline(descender, window);
+                            for x in [0.0, advance] {
+                                let a = to_screen(x, ascender);
+                                let b = to_screen(x, descender);
+                                window.paint_quad(gpui::fill(
+                                    Bounds::from_corners(
+                                        a,
+                                        gpui::point(a.x + px(1.0), b.y),
+                                    ),
+                                    t::metrics_line(),
+                                ));
+                            }
                         }
 
                         // Space-hold preview: the filled glyph and
@@ -2305,28 +2386,150 @@ impl Workspace {
                             }
                         }
 
-                        // Text-buffer context: the other sorts as
-                        // quiet fills around the active glyph.
-                        for (path, sx, sy) in buffer_sorts.iter() {
+                        // The text buffer, web-style. Quiet metric
+                        // boxes first so marks and fills sit on top.
+                        let zoom_now = zoom;
+                        let sort_h_px =
+                            ((sort_top - sort_bottom).max(1.0) * zoom_now).max(1.0);
+                        let mark = (sort_h_px * 0.05).clamp(1.5, 24.0);
+                        let marks_visible = mark >= 3.0;
+                        let mut line = |a: Point<gpui::Pixels>,
+                                        b: Point<gpui::Pixels>,
+                                        color: gpui::Rgba,
+                                        window: &mut Window| {
+                            let mut pb = PathBuilder::stroke(px(1.0));
+                            pb.move_to(a);
+                            pb.line_to(b);
+                            if let Ok(p) = pb.build() {
+                                window.paint_path(p, color);
+                            }
+                        };
+                        if !preview_mode && marks_visible {
+                            for sp in sort_paints.iter() {
+                                // Quiet full box for the sorts nobody is
+                                // editing (the active one draws its own
+                                // metrics outside text mode).
+                                if !sp.active {
+                                    let color = t::metric_quiet();
+                                    for ex in [sp.x, sp.x + sp.advance] {
+                                        line(
+                                            to_screen(ex, sp.y + sort_bottom),
+                                            to_screen(ex, sp.y + sort_top),
+                                            color,
+                                            window,
+                                        );
+                                    }
+                                    for my in [sort_bottom, 0.0, ascender, sort_top] {
+                                        line(
+                                            to_screen(sp.x, sp.y + my),
+                                            to_screen(sp.x + sp.advance, sp.y + my),
+                                            color,
+                                            window,
+                                        );
+                                    }
+                                }
+                                // Corner marks: inward ticks at each
+                                // metric height on both edges, clipped
+                                // to the box. Skipped for the active
+                                // sort outside text mode (it has the
+                                // full green box instead).
+                                if sp.active && !text_mode {
+                                    continue;
+                                }
+                                let color = match sp.kern {
+                                    1 => t::kern_active(),
+                                    2 => t::kern_previous(),
+                                    _ => t::metrics_line(),
+                                };
+                                let ca = to_screen(sp.x, sp.y + sort_bottom);
+                                let cb =
+                                    to_screen(sp.x + sp.advance, sp.y + sort_top);
+                                let (left, right) =
+                                    (ca.x.min(cb.x), ca.x.max(cb.x));
+                                let (top_px, bottom_px) =
+                                    (ca.y.min(cb.y), ca.y.max(cb.y));
+                                let mark_px = px(mark as f32);
+                                for ex in [sp.x, sp.x + sp.advance] {
+                                    for my in [sort_bottom, 0.0, ascender, sort_top]
+                                    {
+                                        let c = to_screen(ex, sp.y + my);
+                                        let x0 = (c.x - mark_px).max(left);
+                                        let x1 = (c.x + mark_px).min(right);
+                                        if x1 > x0 {
+                                            line(
+                                                gpui::point(x0, c.y),
+                                                gpui::point(x1, c.y),
+                                                color,
+                                                window,
+                                            );
+                                        }
+                                        let y0 = (c.y - mark_px).max(top_px);
+                                        let y1 = (c.y + mark_px).min(bottom_px);
+                                        if y1 > y0 {
+                                            line(
+                                                gpui::point(c.x, y0),
+                                                gpui::point(c.x, y1),
+                                                color,
+                                                window,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Sort fills: everyone but the active sort —
+                        // and the active one too while the text tool
+                        // is up (points return with select).
+                        for sp in sort_paints.iter() {
+                            // The active sort renders as editable
+                            // chrome except in text mode, where it is
+                            // a plain fill like its neighbors. The
+                            // preview fill already drew it.
+                            if sp.active && (!text_mode || preview_mode) {
+                                continue;
+                            }
+                            let Some(path) = sp.path.as_ref() else {
+                                continue;
+                            };
                             let sort_transform =
-                                transform * Affine::translate((*sx, *sy));
+                                transform * Affine::translate((sp.x, sp.y));
                             if let Some(p) =
                                 build_fill_path(path, sort_transform, origin)
                             {
                                 window.paint_path(p, t::glyph_fill());
                             }
                         }
+                        // Caret: line plus inward triangles, sized off
+                        // the sort's on-screen height like the web.
                         if let Some((cx_, cy)) = text_caret {
-                            let top = to_screen(cx_, cy + font_ascender_for_caret);
-                            let bottom =
-                                to_screen(cx_, cy + font_descender_for_caret);
+                            let top = to_screen(cx_, cy + sort_top);
+                            let bottom = to_screen(cx_, cy + sort_bottom);
+                            let caret_color = t::text_cursor();
                             window.paint_quad(gpui::fill(
                                 Bounds::from_corners(
-                                    gpui::point(top.x - px(1.0), top.y),
-                                    gpui::point(top.x + px(1.0), bottom.y),
+                                    gpui::point(top.x - px(0.75), top.y),
+                                    gpui::point(top.x + px(0.75), bottom.y),
                                 ),
-                                t::accent(),
+                                caret_color,
                             ));
+                            let tri_scale =
+                                ((sort_h_px * 0.09).clamp(4.0, 34.0)) / 24.0;
+                            let tw = px((24.0 * tri_scale) as f32);
+                            let th = px((16.0 * tri_scale) as f32);
+                            let mut tri = PathBuilder::fill();
+                            tri.move_to(gpui::point(top.x - tw / 2.0, top.y));
+                            tri.line_to(gpui::point(top.x + tw / 2.0, top.y));
+                            tri.line_to(gpui::point(top.x, top.y + th));
+                            if let Ok(p) = tri.build() {
+                                window.paint_path(p, caret_color);
+                            }
+                            let mut tri = PathBuilder::fill();
+                            tri.move_to(gpui::point(bottom.x - tw / 2.0, bottom.y));
+                            tri.line_to(gpui::point(bottom.x + tw / 2.0, bottom.y));
+                            tri.line_to(gpui::point(bottom.x, bottom.y - th));
+                            if let Ok(p) = tri.build() {
+                                window.paint_path(p, caret_color);
+                            }
                         }
 
                         // Reference layers: other masters as dim strokes.
@@ -2364,6 +2567,7 @@ impl Workspace {
                         // Edit mode is a stroked outline (no fill),
                         // like the other editors.
                         if !preview_mode
+                            && !text_mode
                             && let Some(path) =
                             build_path(&outline, transform, origin, PathBuilder::stroke(px(1.0)))
                         {
@@ -2372,7 +2576,7 @@ impl Workspace {
 
                         // Handle lines: each off-curve connects to its
                         // anchoring on-curve neighbor.
-                        if !preview_mode {
+                        if !preview_mode && !text_mode {
                             let mut lines = PathBuilder::stroke(px(1.0));
                             let mut any_line = false;
                             for (i, p) in points.iter().enumerate() {
@@ -2444,7 +2648,7 @@ impl Workspace {
                             ));
                         };
                         for p in points.iter() {
-                            if preview_mode {
+                            if preview_mode || text_mode {
                                 break;
                             }
                             let center = to_screen(p.x, p.y);
@@ -2478,6 +2682,9 @@ impl Workspace {
                         // two overlapping quads approximate; use a
                         // filled path).
                         for (ai, (_, ax, ay)) in anchors.iter().enumerate() {
+                            if preview_mode || text_mode {
+                                break;
+                            }
                             let c = to_screen(*ax, *ay);
                             let r = px(5.0);
                             let mut pb = PathBuilder::fill();
@@ -2579,15 +2786,18 @@ impl Workspace {
         self.editor.fit(advance, asc, desc);
     }
 
-    fn editor_mouse_down(&mut self, pos: Point<gpui::Pixels>, shift: bool) {
+    fn editor_mouse_down(&mut self, pos: Point<gpui::Pixels>, shift: bool, click_count: usize) {
         self.text_focus = false;
 
         self.ensure_editor_fit();
         let Mode::Editor(index) = self.mode else {
             return;
         };
+        if click_count >= 2 && self.activate_sort_at_pos(pos) {
+            return;
+        }
         if self.editor.tool == Tool::Text {
-            self.text_tool_click(pos);
+            self.text_tool_click(pos, shift);
             return;
         }
         if self.editor.tool == Tool::Knife {
@@ -2744,6 +2954,14 @@ impl Workspace {
                 }
                 false
             }
+            Some(Drag::TextKern) => {
+                let bx = dx + self.editor.sort_offset.0;
+                let changed = self.edit_buffer.drag_manual_kerning(bx).is_some();
+                if changed {
+                    self.sync_sort_offset();
+                }
+                changed
+            }
             Some(Drag::Knife { current, .. }) => {
                 *current = (dx, dy);
                 true
@@ -2781,6 +2999,13 @@ impl Workspace {
                 if let Some(font) = self.font_mut() {
                     font.add_shape_contour(index, rect, ellipse);
                 }
+            }
+            return;
+        }
+        if matches!(self.editor.drag, Some(Drag::TextKern)) {
+            self.editor.drag = None;
+            if self.edit_buffer.end_manual_kerning() {
+                self.sync_kerning_from_buffer();
             }
             return;
         }
@@ -3486,6 +3711,10 @@ impl Workspace {
                             .child(status),
                     ),
             )
+            .when(
+                in_editor && self.editor.tool == Tool::Text,
+                |el| el.child(self.direction_toolbar(cx)),
+            )
             .when(in_editor, |el| el.child(self.header_tools(cx)))
             .child(self.master_switcher(cx))
     }
@@ -3638,6 +3867,22 @@ impl Workspace {
 
     /// The resolved preview line: glyph index, pen x position (font
     /// units, kerning applied), and advance.
+    /// The text sort metric box bounds: top = max(upm, ascender),
+    /// bottom = descender — the web editor's text_sort_metric_bounds.
+    fn text_sort_bounds(&self) -> (f64, f64) {
+        let Some(font) = self.font() else {
+            return (1000.0, -200.0);
+        };
+        (font.units_per_em.max(font.ascender), font.descender)
+    }
+
+    /// Line height for the text buffers: the sort box height, so a
+    /// second line's box top sits exactly on the first line's bottom.
+    fn text_line_height(&self) -> f64 {
+        let (top, bottom) = self.text_sort_bounds();
+        (top - bottom).max(1.0)
+    }
+
     /// Rebuild the text engine's font models from the active master
     /// (glyph advances, unicode map, kerning with groups, features
     /// for shaping), and refresh the advances of sorts already in
@@ -3695,8 +3940,10 @@ impl Workspace {
     /// Keep the editor's glyph-space offset in step with the active
     /// sort's layout position.
     fn sync_sort_offset(&mut self) {
-        let Some(font) = self.font() else { return };
-        let line_height = font.units_per_em * 1.2;
+        if self.font().is_none() {
+            return;
+        }
+        let line_height = self.text_line_height();
         let offset = self
             .edit_buffer
             .active_sort()
@@ -3712,48 +3959,98 @@ impl Workspace {
         self.editor.sort_offset = offset;
     }
 
-    /// Text tool click: a sort activates (the editor follows it); an
-    /// empty spot places the caret.
-    fn text_tool_click(&mut self, pos: Point<gpui::Pixels>) {
-        let Some((upm, ascender, descender)) = self
-            .font()
-            .map(|f| (f.units_per_em, f.ascender, f.descender))
-        else {
+    /// Text tool click: place the caret (like the web editor). A
+    /// shift-click on a sort begins a manual kerning drag instead.
+    fn text_tool_click(&mut self, pos: Point<gpui::Pixels>, shift: bool) {
+        if self.font().is_none() {
             return;
-        };
-        let line_height = upm * 1.2;
+        }
+        let line_height = self.text_line_height();
+        let (top, bottom) = self.text_sort_bounds();
         let (dx, dy) = self.editor.window_to_design(pos);
         // window_to_design is glyph-local; the buffer wants buffer space.
         let bx = dx + self.editor.sort_offset.0;
         let by = dy + self.editor.sort_offset.1;
-        if let Some(activation) =
-            self.edit_buffer
-                .activate_sort_at(bx, by, line_height, ascender, descender)
-        {
-            let name = self
-                .edit_buffer
-                .sort(activation.index)
-                .and_then(|s| s.glyph_name())
-                .map(str::to_string);
-            let target = name.and_then(|n| {
-                self.font().and_then(|f| f.name_map.get(&n).copied())
-            });
-            if let Some(glyph) = target {
-                if !matches!(self.mode, Mode::Editor(i) if i == glyph) {
-                    self.mode = Mode::Editor(glyph);
-                    self.selected = Some(glyph);
-                    self.editor.selected.clear();
-                    self.editor.selected_anchor = None;
-                    self.editor.drag = None;
-                    self.editor.undo.clear();
-                    self.editor.redo.clear();
+        if shift {
+            let hit = self.edit_buffer.hit_test(bx, by, line_height, top, bottom);
+            if let Some(index) = hit.active_sort {
+                if self.edit_buffer.begin_manual_kerning(index, bx) {
+                    self.editor.drag = Some(Drag::TextKern);
+                    self.sync_sort_offset();
+                    return;
                 }
             }
-            self.sync_sort_offset();
-        } else {
-            self.edit_buffer
-                .place_cursor_at(bx, by, line_height, ascender, descender);
         }
+        self.edit_buffer
+            .place_cursor_at(bx, by, line_height, top, bottom);
+    }
+
+    /// Double-click on a sort (any tool): activate it and follow it
+    /// in the editor, keeping the buffer.
+    fn activate_sort_at_pos(&mut self, pos: Point<gpui::Pixels>) -> bool {
+        if self.font().is_none() {
+            return false;
+        }
+        let line_height = self.text_line_height();
+        let (top, bottom) = self.text_sort_bounds();
+        let (dx, dy) = self.editor.window_to_design(pos);
+        let bx = dx + self.editor.sort_offset.0;
+        let by = dy + self.editor.sort_offset.1;
+        let Some(activation) =
+            self.edit_buffer
+                .activate_sort_at(bx, by, line_height, top, bottom)
+        else {
+            return false;
+        };
+        let name = self
+            .edit_buffer
+            .sort(activation.index)
+            .and_then(|s| s.glyph_name())
+            .map(str::to_string);
+        let target = name.and_then(|n| {
+            self.font().and_then(|f| f.name_map.get(&n).copied())
+        });
+        if let Some(glyph) = target {
+            if !matches!(self.mode, Mode::Editor(i) if i == glyph) {
+                self.mode = Mode::Editor(glyph);
+                self.selected = Some(glyph);
+                self.editor.selected.clear();
+                self.editor.selected_anchor = None;
+                self.editor.drag = None;
+                self.editor.undo.clear();
+                self.editor.redo.clear();
+            }
+        }
+        self.sync_sort_offset();
+        true
+    }
+
+    /// Write the buffer's kerning (updated by a manual kern drag)
+    /// back into the font, wholesale like the web editor does.
+    fn sync_kerning_from_buffer(&mut self) {
+        let pairs = self.edit_buffer.kerning_model().pairs().clone();
+        if let Some(font) = self.font_mut() {
+            font.font.kerning = pairs
+                .into_iter()
+                .map(|(first, seconds)| {
+                    (
+                        norad::Name::new(&first).expect("kerning key name"),
+                        seconds
+                            .into_iter()
+                            .filter_map(|(second, v)| {
+                                norad::Name::new(&second).ok().map(|n| (n, v))
+                            })
+                            .collect(),
+                    )
+                })
+                .filter_map(|(first, seconds): (norad::Name, std::collections::BTreeMap<norad::Name, f64>)| {
+                    Some((first, seconds))
+                })
+                .collect();
+            font.kerning_dirty = true;
+            font.dirty = true;
+        }
+        self.rebuild_text_models();
     }
 
     /// A key while the editor's text tool is active. Typing composes
@@ -3761,15 +4058,21 @@ impl Workspace {
     /// sort.
     fn handle_edit_text_key(&mut self, event: &gpui::KeyDownEvent) -> bool {
         let key = event.keystroke.key.as_str();
-        let Some(font) = self.font() else { return false };
-        let line_height = font.units_per_em * 1.2;
+        if self.font().is_none() {
+            return false;
+        }
+        let line_height = self.text_line_height();
         let handled = match key {
             "backspace" => {
                 self.edit_buffer.delete_before_cursor();
+                let cursor = self.edit_buffer.cursor();
+                self.edit_buffer.shape_arabic_around_if_rtl(cursor);
                 true
             }
             "delete" => {
                 self.edit_buffer.delete_after_cursor();
+                let cursor = self.edit_buffer.cursor();
+                self.edit_buffer.shape_arabic_around_if_rtl(cursor);
                 true
             }
             "left" => {
@@ -3782,8 +4085,20 @@ impl Workspace {
             }
             "up" => self.edit_buffer.move_cursor_vertically(-1, line_height),
             "down" => self.edit_buffer.move_cursor_vertically(1, line_height),
+            "home" => {
+                self.edit_buffer.move_cursor_to_line_edge(false);
+                true
+            }
+            "end" => {
+                self.edit_buffer.move_cursor_to_line_edge(true);
+                true
+            }
             "enter" => {
                 self.edit_buffer.insert_line_break();
+                true
+            }
+            "escape" => {
+                // The web editor keeps text mode alive on Escape.
                 true
             }
             _ => {
@@ -3792,9 +4107,33 @@ impl Workspace {
                 };
                 let mut inserted = false;
                 for c in text.chars() {
-                    if !c.is_control() {
-                        inserted |= self.edit_buffer.insert_character(c);
+                    if c.is_control() {
+                        continue;
                     }
+                    // Typing the active sort's own character reuses its
+                    // live (possibly just edited) advance width, like
+                    // the web editor.
+                    let active_advance = self
+                        .edit_buffer
+                        .active_sort()
+                        .and_then(|i| self.edit_buffer.sort(i))
+                        .and_then(|sort| match &sort.kind {
+                            runebender_core::text::TextSortKind::Glyph {
+                                codepoint,
+                                ..
+                            } => *codepoint,
+                            _ => None,
+                        })
+                        .filter(|active_char| *active_char == c)
+                        .and_then(|_| {
+                            let Mode::Editor(index) = self.mode else {
+                                return None;
+                            };
+                            self.font().map(|f| f.glyphs[index].advance)
+                        });
+                    inserted |= self
+                        .edit_buffer
+                        .insert_character_with_active_advance(c, active_advance);
                 }
                 inserted
             }
@@ -3805,7 +4144,7 @@ impl Workspace {
         true
     }
 
-    /// Seed the editor's text buffer for an opened glyph: keep the
+    /// Seed the editor's text buffer for an opened glyph    /// Seed the editor's text buffer for an opened glyph: keep the
     /// buffer when the glyph is already a sort in it (the text tool
     /// walking between sorts), otherwise start fresh with this glyph
     /// as the single active sort.
@@ -3857,7 +4196,7 @@ impl Workspace {
         let upm = font.units_per_em;
         let ascender = font.ascender;
         let descender = font.descender;
-        let line_height = upm * 1.2;
+        let line_height = self.text_line_height();
         let layout = self.preview_buffer.layout(line_height);
         let items: Vec<(Arc<BezPath>, f64, f64)> = layout
             .items
@@ -3962,9 +4301,10 @@ impl Workspace {
         let px_y: f32 = (pos.y - bounds.origin.y).into();
         let x = (px_x as f64 - origin_x) / scale;
         let y = (baseline - px_y as f64) / scale;
-        let line_height = upm * 1.2;
+        let line_height = self.text_line_height();
+        let (top, bottom) = self.text_sort_bounds();
         self.preview_buffer
-            .place_cursor_at(x, y, line_height, ascender, descender);
+            .place_cursor_at(x, y, line_height, top, bottom);
         self.text_focus = true;
     }
 
@@ -3976,8 +4316,10 @@ impl Workspace {
             // Cmd shortcuts (save, copy, …) keep working while typing.
             return false;
         }
-        let Some(font) = self.font() else { return false };
-        let line_height = font.units_per_em * 1.2;
+        if self.font().is_none() {
+            return false;
+        }
+        let line_height = self.text_line_height();
         match key {
             "escape" => {
                 self.text_focus = false;
@@ -4080,7 +4422,7 @@ impl Workspace {
                         Tool::Pen => "P pen: click adds, drag curves, click start closes, Enter ends",
                         Tool::Shapes => "R shapes: drag draws (press again for ellipse)",
                         Tool::Measure => "M measure: drag to read distances",
-                        Tool::Text => "T text: type to compose · click a sort to edit it · Esc for select",
+                        Tool::Text => "T text: type composes · click places caret · double-click a sort edits it · shift-drag kerns",
                         Tool::Knife => "K knife: drag a line to cut contours",
                         Tool::HyperPen => "H hyper pen: click adds smooth, shift-click corner, click start closes, Enter ends",
                         Tool::Preview => "space preview: filled outline, no points",
@@ -4429,10 +4771,6 @@ impl Workspace {
         let in_editor = matches!(self.mode, Mode::Editor(_));
         let step = if shift { 10.0 } else { 1.0 };
         match (key, cmd) {
-            ("escape", _) if in_editor && self.editor.tool == Tool::Text => {
-                self.editor.tool = Tool::Select;
-                true
-            }
             ("escape", _) if in_editor => {
                 if self.editor.pen.is_some() || self.editor.hyper_contour.is_some() {
                     self.pen_finish();

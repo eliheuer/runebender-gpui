@@ -192,6 +192,22 @@ pub fn mark_palette() -> Vec<(String, Rgba)> {
         .collect()
 }
 
+/// The text caret.
+pub fn text_cursor() -> Rgba {
+    c(theme().role("textCursor"))
+}
+/// Quiet per-sort metric boxes in the text buffer.
+pub fn metric_quiet() -> Rgba {
+    c(theme().role("metricQuiet"))
+}
+/// The sort being manually kerned.
+pub fn kern_active() -> Rgba {
+    c(theme().role("kernActive"))
+}
+/// The sort before the one being kerned.
+pub fn kern_previous() -> Rgba {
+    c(theme().role("kernPrevious"))
+}
 /// Reference-layer underlay stroke (other masters shown via the
 /// Layers eyes).
 pub fn reference_layer() -> Rgba {
