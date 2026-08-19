@@ -189,6 +189,12 @@ pub fn mark_palette() -> Vec<(String, Rgba)> {
         .collect()
 }
 
+/// Reference-layer underlay stroke (other masters shown via the
+/// Layers eyes).
+pub fn reference_layer() -> Rgba {
+    c(theme().role("reference"))
+}
+
 // ---- anchors ----
 
 pub fn anchor() -> Rgba {

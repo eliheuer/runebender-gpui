@@ -1172,6 +1172,13 @@ struct Workspace {
     category: runebender_core::category::GlyphCategory,
     mode: Mode,
     editor: EditorState,
+    /// Folded sidebar sections (by title).
+    collapsed_sections: std::collections::HashSet<&'static str>,
+    /// Masters drawn as dim reference underlays in the editor
+    /// (the layer rows' eye toggles).
+    reference_layers: std::collections::HashSet<usize>,
+    /// Left sidebar hidden (header toggle, like the Glyphs one).
+    left_collapsed: bool,
     /// In-window menu bar for platforms without a native one
     /// (Windows, Linux, the browser).
     #[cfg(not(target_os = "macos"))]
@@ -1464,12 +1471,12 @@ impl Workspace {
                     .border_color(t::panel_outline())
                     .child(gpui_component::input::Input::new(&self.search)),
             )
-            .child(Self::section("Categories", list))
+            .child(self.section(cx, "Categories", list))
     }
 
     /// Right tile: details of the selected glyph, like
     /// runebender-web's GlyphInfoSidebar.
-    fn glyph_info_panel(&self) -> gpui::Div {
+    fn glyph_info_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
         let row = |header: &'static str, value: SharedString| {
             div()
                 .flex()
@@ -1479,7 +1486,8 @@ impl Workspace {
         };
         let mut panel = div().flex().flex_col().gap_2();
         let (Some(project), Some(index)) = (self.project.as_ref(), self.selected) else {
-            return Self::section(
+            return self.section(
+                cx,
                 "Glyph",
                 div()
                     .text_sm()
@@ -1489,7 +1497,7 @@ impl Workspace {
         };
         let font = project.active_font();
         let Some(entry) = font.glyphs.get(index) else {
-            return Self::section("Glyph", div());
+            return self.section(cx, "Glyph", div());
         };
         let name = entry.name.to_string();
         let master = project.master_names[project.active].clone();
@@ -1521,7 +1529,7 @@ impl Workspace {
                     .into(),
             ))
             .child(row("Contours", format!("{contours}").into()));
-        Self::section("Glyph", panel)
+        self.section(cx, "Glyph", panel)
     }
 
     /// Colors panel: mark-color swatches for the selected glyph, like
@@ -1578,7 +1586,7 @@ impl Workspace {
                     cx.notify();
                 })),
         );
-        Self::section("Colors", swatches)
+        self.section(cx, "Colors", swatches)
     }
 
     /// Set or clear the selected glyph's mark color.
@@ -1627,12 +1635,16 @@ impl Workspace {
 
     /// The glyph editor: metrics lines, stroked outline over a dim
     /// fill, draggable control points, wheel pan, Cmd+wheel zoom.
-    /// A flat docked sidebar section: small muted header, hairline
-    /// divider below (Glyphs-style, no floating container).
+    /// A flat docked sidebar section: small muted header with a
+    /// disclosure triangle, hairline divider below (Glyphs-style, no
+    /// floating container). Clicking the header folds the body.
     fn section(
+        &self,
+        cx: &mut Context<Self>,
         title: &'static str,
         body: impl IntoElement,
     ) -> gpui::Div {
+        let collapsed = self.collapsed_sections.contains(title);
         div()
             .flex()
             .flex_col()
@@ -1641,8 +1653,54 @@ impl Workspace {
             .py_2()
             .border_b_1()
             .border_color(t::panel_outline())
-            .child(div().text_xs().text_color(t::text_muted()).child(title))
-            .child(body)
+            .child(
+                div()
+                    .id(gpui::SharedString::from(format!("section-{title}")))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child(
+                        canvas(
+                            move |bounds, _, _| bounds,
+                            move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+                                let o = bounds.origin;
+                                let w: f32 = bounds.size.width.into();
+                                let h: f32 = bounds.size.height.into();
+                                let (cx_, cy) = (w / 2.0, h / 2.0);
+                                let mut path =
+                                    gpui::PathBuilder::fill();
+                                let pt = |dx: f32, dy: f32| {
+                                    gpui::point(o.x + px(cx_ + dx), o.y + px(cy + dy))
+                                };
+                                if collapsed {
+                                    path.move_to(pt(-1.5, -3.5));
+                                    path.line_to(pt(2.5, 0.0));
+                                    path.line_to(pt(-1.5, 3.5));
+                                } else {
+                                    path.move_to(pt(-3.5, -1.5));
+                                    path.line_to(pt(3.5, -1.5));
+                                    path.line_to(pt(0.0, 2.5));
+                                }
+                                if let Ok(p) = path.build() {
+                                    window.paint_path(p, t::text_muted());
+                                }
+                            },
+                        )
+                        .w(px(10.0))
+                        .h(px(10.0)),
+                    )
+                    .child(title)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.collapsed_sections.remove(title) {
+                            this.collapsed_sections.insert(title);
+                        }
+                        cx.notify();
+                    })),
+            )
+            .when(!collapsed, |el| el.child(body))
     }
 
     /// A 30px icon tile (header tools, transform section).
@@ -1720,7 +1778,8 @@ impl Workspace {
                 .border_color(t::cell_border())
                 .child(label)
         };
-        Self::section(
+        self.section(
+            cx,
             "Transformations",
             div()
                 .flex()
@@ -1822,30 +1881,108 @@ impl Workspace {
             Some(p) => (p.master_names.clone(), p.active),
             None => (Vec::new(), 0),
         };
-        Self::section(
-            "Layers",
-            div().flex().flex_col().children(names.into_iter().enumerate().map(
-                move |(i, name)| {
-                    let is_active = i == active;
-                    div()
-                        .id(("layer", i))
-                        .px_2()
-                        .py_0p5()
-                        .rounded_sm()
-                        .text_sm()
-                        .cursor_pointer()
-                        .when(is_active, |el| {
-                            el.bg(t::cell_selected_bg()).text_color(t::text())
-                        })
-                        .when(!is_active, |el| el.text_color(t::text_muted()))
-                        .child(name)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.switch_master(i);
-                            cx.notify();
-                        }))
-                },
-            )),
-        )
+        let reference = self.reference_layers.clone();
+        let rows: Vec<_> = names
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let is_active = i == active;
+                let eye_on = reference.contains(&i);
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        // Eye: draw this master as a dim reference
+                        // underlay in the editor (Glyphs-style layer
+                        // visibility). The active master is always
+                        // drawn, so its eye is implicit.
+                        div()
+                            .id(("layer-eye", i))
+                            .w(px(20.0))
+                            .text_sm()
+                            .cursor_pointer()
+                            .text_color(if eye_on { t::text() } else { t::text_muted() })
+                            .child(if is_active {
+                                "●"
+                            } else if eye_on {
+                                "●"
+                            } else {
+                                "○"
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.reference_layers.remove(&i) {
+                                    this.reference_layers.insert(i);
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(("layer", i))
+                            .flex_1()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .text_sm()
+                            .cursor_pointer()
+                            .when(is_active, |el| {
+                                el.bg(t::cell_selected_bg()).text_color(t::text())
+                            })
+                            .when(!is_active, |el| el.text_color(t::text_muted()))
+                            .child(name)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.switch_master(i);
+                                cx.notify();
+                            })),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        let body = div().flex().flex_col().children(rows);
+        self.section(cx, "Layers", body)
+    }
+
+    /// Navigate section: the active master with previous/next
+    /// steppers, like the Glyphs Navigate panel.
+    fn navigate_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let (name, count): (SharedString, usize) = match &self.project {
+            Some(p) => (p.master_names[p.active].clone(), p.masters.len()),
+            None => ("—".into(), 0),
+        };
+        let stepper = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .border_1()
+                .border_color(t::cell_border())
+                .text_sm()
+                .text_color(t::text())
+                .cursor_pointer()
+                .child(label)
+        };
+        let body = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(div().flex_1().text_sm().text_color(t::text()).child(name))
+            .when(count > 1, |el| {
+                el.child(stepper("nav-prev", "←").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.command_step_master(-1);
+                        cx.notify();
+                    },
+                )))
+                .child(stepper("nav-next", "→").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.command_step_master(1);
+                        cx.notify();
+                    },
+                )))
+            });
+        self.section(cx, "Navigate", body)
     }
 
     fn editor_view(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1854,6 +1991,25 @@ impl Workspace {
         let outline = entry.contour_path.clone();
         let component_path = entry.component_path.clone();
         let component_names = entry.component_names.clone();
+        // Masters toggled visible in the Layers section, drawn as dim
+        // reference underlays.
+        let reference_paths: Vec<Arc<BezPath>> = self
+            .project
+            .as_ref()
+            .map(|p| {
+                self.reference_layers
+                    .iter()
+                    .filter(|&&i| i != p.active && i < p.masters.len())
+                    .filter_map(|&i| {
+                        p.masters[i]
+                            .glyphs
+                            .iter()
+                            .find(|g| g.name == entry.name)
+                            .map(|g| g.path.clone())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let ghost: Option<Arc<BezPath>> = self
             .project
             .as_ref()
@@ -1967,6 +2123,18 @@ impl Workspace {
                                 Bounds::from_corners(a, gpui::point(a.x + px(1.0), b.y)),
                                 t::metrics_line(),
                             ));
+                        }
+
+                        // Reference layers: other masters as dim strokes.
+                        for path in &reference_paths {
+                            if let Some(p) = build_path(
+                                path,
+                                transform,
+                                origin,
+                                PathBuilder::stroke(px(1.0)),
+                            ) {
+                                window.paint_path(p, t::reference_layer());
+                            }
                         }
 
                         // Components: dim distinct fill, not editable
@@ -2634,7 +2802,7 @@ impl Workspace {
     }
 
     /// Selection section: count plus editable X/Y for a single point.
-    fn selection_section(&self) -> gpui::Div {
+    fn selection_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let count = self.editor.selected.len();
         let single = self.single_selected_point();
         let mut body = div().flex().flex_col().gap_2().child(
@@ -2661,7 +2829,7 @@ impl Workspace {
                 .child(field("X", &self.metric_inputs.x))
                 .child(field("Y", &self.metric_inputs.y));
         }
-        Self::section("Selection", body)
+        self.section(cx, "Selection", body)
     }
 
     /// Flip/rotate the selection (whole glyph when nothing selected)
@@ -2949,6 +3117,23 @@ impl Workspace {
             .bg(t::panel_bg())
             .border_b_1()
             .border_color(t::panel_outline())
+            .child(
+                div()
+                    .id("toggle-left")
+                    .w(px(26.0))
+                    .h(px(26.0))
+                    .rounded_md()
+                    .cursor_pointer()
+                    .child(icon_svg("glyph-grid", if self.left_collapsed {
+                        t::text_muted()
+                    } else {
+                        t::text()
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.left_collapsed = !this.left_collapsed;
+                        cx.notify();
+                    })),
+            )
             .when(cfg!(not(target_os = "macos")), |el| {
                 #[cfg(not(target_os = "macos"))]
                 let el = el.child(div().flex_none().child(self.app_menu_bar.clone()));
@@ -3834,14 +4019,15 @@ impl Render for Workspace {
             .flex()
             .flex_col()
             .when(in_editor, |el| {
-                el.child(self.glyph_info_panel())
-                    .child(self.selection_section())
+                el.child(self.navigate_section(cx))
+                    .child(self.glyph_info_panel(cx))
+                    .child(self.selection_section(cx))
                     .child(self.transform_section(cx))
                     .child(self.layers_section(cx))
                     .child(self.mark_colors_panel(cx))
             })
             .when(!in_editor, |el| {
-                el.child(self.glyph_info_panel())
+                el.child(self.glyph_info_panel(cx))
                     .child(self.layers_section(cx))
                     .child(self.mark_colors_panel(cx))
             });
@@ -3854,6 +4040,7 @@ impl Render for Workspace {
                         resizable_panel()
                             .size(px(224.0))
                             .size_range(px(140.0)..px(440.0))
+                            .visible(!self.left_collapsed)
                             .child(
                                 div()
                                     .size_full()
@@ -4193,6 +4380,9 @@ fn main() {
                         category: runebender_core::category::GlyphCategory::All,
                         mode: start_mode,
                         editor: EditorState::new(),
+                        collapsed_sections: std::collections::HashSet::new(),
+                        reference_layers: std::collections::HashSet::new(),
+                        left_collapsed: false,
                         #[cfg(not(target_os = "macos"))]
                         app_menu_bar: app_menu_bar.clone(),
                         focus_handle: cx.focus_handle(),
