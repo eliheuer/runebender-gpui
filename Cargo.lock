@@ -3805,6 +3805,15 @@ dependencies = [
 
 [[package]]
 name = "kurbo"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd85a5776cd9500c2e2059c8c76c3b01528566b7fcbaf8098b55a33fc298849b"
+dependencies = [
+ "arrayvec",
+]
+
+[[package]]
+name = "kurbo"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c62026ae44756f8a599ba21140f350303d4f08dcdcc71b5ad9c9bb8128c13c62"
@@ -5993,12 +6002,14 @@ dependencies = [
  "glyphslib",
  "harfrust",
  "kurbo 0.13.1",
+ "kurbo 0.9.5",
  "linesweeper",
  "norad",
  "plist",
  "quick-xml 0.38.4",
  "serde",
  "serde_json",
+ "spline",
  "unicode-bidi",
  "unicode-general-category",
  "write-fonts",
@@ -6782,6 +6793,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9571ea910ebd84c86af4b3ed27f9dbdc6ad06f17c5f96146b2b671e2976744f"
 dependencies = [
  "bitflags 2.13.1",
+]
+
+[[package]]
+name = "spline"
+version = "0.3.0"
+source = "git+https://github.com/linebender/spline#83f46cbfebb1f5d6042059c867719c0010073d42"
+dependencies = [
+ "kurbo 0.9.5",
 ]
 
 [[package]]

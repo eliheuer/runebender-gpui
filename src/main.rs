@@ -1046,6 +1046,8 @@ enum Tool {
     Pen,
     Shapes,
     Text,
+    Knife,
+    Preview,
     Measure,
 }
 
@@ -1066,6 +1068,11 @@ enum Drag {
     Points {
         start: (f64, f64),
         originals: Vec<((usize, usize), (f64, f64))>,
+    },
+    /// Knife line, in design space.
+    Knife {
+        start: (f64, f64),
+        current: (f64, f64),
     },
     /// Rubber-band selection rectangle, in design space.
     Marquee {
@@ -1096,6 +1103,8 @@ struct EditorState {
     /// The active text-buffer sort's layout position (design units);
     /// (0,0) when the glyph is alone in the editor.
     sort_offset: (f64, f64),
+    /// The tool to return to when space-hold preview ends.
+    previous_tool: Tool,
     viewport: ViewPort,
     initialized: bool,
     tool: Tool,
@@ -1119,6 +1128,7 @@ impl EditorState {
     fn new() -> Self {
         Self {
             sort_offset: (0.0, 0.0),
+            previous_tool: Tool::Select,
             viewport: ViewPort::new(),
             initialized: false,
             tool: Tool::Select,
@@ -1799,6 +1809,28 @@ impl Workspace {
                     }),
                 ),
             )
+            .child(
+                Self::icon_tile("tool-knife", "knife", tool == Tool::Knife).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.pen_finish();
+                        this.editor.tool = Tool::Knife;
+                        cx.notify();
+                    }),
+                ),
+            )
+            .child(
+                Self::icon_tile("tool-preview", "preview", tool == Tool::Preview)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.pen_finish();
+                        if this.editor.tool == Tool::Preview {
+                            this.editor.tool = this.editor.previous_tool;
+                        } else {
+                            this.editor.previous_tool = this.editor.tool;
+                            this.editor.tool = Tool::Preview;
+                        }
+                        cx.notify();
+                    })),
+            )
     }
 
     /// Transformations section for the right sidebar (editor mode).
@@ -2113,6 +2145,26 @@ impl Workspace {
             Some(Drag::Measure { start, current }) => Some((*start, *current)),
             _ => None,
         };
+        // Knife drag: the cut line plus its contour intersections.
+        let knife_line: Option<((f64, f64), (f64, f64), Vec<kurbo::Point>)> =
+            match &self.editor.drag {
+                Some(Drag::Knife { start, current }) => {
+                    let hits = font
+                        .font
+                        .get_glyph(entry.name.as_ref())
+                        .map(|g| {
+                            runebender_core::knife::knife_hit_points(
+                                g,
+                                kurbo::Point::new(start.0, start.1),
+                                kurbo::Point::new(current.0, current.1),
+                            )
+                        })
+                        .unwrap_or_default();
+                    Some((*start, *current, hits))
+                }
+                _ => None,
+            };
+        let preview_mode = self.editor.tool == Tool::Preview;
         let bounds_slot = self.editor.bounds.clone();
         let needs_fit = !self.editor.initialized;
 
@@ -2199,6 +2251,18 @@ impl Workspace {
                             ));
                         }
 
+                        // Space-hold preview: the filled glyph and
+                        // nothing else on top of it.
+                        if preview_mode {
+                            let mut combined = outline.as_ref().clone();
+                            combined.extend(component_path.elements().iter().cloned());
+                            if let Some(p) =
+                                build_fill_path(&combined, transform, origin)
+                            {
+                                window.paint_path(p, t::text());
+                            }
+                        }
+
                         // Text-buffer context: the other sorts as
                         // quiet fills around the active glyph.
                         for (path, sx, sy) in buffer_sorts.iter() {
@@ -2257,7 +2321,8 @@ impl Workspace {
                         }
                         // Edit mode is a stroked outline (no fill),
                         // like the other editors.
-                        if let Some(path) =
+                        if !preview_mode
+                            && let Some(path) =
                             build_path(&outline, transform, origin, PathBuilder::stroke(px(1.0)))
                         {
                             window.paint_path(path, t::path_stroke());
@@ -2265,7 +2330,7 @@ impl Workspace {
 
                         // Handle lines: each off-curve connects to its
                         // anchoring on-curve neighbor.
-                        {
+                        if !preview_mode {
                             let mut lines = PathBuilder::stroke(px(1.0));
                             let mut any_line = false;
                             for (i, p) in points.iter().enumerate() {
@@ -2337,6 +2402,9 @@ impl Workspace {
                             ));
                         };
                         for p in points.iter() {
+                            if preview_mode {
+                                break;
+                            }
                             let center = to_screen(p.x, p.y);
                             let is_selected =
                                 selected_points.contains(&(p.contour, p.index));
@@ -2406,6 +2474,20 @@ impl Workspace {
                             }
                         }
                         // Measure-tool line.
+                        if let Some(((sx, sy), (cx2, cy2), hits)) = &knife_line {
+                            let a = to_screen(*sx, *sy);
+                            let b = to_screen(*cx2, *cy2);
+                            let mut line = PathBuilder::stroke(px(1.0));
+                            line.move_to(a);
+                            line.line_to(b);
+                            if let Ok(p) = line.build() {
+                                window.paint_path(p, t::anchor());
+                            }
+                            for hit in hits {
+                                let c = to_screen(hit.x, hit.y);
+                                circle(window, c, 3.5, t::anchor());
+                            }
+                        }
                         if let Some((a, b)) = measure_line {
                             let mut pb = PathBuilder::stroke(px(1.0));
                             let pa = to_screen(a.0, a.1);
@@ -2462,6 +2544,14 @@ impl Workspace {
         };
         if self.editor.tool == Tool::Text {
             self.text_tool_click(pos);
+            return;
+        }
+        if self.editor.tool == Tool::Knife {
+            let (dx, dy) = self.editor.window_to_design(pos);
+            self.editor.drag = Some(Drag::Knife {
+                start: (dx, dy),
+                current: (dx, dy),
+            });
             return;
         }
         if self.editor.tool == Tool::Pen {
@@ -2606,6 +2696,10 @@ impl Workspace {
                 }
                 false
             }
+            Some(Drag::Knife { current, .. }) => {
+                *current = (dx, dy);
+                true
+            }
             Some(Drag::Marquee { current, .. })
             | Some(Drag::Shape { current, .. })
             | Some(Drag::Measure { current, .. }) => {
@@ -2644,6 +2738,34 @@ impl Workspace {
         }
         if matches!(self.editor.drag, Some(Drag::Measure { .. })) {
             self.editor.drag = None;
+            return;
+        }
+        if let Some(Drag::Knife { start, current }) = self.editor.drag.take() {
+            let p0 = kurbo::Point::new(start.0, start.1);
+            let p1 = kurbo::Point::new(current.0, current.1);
+            // Fewer than two crossings can't produce a cut; skip the
+            // edit entirely so a missed slice leaves nothing dirty.
+            let crossings = self
+                .font()
+                .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
+                .map(|g| runebender_core::knife::knife_hit_points(g, p0, p1).len())
+                .unwrap_or(0);
+            if p0.distance(p1) >= 2.0 && crossings >= 2 {
+                self.push_undo_snapshot(index);
+                let changed = self
+                    .font_mut()
+                    .and_then(|f| {
+                        f.edit_glyph(index, |g| {
+                            runebender_core::knife::knife_cut_glyph(g, p0, p1)
+                        })
+                    })
+                    .unwrap_or(false);
+                if !changed {
+                    self.editor.undo.pop();
+                } else {
+                    self.editor.selected.clear();
+                }
+            }
             return;
         }
         if let Some(Drag::Marquee { start, current }) = self.editor.drag.take() {
@@ -3853,6 +3975,8 @@ impl Workspace {
                         Tool::Shapes => "R shapes: drag draws (press again for ellipse)",
                         Tool::Measure => "M measure: drag to read distances",
                         Tool::Text => "T text: type to compose · click a sort to edit it · Esc for select",
+                        Tool::Knife => "K knife: drag a line to cut contours",
+                        Tool::Preview => "space preview: filled outline, no points",
                     };
                     if let Some(Drag::Measure { start, current }) = &self.editor.drag {
                         let (dx, dy) = (current.0 - start.0, current.1 - start.1);
@@ -4262,6 +4386,20 @@ impl Workspace {
                 self.editor.tool = Tool::Text;
                 true
             }
+            ("k", false) if in_editor => {
+                self.pen_finish();
+                self.editor.tool = Tool::Knife;
+                true
+            }
+            ("space", false) if in_editor => {
+                // Hold space for the filled preview, like the web
+                // editor; releasing returns to the previous tool.
+                if self.editor.tool != Tool::Preview {
+                    self.editor.previous_tool = self.editor.tool;
+                    self.editor.tool = Tool::Preview;
+                }
+                true
+            }
             ("a", false) if in_editor => {
                 let Mode::Editor(index) = self.mode else {
                     return false;
@@ -4540,6 +4678,14 @@ impl Render for Workspace {
             }))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if this.handle_key(event, cx) {
+                    cx.notify();
+                }
+            }))
+            .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, _, cx| {
+                if event.keystroke.key.as_str() == "space"
+                    && this.editor.tool == Tool::Preview
+                {
+                    this.editor.tool = this.editor.previous_tool;
                     cx.notify();
                 }
             }))
