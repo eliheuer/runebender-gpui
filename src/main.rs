@@ -54,9 +54,83 @@ gpui::actions!(
         PasteContours,
         RemoveOverlap,
         Decompose,
+        FlipHorizontal,
+        FlipVertical,
+        RotateLeft,
+        RotateRight,
+        ReverseContours,
+        Harmonize,
+        Balance,
+        Optimize,
+        ZoomToFit,
+        NextMaster,
+        PreviousMaster,
         Quit
     ]
 );
+
+/// The application menu, used three ways: the native macOS menu bar,
+/// the stored menu Windows/Linux expose to `get_menus`, and the
+/// in-window menu bar (gpui-component AppMenuBar) drawn on every
+/// platform that has no native bar, the browser included.
+fn app_menus() -> Vec<gpui::Menu> {
+    use gpui::{Menu, MenuItem};
+    vec![
+        Menu {
+            name: "Runebender".into(),
+            items: vec![MenuItem::action("Quit Runebender", Quit)],
+            disabled: false,
+        },
+        Menu {
+            name: "File".into(),
+            items: vec![
+                MenuItem::action("Open…", OpenFont),
+                MenuItem::separator(),
+                MenuItem::action("Save", SaveFont),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "Edit".into(),
+            items: vec![
+                MenuItem::action("Undo", Undo),
+                MenuItem::action("Redo", Redo),
+                MenuItem::separator(),
+                MenuItem::action("Copy Contours", CopyContours),
+                MenuItem::action("Paste Contours", PasteContours),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "Glyph".into(),
+            items: vec![
+                MenuItem::action("Remove Overlap", RemoveOverlap),
+                MenuItem::action("Decompose Components", Decompose),
+                MenuItem::separator(),
+                MenuItem::action("Flip Horizontal", FlipHorizontal),
+                MenuItem::action("Flip Vertical", FlipVertical),
+                MenuItem::action("Rotate 90° Left", RotateLeft),
+                MenuItem::action("Rotate 90° Right", RotateRight),
+                MenuItem::action("Reverse Contours", ReverseContours),
+                MenuItem::separator(),
+                MenuItem::action("Harmonize", Harmonize),
+                MenuItem::action("Balance", Balance),
+                MenuItem::action("Optimize", Optimize),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "View".into(),
+            items: vec![
+                MenuItem::action("Zoom to Fit", ZoomToFit),
+                MenuItem::separator(),
+                MenuItem::action("Next Master", NextMaster),
+                MenuItem::action("Previous Master", PreviousMaster),
+            ],
+            disabled: false,
+        },
+    ]
+}
 
 /// One glyph, ready to paint: outline in font units (Y-up), advance
 /// width, and identifying info.
@@ -1098,6 +1172,10 @@ struct Workspace {
     category: runebender_core::category::GlyphCategory,
     mode: Mode,
     editor: EditorState,
+    /// In-window menu bar for platforms without a native one
+    /// (Windows, Linux, the browser).
+    #[cfg(not(target_os = "macos"))]
+    app_menu_bar: gpui::Entity<gpui_component::menu::AppMenuBar>,
     focus_handle: gpui::FocusHandle,
     status_note: Option<SharedString>,
     search: gpui::Entity<gpui_component::input::InputState>,
@@ -2719,6 +2797,41 @@ impl Workspace {
         }
     }
 
+    /// Reverse the selected contours (all when none selected), undo.
+    fn command_reverse(&mut self) {
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        self.push_undo_snapshot(index);
+        let selected = self.editor.selected.clone();
+        let changed = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    runebender_core::glyph_ops::reverse_contours(g, &selected)
+                })
+            })
+            .unwrap_or(false);
+        if !changed {
+            self.editor.undo.pop();
+        } else {
+            self.editor.selected.clear();
+        }
+    }
+
+    /// Step to the next/previous master (menu: View).
+    fn command_step_master(&mut self, delta: isize) {
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let n = project.masters.len() as isize;
+        if n < 2 {
+            return;
+        }
+        let next = (project.active as isize + delta).rem_euclid(n) as usize;
+        self.switch_master(next);
+    }
+
     /// Decompose the open glyph's components, with undo.
     fn command_decompose(&mut self) {
         let Mode::Editor(index) = self.mode else {
@@ -2836,6 +2949,11 @@ impl Workspace {
             .bg(t::panel_bg())
             .border_b_1()
             .border_color(t::panel_outline())
+            .when(cfg!(not(target_os = "macos")), |el| {
+                #[cfg(not(target_os = "macos"))]
+                let el = el.child(div().flex_none().child(self.app_menu_bar.clone()));
+                el
+            })
             .child(
                 div()
                     .flex_1()
@@ -3799,6 +3917,53 @@ impl Render for Workspace {
                 this.command_decompose();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &FlipHorizontal, _, cx| {
+                this.apply_transform(Affine::scale_non_uniform(-1.0, 1.0));
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &FlipVertical, _, cx| {
+                this.apply_transform(Affine::scale_non_uniform(1.0, -1.0));
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &RotateLeft, _, cx| {
+                this.apply_transform(Affine::rotate(std::f64::consts::FRAC_PI_2));
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &RotateRight, _, cx| {
+                this.apply_transform(Affine::rotate(-std::f64::consts::FRAC_PI_2));
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ReverseContours, _, cx| {
+                this.command_reverse();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Harmonize, _, cx| {
+                this.apply_curve_op(CurveOp::Harmonize);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Balance, _, cx| {
+                this.apply_curve_op(CurveOp::Balance);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Optimize, _, cx| {
+                this.apply_curve_op(CurveOp::Optimize(0.12));
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ZoomToFit, _, cx| {
+                if matches!(this.mode, Mode::Editor(_)) {
+                    this.editor.initialized = false;
+                    this.ensure_editor_fit();
+                    cx.notify();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NextMaster, _, cx| {
+                this.command_step_master(1);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &PreviousMaster, _, cx| {
+                this.command_step_master(-1);
+                cx.notify();
+            }))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if this.handle_key(event, cx) {
                     cx.notify();
@@ -3889,48 +4054,23 @@ fn main() {
             gpui::KeyBinding::new("cmd-shift-o", RemoveOverlap, None),
             gpui::KeyBinding::new("cmd-shift-d", Decompose, None),
             gpui::KeyBinding::new("cmd-q", Quit, None),
+            gpui::KeyBinding::new("cmd-shift-h", FlipHorizontal, None),
+            gpui::KeyBinding::new("cmd-shift-v", FlipVertical, None),
+            gpui::KeyBinding::new("cmd-shift-r", ReverseContours, None),
+            gpui::KeyBinding::new("cmd-0", ZoomToFit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
-        // GPUI leaves the macOS menu bar empty unless the app
-        // declares menus; this is where the native ports should feel
-        // native, so declare them.
+        // One menu definition, three consumers: the macOS native bar
+        // (set_menus), the stored menus on Windows/Linux, and the
+        // in-window bar drawn where no native bar exists.
         #[cfg(not(target_family = "wasm"))]
-        cx.set_menus(vec![
-            gpui::Menu {
-                name: "Runebender".into(),
-                items: vec![gpui::MenuItem::action("Quit Runebender", Quit)],
-                disabled: false,
-            },
-            gpui::Menu {
-                name: "File".into(),
-                items: vec![
-                    gpui::MenuItem::action("Open…", OpenFont),
-                    gpui::MenuItem::separator(),
-                    gpui::MenuItem::action("Save", SaveFont),
-                ],
-                disabled: false,
-            },
-            gpui::Menu {
-                name: "Edit".into(),
-                items: vec![
-                    gpui::MenuItem::action("Undo", Undo),
-                    gpui::MenuItem::action("Redo", Redo),
-                    gpui::MenuItem::separator(),
-                    gpui::MenuItem::action("Copy Contours", CopyContours),
-                    gpui::MenuItem::action("Paste Contours", PasteContours),
-                ],
-                disabled: false,
-            },
-            gpui::Menu {
-                name: "Glyph".into(),
-                items: vec![
-                    gpui::MenuItem::action("Remove Overlap", RemoveOverlap),
-                    gpui::MenuItem::action("Decompose Components", Decompose),
-                ],
-                disabled: false,
-            },
-        ]);
+        cx.set_menus(app_menus());
+        gpui_component::GlobalState::global_mut(cx).set_app_menus(
+            app_menus().into_iter().map(|menu| menu.owned()).collect(),
+        );
+        #[cfg(not(target_os = "macos"))]
+        let app_menu_bar = gpui_component::menu::AppMenuBar::new(cx);
 
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
@@ -4053,6 +4193,8 @@ fn main() {
                         category: runebender_core::category::GlyphCategory::All,
                         mode: start_mode,
                         editor: EditorState::new(),
+                        #[cfg(not(target_os = "macos"))]
+                        app_menu_bar: app_menu_bar.clone(),
                         focus_handle: cx.focus_handle(),
                         status_note: None,
                         search,
