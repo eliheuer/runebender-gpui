@@ -1048,6 +1048,25 @@ fn icon_svg(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
     .size_full()
 }
 
+/// Comparable key for a segment (PathSeg has no Eq).
+fn seg_key(seg: kurbo::PathSeg) -> [u64; 8] {
+    let p = |pt: kurbo::Point| [pt.x.to_bits(), pt.y.to_bits()];
+    match seg {
+        kurbo::PathSeg::Line(l) => {
+            let [a, b] = [p(l.p0), p(l.p1)];
+            [a[0], a[1], b[0], b[1], 0, 0, 0, 0]
+        }
+        kurbo::PathSeg::Quad(q) => {
+            let [a, b, c] = [p(q.p0), p(q.p1), p(q.p2)];
+            [a[0], a[1], b[0], b[1], c[0], c[1], 0, 1]
+        }
+        kurbo::PathSeg::Cubic(c) => {
+            let [a, b, cc, d] = [p(c.p0), p(c.p1), p(c.p2), p(c.p3)];
+            [a[0], a[1], b[0], b[1], cc[0], cc[1], d[0], d[1]]
+        }
+    }
+}
+
 fn build_fill_path(
     outline: &BezPath,
     transform: Affine,
@@ -1101,6 +1120,8 @@ enum Drag {
     },
     /// Manual kerning drag in the text buffer (engine session).
     TextKern,
+    /// Alt-drag pans the viewport (select tool). Window-space anchor.
+    Pan { last: (f64, f64) },
     /// Knife line, in design space.
     Knife {
         start: (f64, f64),
@@ -1139,6 +1160,10 @@ struct EditorState {
     previous_tool: Tool,
     /// The hyper pen's open contour, if drawing.
     hyper_contour: Option<usize>,
+    /// Alt-hover segment preview (select tool), in glyph space.
+    segment_hover: Option<kurbo::PathSeg>,
+    /// Mouse position in window coords, for pen previews.
+    pointer: Option<Point<gpui::Pixels>>,
     viewport: ViewPort,
     initialized: bool,
     tool: Tool,
@@ -1164,6 +1189,8 @@ impl EditorState {
             sort_offset: (0.0, 0.0),
             previous_tool: Tool::Select,
             hyper_contour: None,
+            segment_hover: None,
+            pointer: None,
             viewport: ViewPort::new(),
             initialized: false,
             tool: Tool::Select,
@@ -2259,6 +2286,34 @@ impl Workspace {
             Some(Drag::Measure { start, current }) => Some((*start, *current)),
             _ => None,
         };
+        // Alt-hover segment highlight (select tool).
+        let hover_seg = self.editor.segment_hover;
+        // Pen rubber band: last on-curve of the open contour to the
+        // pointer, with a ring on the start point when close would
+        // land (web PenPreview).
+        let pen_preview: Option<((f64, f64), (f64, f64), Option<(f64, f64)>)> = (|| {
+            let contour = self
+                .editor
+                .pen
+                .as_ref()
+                .map(|p| p.contour)
+                .or(self.editor.hyper_contour)?;
+            let pointer = self.editor.pointer?;
+            let (px_, py_) = self.editor.window_to_design(pointer);
+            let glyph = font.font.get_glyph(entry.name.as_ref())?;
+            let points = &glyph.contours.get(contour)?.points;
+            let last = points.iter().rev().find(|p| {
+                p.typ != norad::PointType::OffCurve
+            })?;
+            let start = points.first()?;
+            let close_radius = HIT_RADIUS_PX / self.editor.zoom();
+            let close = (points.len() >= 3
+                && ((start.x - px_).powi(2) + (start.y - py_).powi(2)).sqrt()
+                    <= close_radius)
+                .then_some((start.x, start.y));
+            Some(((last.x, last.y), (px_, py_), close))
+        })();
+
         // Knife drag: the cut line plus its contour intersections.
         let knife_line: Option<((f64, f64), (f64, f64), Vec<kurbo::Point>)> =
             match &self.editor.drag {
@@ -2291,15 +2346,18 @@ impl Workspace {
                     this.editor_mouse_down(
                         event.position,
                         event.modifiers.shift,
+                        event.modifiers.alt,
                         event.click_count,
                     );
                     cx.notify();
                 }),
             )
             .on_mouse_move(cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
-                if event.pressed_button == Some(MouseButton::Left)
-                    && this.editor_mouse_drag(event.position)
-                {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    if this.editor_mouse_drag(event.position) {
+                        cx.notify();
+                    }
+                } else if this.editor_hover(event.position, event.modifiers.alt) {
                     cx.notify();
                 }
             }))
@@ -2725,6 +2783,49 @@ impl Workspace {
                             }
                         }
                         // Measure-tool line.
+                        if let Some(seg) = hover_seg {
+                            let mut pb = PathBuilder::stroke(px(3.0));
+                            match seg {
+                                kurbo::PathSeg::Line(l) => {
+                                    pb.move_to(to_screen(l.p0.x, l.p0.y));
+                                    pb.line_to(to_screen(l.p1.x, l.p1.y));
+                                }
+                                kurbo::PathSeg::Quad(q) => {
+                                    pb.move_to(to_screen(q.p0.x, q.p0.y));
+                                    pb.curve_to(
+                                        to_screen(q.p2.x, q.p2.y),
+                                        to_screen(q.p1.x, q.p1.y),
+                                    );
+                                }
+                                kurbo::PathSeg::Cubic(c) => {
+                                    pb.move_to(to_screen(c.p0.x, c.p0.y));
+                                    pb.cubic_bezier_to(
+                                        to_screen(c.p3.x, c.p3.y),
+                                        to_screen(c.p1.x, c.p1.y),
+                                        to_screen(c.p2.x, c.p2.y),
+                                    );
+                                }
+                            }
+                            if let Ok(p) = pb.build() {
+                                window.paint_path(p, t::accent());
+                            }
+                        }
+                        if let Some(((lx, ly), (cx3, cy3), close)) = pen_preview {
+                            let mut pb = PathBuilder::stroke(px(1.0));
+                            pb.move_to(to_screen(lx, ly));
+                            pb.line_to(to_screen(cx3, cy3));
+                            if let Ok(p) = pb.build() {
+                                window.paint_path(p, t::accent());
+                            }
+                            if let Some((sx2, sy2)) = close {
+                                circle(
+                                    window,
+                                    to_screen(sx2, sy2),
+                                    6.0,
+                                    t::accent(),
+                                );
+                            }
+                        }
                         if let Some(((sx, sy), (cx2, cy2), hits)) = &knife_line {
                             let a = to_screen(*sx, *sy);
                             let b = to_screen(*cx2, *cy2);
@@ -2786,15 +2887,20 @@ impl Workspace {
         self.editor.fit(advance, asc, desc);
     }
 
-    fn editor_mouse_down(&mut self, pos: Point<gpui::Pixels>, shift: bool, click_count: usize) {
+    fn editor_mouse_down(&mut self, pos: Point<gpui::Pixels>, shift: bool, alt: bool, click_count: usize) {
         self.text_focus = false;
 
         self.ensure_editor_fit();
         let Mode::Editor(index) = self.mode else {
             return;
         };
-        if click_count >= 2 && self.activate_sort_at_pos(pos) {
-            return;
+        if click_count >= 2 {
+            if self.double_click_edit(pos) {
+                return;
+            }
+            if self.activate_sort_at_pos(pos) {
+                return;
+            }
         }
         if self.editor.tool == Tool::Text {
             self.text_tool_click(pos, shift);
@@ -2813,7 +2919,7 @@ impl Workspace {
             return;
         }
         if self.editor.tool == Tool::Pen {
-            self.pen_mouse_down(index, pos);
+            self.pen_mouse_down(index, pos, alt);
             return;
         }
         if matches!(self.editor.tool, Tool::Shapes | Tool::Measure) {
@@ -2828,6 +2934,51 @@ impl Workspace {
                     start: (dx, dy),
                     current: (dx, dy),
                 }
+            });
+            return;
+        }
+        if alt && self.editor.tool == Tool::Select {
+            // Alt-click on a line segment converts it to a curve
+            // (thirds handles); otherwise alt-drag pans.
+            let (adx, ady) = self.editor.window_to_design(pos);
+            let radius = HIT_RADIUS_PX / self.editor.zoom();
+            let converted = self
+                .font()
+                .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
+                .and_then(|g| {
+                    runebender_core::segment_ops::nearest_segment_with_t(
+                        g,
+                        kurbo::Point::new(adx, ady),
+                        radius,
+                    )
+                })
+                .filter(|(hit, _)| matches!(hit.seg, kurbo::PathSeg::Line(_)));
+            if let Some((seg_hit, _)) = converted {
+                self.push_undo_snapshot(index);
+                let new_controls = self
+                    .font_mut()
+                    .and_then(|f| {
+                        f.edit_glyph(index, |g| {
+                            runebender_core::segment_ops::convert_line_to_curve(
+                                g, &seg_hit,
+                            )
+                        })
+                    })
+                    .flatten();
+                match new_controls {
+                    Some(ids) => {
+                        self.editor.selected = ids.into_iter().collect();
+                    }
+                    None => {
+                        self.editor.undo.pop();
+                    }
+                }
+                self.editor.segment_hover = None;
+                return;
+            }
+            let local = self.editor.window_to_local(pos);
+            self.editor.drag = Some(Drag::Pan {
+                last: (local.x, local.y),
             });
             return;
         }
@@ -2899,6 +3050,36 @@ impl Workspace {
                 }
             }
             None => {
+                // A click on a segment selects its points and drags
+                // them together, like the web select tool.
+                let seg = self
+                    .font()
+                    .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
+                    .and_then(|g| {
+                        runebender_core::segment_ops::nearest_segment_with_t(
+                            g,
+                            kurbo::Point::new(dx, dy),
+                            tolerance,
+                        )
+                    });
+                if let Some((seg_hit, _)) = seg {
+                    let ids = seg_hit.point_ids();
+                    if shift {
+                        self.editor.selected.extend(ids.iter().copied());
+                    } else {
+                        self.editor.selected = ids.iter().copied().collect();
+                    }
+                    let originals: Vec<((usize, usize), (f64, f64))> = all_points
+                        .into_iter()
+                        .filter(|(id, _)| self.editor.selected.contains(id))
+                        .collect();
+                    self.push_undo_snapshot(index);
+                    self.editor.drag = Some(Drag::Points {
+                        start: (dx, dy),
+                        originals,
+                    });
+                    return;
+                }
                 if !shift {
                     self.editor.selected.clear();
                 }
@@ -2962,6 +3143,21 @@ impl Workspace {
                 }
                 changed
             }
+            Some(Drag::Pan { last }) => {
+                let (lx, ly) = *last;
+                *last = (0.0, 0.0); // placeholder; recomputed below
+                let local = {
+                    // Reborrow immutably for the conversion.
+                    let ed = &self.editor;
+                    ed.window_to_local(pos)
+                };
+                self.editor.viewport.offset.x += local.x - lx;
+                self.editor.viewport.offset.y += local.y - ly;
+                if let Some(Drag::Pan { last }) = &mut self.editor.drag {
+                    *last = (local.x, local.y);
+                }
+                true
+            }
             Some(Drag::Knife { current, .. }) => {
                 *current = (dx, dy);
                 true
@@ -2974,6 +3170,54 @@ impl Workspace {
             }
             None => false,
         }
+    }
+
+    /// Idle mouse move over the canvas: track the pointer for pen
+    /// previews, and alt-hover highlights the nearest segment
+    /// (select tool), like the web editor.
+    fn editor_hover(&mut self, pos: Point<gpui::Pixels>, alt: bool) -> bool {
+        let Mode::Editor(index) = self.mode else {
+            return false;
+        };
+        let mut changed = false;
+        let track_pointer = matches!(
+            self.editor.tool,
+            Tool::Pen | Tool::HyperPen | Tool::Select
+        );
+        if track_pointer {
+            let moved = self
+                .editor
+                .pointer
+                .is_none_or(|p| p != pos);
+            self.editor.pointer = Some(pos);
+            // Re-render for the pen rubber band only while drawing.
+            if moved
+                && (self.editor.pen.is_some() || self.editor.hyper_contour.is_some())
+            {
+                changed = true;
+            }
+        }
+        let hover = if alt && self.editor.tool == Tool::Select {
+            let (dx, dy) = self.editor.window_to_design(pos);
+            let radius = HIT_RADIUS_PX / self.editor.zoom();
+            self.font()
+                .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
+                .and_then(|g| {
+                    runebender_core::segment_ops::nearest_segment_with_t(
+                        g,
+                        kurbo::Point::new(dx, dy),
+                        radius,
+                    )
+                })
+                .map(|(hit, _)| hit.seg)
+        } else {
+            None
+        };
+        if self.editor.segment_hover.map(seg_key) != hover.map(seg_key) {
+            self.editor.segment_hover = hover;
+            changed = true;
+        }
+        changed
     }
 
     fn editor_mouse_up(&mut self) {
@@ -3062,10 +3306,53 @@ impl Workspace {
     /// curve if the previous point was dragged into a handle), start
     /// a contour if none is open, or close the contour when clicking
     /// its first point.
-    fn pen_mouse_down(&mut self, index: usize, pos: Point<gpui::Pixels>) {
+    fn pen_mouse_down(&mut self, index: usize, pos: Point<gpui::Pixels>, alt: bool) {
         let (dx, dy) = self.editor.window_to_design(pos);
         let (x, y) = (dx.round(), dy.round());
         let tolerance = HIT_RADIUS_PX / self.editor.zoom();
+
+        // Web pen: with no path in progress, a click on an existing
+        // segment inserts a point on it (alt converts a line to a
+        // curve instead).
+        if self.editor.pen.is_none() {
+            let snap_radius = 10.0 / self.editor.zoom().max(1e-6);
+            let seg = self
+                .font()
+                .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
+                .and_then(|g| {
+                    runebender_core::segment_ops::nearest_segment_with_t(
+                        g,
+                        kurbo::Point::new(dx, dy),
+                        snap_radius,
+                    )
+                });
+            if let Some((seg_hit, t)) = seg {
+                self.push_undo_snapshot(index);
+                let result = self.font_mut().and_then(|f| {
+                    f.edit_glyph(index, |g| {
+                        if alt {
+                            runebender_core::segment_ops::convert_line_to_curve(
+                                g, &seg_hit,
+                            )
+                            .map(|ids| ids[0])
+                        } else {
+                            runebender_core::segment_ops::insert_point_on_segment(
+                                g, &seg_hit, t,
+                            )
+                        }
+                    })
+                });
+                match result.flatten() {
+                    Some(id) => {
+                        self.editor.selected = [id].into();
+                    }
+                    None => {
+                        self.editor.undo.pop();
+                    }
+                }
+                return;
+            }
+        }
         self.push_undo_snapshot(index);
 
         match self.editor.pen.take() {
@@ -3985,6 +4272,64 @@ impl Workspace {
             .place_cursor_at(bx, by, line_height, top, bottom);
     }
 
+    /// Double-click editing, in the web's priority order: toggle the
+    /// point type under the cursor, else select its whole contour.
+    fn double_click_edit(&mut self, pos: Point<gpui::Pixels>) -> bool {
+        let Mode::Editor(index) = self.mode else {
+            return false;
+        };
+        let Some(font) = self.font() else {
+            return false;
+        };
+        let (dx, dy) = self.editor.window_to_design(pos);
+        let tolerance = HIT_RADIUS_PX / self.editor.zoom();
+        // On-curve point under the cursor: toggle smooth/corner.
+        let point_hit = font.glyphs[index]
+            .points
+            .iter()
+            .filter(|p| p.on_curve)
+            .map(|p| {
+                let dist = ((p.x - dx).powi(2) + (p.y - dy).powi(2)).sqrt();
+                (dist, (p.contour, p.index))
+            })
+            .filter(|(dist, _)| *dist <= tolerance)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, id)| id);
+        if let Some(id) = point_hit {
+            self.push_undo_snapshot(index);
+            let set: std::collections::HashSet<_> = [id].into();
+            let changed = self
+                .font_mut()
+                .is_some_and(|f| f.toggle_smooth(index, &set));
+            if !changed {
+                self.editor.undo.pop();
+            }
+            return changed;
+        }
+        // A segment under the cursor: select its whole contour.
+        let seg = font
+            .font
+            .get_glyph(font.glyphs[index].name.as_ref())
+            .and_then(|g| {
+                runebender_core::segment_ops::nearest_segment_with_t(
+                    g,
+                    kurbo::Point::new(dx, dy),
+                    tolerance,
+                )
+            });
+        if let Some((seg_hit, _)) = seg {
+            let contour = seg_hit.contour;
+            self.editor.selected = font.glyphs[index]
+                .points
+                .iter()
+                .filter(|p| p.contour == contour)
+                .map(|p| (p.contour, p.index))
+                .collect();
+            return true;
+        }
+        false
+    }
+
     /// Double-click on a sort (any tool): activate it and follow it
     /// in the editor, keeping the buffer.
     fn activate_sort_at_pos(&mut self, pos: Point<gpui::Pixels>) -> bool {
@@ -4769,7 +5114,16 @@ impl Workspace {
         let cmd = event.keystroke.modifiers.platform;
         let shift = event.keystroke.modifiers.shift;
         let in_editor = matches!(self.mode, Mode::Editor(_));
-        let step = if shift { 10.0 } else { 1.0 };
+        let ctrl = event.keystroke.modifiers.control;
+        // Web nudge steps: 2 design units, 8 with shift, 32 with ctrl
+        // (grid-sized moves).
+        let step = if ctrl {
+            32.0
+        } else if shift {
+            8.0
+        } else {
+            2.0
+        };
         match (key, cmd) {
             ("escape", _) if in_editor => {
                 if self.editor.pen.is_some() || self.editor.hyper_contour.is_some() {
@@ -4864,6 +5218,40 @@ impl Workspace {
                     font.add_anchor(index, cx_.round(), cy_.round());
                 }
                 true
+            }
+            ("backspace", false)
+                if in_editor
+                    && (self.editor.pen.is_some()
+                        || self.editor.hyper_contour.is_some()) =>
+            {
+                let Mode::Editor(index) = self.mode else {
+                    return false;
+                };
+                let contour = self
+                    .editor
+                    .pen
+                    .as_ref()
+                    .map(|p| p.contour)
+                    .or(self.editor.hyper_contour)
+                    .unwrap();
+                let remaining = self
+                    .font_mut()
+                    .and_then(|f| {
+                        f.edit_glyph(index, |g| {
+                            runebender_core::segment_ops::delete_last_pen_point(
+                                g, contour,
+                            )
+                        })
+                    })
+                    .flatten();
+                if remaining == Some(0) {
+                    if let Some(font) = self.font_mut() {
+                        font.remove_contour_if_degenerate(index, contour);
+                    }
+                    self.editor.pen = None;
+                    self.editor.hyper_contour = None;
+                }
+                remaining.is_some()
             }
             ("backspace" | "delete", false) if in_editor && self.editor.selected_anchor.is_some() => {
                 let Mode::Editor(index) = self.mode else {
