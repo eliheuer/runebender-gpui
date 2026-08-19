@@ -128,6 +128,46 @@ pub fn marquee_stroke() -> Rgba {
     c(theme().role("selection"))
 }
 
+// ---- gpui-component theme ----
+
+/// Configure gpui-component's widget theme (inputs, sliders, panels)
+/// from the shared OKLCH tokens, so library widgets match the app
+/// instead of shipping their default light look.
+pub fn install_component_theme(cx: &mut gpui::App) {
+    use gpui_component::{Theme, ThemeConfig, ThemeMode};
+
+    let t = theme();
+    let hex = |c: ColorRgba| -> gpui::SharedString {
+        format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b).into()
+    };
+    let mut config = ThemeConfig {
+        name: "runebender-dark".into(),
+        mode: ThemeMode::Dark,
+        ..Default::default()
+    };
+    config.colors.background = Some(hex(t.surface("app")));
+    config.colors.foreground = Some(hex(t.text("primary")));
+    config.colors.border = Some(hex(t.surface("outline")));
+    config.colors.input = Some(hex(t.surface("outline")));
+    config.colors.primary = Some(hex(t.role("accent")));
+    config.colors.primary_foreground = Some(hex(t.surface("app")));
+    config.colors.accent = Some(hex(t.surface("buttonHover")));
+    config.colors.accent_foreground = Some(hex(t.text("primary")));
+    config.colors.muted = Some(hex(t.surface("panel")));
+    config.colors.muted_foreground = Some(hex(t.text("subdued")));
+    config.colors.popover = Some(hex(t.surface("panel")));
+    config.colors.popover_foreground = Some(hex(t.text("primary")));
+    config.colors.list = Some(hex(t.surface("panel")));
+    config.colors.list_active = Some(hex(t.surface("buttonHover")));
+    config.colors.list_hover = Some(hex(t.surface("button")));
+    config.colors.danger = Some(hex(t.role("danger")));
+    config.colors.caret = Some(hex(t.text("primary")));
+
+    let theme = Theme::global_mut(cx);
+    theme.dark_theme = std::rc::Rc::new(config);
+    Theme::change(ThemeMode::Dark, None, cx);
+}
+
 // ---- glyph mark colors ----
 
 /// The mark label a glyph carries (label key, else snapped color).

@@ -3875,6 +3875,7 @@ fn main() {
         .with_assets(gpui_component_assets::Assets::default());
     let launch = move |cx: &mut App| {
         gpui_component::init(cx);
+        t::install_component_theme(cx);
 
         // The keymap for app commands; menu items show these as their
         // key equivalents.
