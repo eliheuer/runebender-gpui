@@ -161,6 +161,9 @@ struct FontModel {
     kerning_dirty: bool,
     /// codepoint → index into `glyphs`, for the text preview.
     codepoint_map: std::collections::HashMap<char, usize>,
+    /// glyph name → index into `glyphs` (text buffer sorts carry
+    /// names, including unencoded ligature glyphs from shaping).
+    name_map: std::collections::HashMap<String, usize>,
     family_name: SharedString,
     source_path: PathBuf,
     units_per_em: f64,
@@ -270,6 +273,11 @@ impl FontModel {
             .enumerate()
             .filter_map(|(i, g)| g.codepoint.map(|c| (c, i)))
             .collect();
+        let name_map = glyphs
+            .iter()
+            .enumerate()
+            .map(|(i, g)| (g.name.to_string(), i))
+            .collect();
 
         Self {
             font,
@@ -277,6 +285,7 @@ impl FontModel {
             glif_paths: std::collections::HashMap::new(),
             kerning_dirty: false,
             codepoint_map,
+            name_map,
             family_name: family_name.into(),
             source_path,
             units_per_em,
@@ -1172,6 +1181,13 @@ struct Workspace {
     category: runebender_core::category::GlyphCategory,
     mode: Mode,
     editor: EditorState,
+    /// The preview strip's text, as a real text-engine buffer:
+    /// typing, caret, bidi, kerning, and shaping all come from
+    /// runebender-core; this struct only draws it.
+    preview_buffer: runebender_core::text::TextBuffer,
+    /// Keys route to the preview buffer (click the strip to focus,
+    /// Escape to leave).
+    text_focus: bool,
     /// Folded sidebar sections (by title).
     collapsed_sections: std::collections::HashSet<&'static str>,
     /// Masters drawn as dim reference underlays in the editor
@@ -1188,8 +1204,6 @@ struct Workspace {
     search: gpui::Entity<gpui_component::input::InputState>,
     search_query: String,
     metric_inputs: MetricInputs,
-    preview_input: gpui::Entity<gpui_component::input::InputState>,
-    preview_text: SharedString,
     preview_bounds: Arc<Mutex<Bounds<gpui::Pixels>>>,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
@@ -1206,7 +1220,6 @@ struct Workspace {
     last_save: Arc<Mutex<web_time::Instant>>,
     /// A selected kern pair in the preview strip: indices into the
     /// resolved preview line (glyph indices of the pair).
-    selected_pair: Option<(usize, usize)>,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
@@ -1257,6 +1270,7 @@ impl Workspace {
                 None => self.mode = Mode::Grid,
             }
         }
+        self.rebuild_text_models();
     }
 
     fn open_editor(&mut self, index: usize) {
@@ -1324,6 +1338,7 @@ impl Workspace {
             .rounded_md()
             .cursor_pointer()
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                this.text_focus = false;
                 if jump_on_click {
                     this.open_editor(index);
                 } else {
@@ -2356,6 +2371,8 @@ impl Workspace {
     }
 
     fn editor_mouse_down(&mut self, pos: Point<gpui::Pixels>, shift: bool) {
+        self.text_focus = false;
+
         self.ensure_editor_fit();
         let Mode::Editor(index) = self.mode else {
             return;
@@ -3306,64 +3323,94 @@ impl Workspace {
 
     /// The resolved preview line: glyph index, pen x position (font
     /// units, kerning applied), and advance.
-    fn preview_line(&self) -> Vec<(usize, f64, f64)> {
-        let Some(font) = self.font() else {
-            return Vec::new();
+    /// Rebuild the text engine's font models from the active master
+    /// (glyph advances, unicode map, kerning with groups, features
+    /// for shaping), and refresh the advances of sorts already in
+    /// the buffer.
+    fn rebuild_text_models(&mut self) {
+        let Some(font) = self.project.as_ref().map(|p| p.active_font()) else {
+            return;
         };
-        let mut out = Vec::new();
-        let mut x_cursor = 0.0f64;
-        let mut prev: Option<usize> = None;
-        for c in self.preview_text.chars() {
-            let Some(&i) = font.codepoint_map.get(&c) else {
-                continue;
-            };
-            if let Some(p) = prev {
-                x_cursor += font.kern_value(
-                    font.glyphs[p].name.as_ref(),
-                    font.glyphs[i].name.as_ref(),
-                );
-            }
-            out.push((i, x_cursor, font.glyphs[i].advance));
-            x_cursor += font.glyphs[i].advance;
-            prev = Some(i);
+        let inventory =
+            runebender_core::text::TextGlyphInventory::from_font(&font.font);
+        let kerning = runebender_core::text::TextKerningModel::from_font(&font.font);
+        let widths: Vec<(usize, String, Option<char>, f64)> = (0..self
+            .preview_buffer
+            .len())
+            .filter_map(|i| {
+                let sort = self.preview_buffer.sort(i)?;
+                let name = sort.glyph_name()?.to_string();
+                let index = *font.name_map.get(&name)?;
+                Some((
+                    i,
+                    name,
+                    font.glyphs[index].codepoint,
+                    font.glyphs[index].advance,
+                ))
+            })
+            .collect();
+        self.preview_buffer.set_glyph_inventory(inventory);
+        self.preview_buffer.set_kerning_model(kerning);
+        for (i, name, codepoint, advance) in widths {
+            self.preview_buffer.update_glyph(i, name, codepoint, advance);
         }
-        out
     }
 
-    /// Text preview strip: the preview string set in the active
-    /// master with kerning applied; click a gap to select the pair.
+    /// The kern pair at the preview caret: the glyph sorts just
+    /// before and after the cursor.
+    fn preview_kern_pair(&self) -> Option<(String, String)> {
+        let cursor = self.preview_buffer.cursor();
+        if cursor == 0 {
+            return None;
+        }
+        let left = self.preview_buffer.sort(cursor - 1)?.glyph_name()?.to_string();
+        let right = self.preview_buffer.sort(cursor)?.glyph_name()?.to_string();
+        Some((left, right))
+    }
+
+    /// Text preview strip: a live text-engine buffer. Click to place
+    /// the caret and focus; type to edit; comma/period kern the pair
+    /// at the caret.
     fn preview_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let Some(font) = self.font() else {
             return div().into_any_element();
         };
         let upm = font.units_per_em;
-        let descent = font.descender;
-        let placed = self.preview_line();
-        let line: Vec<(Arc<BezPath>, f64)> = placed
+        let ascender = font.ascender;
+        let descender = font.descender;
+        let line_height = upm * 1.2;
+        let layout = self.preview_buffer.layout(line_height);
+        let items: Vec<(Arc<BezPath>, f64, f64)> = layout
+            .items
             .iter()
-            .map(|(i, x, _)| (font.glyphs[*i].path.clone(), *x))
+            .filter_map(|item| {
+                let sort = self.preview_buffer.sort(item.index)?;
+                if sort.is_absorbed() {
+                    return None;
+                }
+                let name = sort.glyph_name()?;
+                let glyph = *font.name_map.get(name)?;
+                Some((font.glyphs[glyph].path.clone(), item.x, item.y))
+            })
             .collect();
-        let pair_marker: Option<f64> = self.selected_pair.and_then(|(_, right)| {
-            placed
-                .iter()
-                .find(|(i, _, _)| *i == right)
-                .map(|(_, x, _)| *x)
-        });
+        let caret = self
+            .text_focus
+            .then_some((layout.cursor_x, layout.cursor_y));
         let bounds_slot = self.preview_bounds.clone();
         div()
             .h(px(104.0))
             .flex()
             .items_center()
-            .gap_3()
-            .px_4()
             .bg(t::panel_bg())
             .border_t_1()
-            .border_color(t::cell_border())
-            .child(div().w(px(180.0)).child(gpui_component::input::Input::new(
-                &self.preview_input,
-            )))
+            .border_color(if self.text_focus {
+                t::accent()
+            } else {
+                t::cell_border()
+            })
             .child(
                 div()
+                    .id("preview-strip")
                     .flex_1()
                     .h_full()
                     .on_mouse_down(
@@ -3380,29 +3427,37 @@ impl Workspace {
                                 *bounds_slot.lock().unwrap() = bounds;
                                 let h: f32 = bounds.size.height.into();
                                 let scale = (h as f64 * 0.72) / upm;
-                                let baseline = h as f64 * 0.82 + descent * scale;
-                                if let Some(mx) = pair_marker {
-                                    let x = bounds.origin.x + px((mx * scale) as f32);
-                                    window.paint_quad(gpui::fill(
-                                        Bounds::from_corners(
-                                            gpui::point(x - px(1.0), bounds.origin.y),
-                                            gpui::point(
-                                                x + px(1.0),
-                                                bounds.origin.y + bounds.size.height,
-                                            ),
-                                        ),
-                                        t::accent(),
-                                    ));
-                                }
-                                for (path, pen_x) in line.iter() {
-                                    let transform =
-                                        Affine::translate((pen_x * scale, baseline))
-                                            * Affine::scale_non_uniform(scale, -scale);
+                                let baseline = h as f64 * 0.82 + descender * scale;
+                                let origin_x: f64 = 24.0;
+                                for (path, x, y) in items.iter() {
+                                    let transform = Affine::translate((
+                                        origin_x + x * scale,
+                                        baseline - y * scale,
+                                    )) * Affine::scale_non_uniform(scale, -scale);
                                     if let Some(p) =
                                         build_fill_path(path, transform, bounds.origin)
                                     {
                                         window.paint_path(p, t::preview_glyph());
                                     }
+                                }
+                                if let Some((cx_, cy)) = caret {
+                                    let x = bounds.origin.x
+                                        + px((origin_x + cx_ * scale) as f32);
+                                    let top = bounds.origin.y
+                                        + px((baseline - cy * scale
+                                            - ascender * scale)
+                                            as f32);
+                                    let bottom = bounds.origin.y
+                                        + px((baseline - cy * scale
+                                            - descender * scale)
+                                            as f32);
+                                    window.paint_quad(gpui::fill(
+                                        Bounds::from_corners(
+                                            gpui::point(x - px(1.0), top),
+                                            gpui::point(x + px(1.0), bottom),
+                                        ),
+                                        t::accent(),
+                                    ));
                                 }
                             },
                         )
@@ -3412,42 +3467,111 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// Click in the preview strip: select the kern pair whose gap is
-    /// nearest the click.
+    /// Click in the preview strip: place the caret there and take
+    /// text focus.
     fn preview_click(&mut self, pos: Point<gpui::Pixels>) {
-        let Some(font) = self.font() else {
-            return;
-        };
-        let placed = self.preview_line();
-        if placed.len() < 2 {
-            return;
-        }
+        let Some(font) = self.font() else { return };
+        let upm = font.units_per_em;
+        let ascender = font.ascender;
+        let descender = font.descender;
         let bounds = *self.preview_bounds.lock().unwrap();
         let h: f32 = bounds.size.height.into();
-        let scale = (h as f64 * 0.72) / font.units_per_em;
-        let local_x = f32::from(pos.x - bounds.origin.x) as f64 / scale;
-        // Gap k sits at placed[k+1]'s pen position.
-        let mut best: Option<(f64, (usize, usize))> = None;
-        for w in placed.windows(2) {
-            let (left, _, _) = w[0];
-            let (right, x, _) = w[1];
-            let d = (x - local_x).abs();
-            if best.is_none() || d < best.unwrap().0 {
-                best = Some((d, (left, right)));
+        let scale = (h as f64 * 0.72) / upm;
+        let baseline = h as f64 * 0.82 + descender * scale;
+        let origin_x: f64 = 24.0;
+        let px_x: f32 = (pos.x - bounds.origin.x).into();
+        let px_y: f32 = (pos.y - bounds.origin.y).into();
+        let x = (px_x as f64 - origin_x) / scale;
+        let y = (baseline - px_y as f64) / scale;
+        let line_height = upm * 1.2;
+        self.preview_buffer
+            .place_cursor_at(x, y, line_height, ascender, descender);
+        self.text_focus = true;
+    }
+
+    /// A key while the preview strip has text focus. Returns true if
+    /// consumed.
+    fn handle_text_key(&mut self, event: &gpui::KeyDownEvent) -> bool {
+        let key = event.keystroke.key.as_str();
+        if event.keystroke.modifiers.platform {
+            // Cmd shortcuts (save, copy, …) keep working while typing.
+            return false;
+        }
+        let Some(font) = self.font() else { return false };
+        let line_height = font.units_per_em * 1.2;
+        match key {
+            "escape" => {
+                self.text_focus = false;
+                true
+            }
+            "backspace" => {
+                self.preview_buffer.delete_before_cursor();
+                true
+            }
+            "delete" => {
+                self.preview_buffer.delete_after_cursor();
+                true
+            }
+            "left" => {
+                self.preview_buffer.move_cursor_visual_left();
+                true
+            }
+            "right" => {
+                self.preview_buffer.move_cursor_visual_right();
+                true
+            }
+            "up" => self.preview_buffer.move_cursor_vertically(-1, line_height),
+            "down" => self.preview_buffer.move_cursor_vertically(1, line_height),
+            "enter" => {
+                self.preview_buffer.insert_line_break();
+                true
+            }
+            "comma" | "period" | "," | "." | "<" | ">" => {
+                // Kern the pair at the caret, like the old preview.
+                // Shifted comma/period arrive as "<" and ">" on some
+                // platforms; both mean the 10-unit step.
+                let negative = matches!(key, "comma" | "," | "<");
+                let big =
+                    event.keystroke.modifiers.shift || matches!(key, "<" | ">");
+                let delta =
+                    if negative { -1.0 } else { 1.0 } * if big { 10.0 } else { 2.0 };
+                if let Some((left, right)) = self.preview_kern_pair() {
+                    if let Some(font) = self.font_mut() {
+                        let value = font.kern_value(&left, &right) + delta;
+                        font.set_kern_pair(&left, &right, value);
+                    }
+                    self.rebuild_text_models();
+                }
+                true
+            }
+            _ => {
+                let Some(text) = event.keystroke.key_char.as_deref() else {
+                    return true; // swallow unhandled keys while typing
+                };
+                for c in text.chars() {
+                    if !c.is_control() {
+                        self.preview_buffer.insert_character(c);
+                    }
+                }
+                true
             }
         }
-        self.selected_pair = best.map(|(_, pair)| pair);
     }
 
     fn status_bar(&self) -> impl IntoElement + use<> {
-        let pair_status: Option<SharedString> = self.selected_pair.and_then(|(l, r)| {
-            self.font().map(|font| {
-                let ln = font.glyphs[l].name.to_string();
-                let rn = font.glyphs[r].name.to_string();
-                let v = font.kern_value(&ln, &rn);
-                format!("kern {ln}/{rn} = {v:.0} · comma/period adjust (shift = 10)").into()
-            })
-        });
+        let pair_status: Option<SharedString> = self
+            .text_focus
+            .then(|| self.preview_kern_pair())
+            .flatten()
+            .and_then(|(ln, rn)| {
+                self.font().map(|font| {
+                    let v = font.kern_value(&ln, &rn);
+                    format!(
+                        "kern {ln}/{rn} = {v:.0} · comma/period adjust (shift = 10)"
+                    )
+                    .into()
+                })
+            });
         let text: SharedString = if let Some(note) = &self.status_note {
             note.clone()
         } else if let Some(pair) = pair_status {
@@ -3796,7 +3920,11 @@ impl Workspace {
                         workspace.selected = None;
                         workspace.status_note = None;
                         workspace.search_query.clear();
-                        workspace.start_watching(cx);
+                        workspace.rebuild_text_models();
+                    for c in "hamburgevons".chars() {
+                        workspace.preview_buffer.insert_character(c);
+                    }
+                    workspace.start_watching(cx);
                     }
                     Err(e) => workspace.load_error = Some(e.into()),
                 }
@@ -3808,6 +3936,10 @@ impl Workspace {
     }
 
     fn handle_key(&mut self, event: &gpui::KeyDownEvent, _cx: &mut Context<Self>) -> bool {
+        if self.text_focus && self.handle_text_key(event) {
+            return true;
+        }
+
         let key = event.keystroke.key.as_str();
         let cmd = event.keystroke.modifiers.platform;
         let shift = event.keystroke.modifiers.shift;
@@ -3923,17 +4055,6 @@ impl Workspace {
             ("right", false) if in_editor => self.nudge_selection(step, 0.0),
             ("up", false) if in_editor => self.nudge_selection(0.0, step),
             ("down", false) if in_editor => self.nudge_selection(0.0, -step),
-            ("comma" | "period", false) if self.selected_pair.is_some() => {
-                let (left, right) = self.selected_pair.unwrap();
-                let delta = if key == "comma" { -1.0 } else { 1.0 } * if shift { 10.0 } else { 2.0 };
-                if let Some(font) = self.font_mut() {
-                    let l = font.glyphs[left].name.to_string();
-                    let r = font.glyphs[right].name.to_string();
-                    let value = font.kern_value(&l, &r) + delta;
-                    font.set_kern_pair(&l, &r, value);
-                }
-                true
-            }
             ("0", _) if matches!(self.mode, Mode::Editor(_)) => {
                 self.editor.initialized = false;
                 self.ensure_editor_fit();
@@ -4082,10 +4203,12 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
                 this.undo();
+                this.rebuild_text_models();
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &Redo, _, cx| {
                 this.redo();
+                this.rebuild_text_models();
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &CopyContours, _, cx| {
@@ -4302,6 +4425,7 @@ fn main() {
                                     let text = state.read(cx).value().to_string();
                                     if let Ok(v) = text.trim().parse::<f64>() {
                                         this.apply_metric(which, v);
+                                        this.rebuild_text_models();
                                     }
                                     this.refresh_metric_inputs(true, window, cx);
                                     cx.notify();
@@ -4340,25 +4464,6 @@ fn main() {
                     };
                     let sub_x = coord_sub(cx, window, &x_input, true);
                     let sub_y = coord_sub(cx, window, &y_input, false);
-                    let preview_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
-                            .placeholder("Preview text")
-                            .default_value("hamburgevons")
-                    });
-                    let sub_p = cx.subscribe_in(&preview_input, window, {
-                        let preview_input = preview_input.clone();
-                        move |this: &mut Workspace,
-                              _,
-                              ev: &gpui_component::input::InputEvent,
-                              _window,
-                              cx| {
-                            if matches!(ev, gpui_component::input::InputEvent::Change) {
-                                this.preview_text =
-                                    preview_input.read(cx).value().to_string().into();
-                                cx.notify();
-                            }
-                        }
-                    });
                     let subscription = cx.subscribe_in(&search, window, {
                         let search = search.clone();
                         move |this: &mut Workspace,
@@ -4380,6 +4485,8 @@ fn main() {
                         category: runebender_core::category::GlyphCategory::All,
                         mode: start_mode,
                         editor: EditorState::new(),
+                        preview_buffer: runebender_core::text::TextBuffer::new(),
+                        text_focus: false,
                         collapsed_sections: std::collections::HashSet::new(),
                         reference_layers: std::collections::HashSet::new(),
                         left_collapsed: false,
@@ -4396,10 +4503,7 @@ fn main() {
                             x: x_input,
                             y: y_input,
                         },
-                        preview_input,
-                        preview_text: "hamburgevons".into(),
                         preview_bounds: Arc::new(Mutex::new(Bounds::default())),
-                        selected_pair: None,
                         axis_sliders: Vec::new(),
                         clipboard: Vec::new(),
                         #[cfg(target_family = "wasm")]
@@ -4407,9 +4511,13 @@ fn main() {
                         _watcher: None,
                         last_save: Arc::new(Mutex::new(web_time::Instant::now())),
                         _subscriptions: vec![
-                            subscription, sub_w, sub_l, sub_r, sub_p, sub_x, sub_y,
+                            subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                         ],
                     };
+                    workspace.rebuild_text_models();
+                    for c in "hamburgevons".chars() {
+                        workspace.preview_buffer.insert_character(c);
+                    }
                     workspace.start_watching(cx);
                     #[cfg(target_family = "wasm")]
                     if let Some(base) = web_host::server_from_location() {
