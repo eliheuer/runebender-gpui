@@ -1130,6 +1130,9 @@ struct MetricInputs {
     width: gpui::Entity<gpui_component::input::InputState>,
     lsb: gpui::Entity<gpui_component::input::InputState>,
     rsb: gpui::Entity<gpui_component::input::InputState>,
+    /// Selected point coordinates (Selection section).
+    x: gpui::Entity<gpui_component::input::InputState>,
+    y: gpui::Entity<gpui_component::input::InputState>,
 }
 
 const CELL: f32 = 96.0;
@@ -1173,6 +1176,8 @@ impl Workspace {
 
     fn open_editor(&mut self, index: usize) {
         self.mode = Mode::Editor(index);
+        // The info and colors sections follow the open glyph.
+        self.selected = Some(index);
         self.editor.initialized = false;
         self.editor.selected.clear();
         self.editor.drag = None;
@@ -2487,6 +2492,100 @@ impl Workspace {
         set(&self.metric_inputs.rsb, rsb, window, cx);
     }
 
+    /// The single selected point, if exactly one point is selected.
+    fn single_selected_point(&self) -> Option<GlyphPoint> {
+        let Mode::Editor(index) = self.mode else {
+            return None;
+        };
+        if self.editor.selected.len() != 1 {
+            return None;
+        }
+        let &(contour, point) = self.editor.selected.iter().next()?;
+        self.font()?.glyphs[index]
+            .points
+            .iter()
+            .find(|p| p.contour == contour && p.index == point)
+            .copied()
+    }
+
+    /// Set one coordinate of the single selected point (Selection
+    /// section X/Y inputs), with an undo snapshot.
+    fn apply_coord(&mut self, is_x: bool, value: f64) {
+        self.status_note = Some(format!("apply_coord {is_x} {value}").into());
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        let Some(point) = self.single_selected_point() else {
+            self.status_note = Some("apply_coord: no single point".into());
+            return;
+        };
+        let (x, y) = if is_x { (value, point.y) } else { (point.x, value) };
+        self.push_undo_snapshot(index);
+        let id = (point.contour, point.index);
+        if let Some(font) = self.font_mut() {
+            font.edit_glyph(index, |g| {
+                runebender_core::glyph_ops::set_points(g, &[(id, (x, y))]);
+                runebender_core::glyph_ops::constrain_smooth_neighbor(g, id.0, id.1);
+            });
+        }
+    }
+
+    /// Keep the Selection X/Y inputs showing the selected point.
+    fn refresh_coord_inputs(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !force
+            && window
+                .focused(cx)
+                .is_some_and(|f| f != self.focus_handle)
+        {
+            return;
+        }
+        let (x, y) = match self.single_selected_point() {
+            Some(p) => (format!("{:.0}", p.x), format!("{:.0}", p.y)),
+            None => (String::new(), String::new()),
+        };
+        for (entity, value) in [
+            (self.metric_inputs.x.clone(), x),
+            (self.metric_inputs.y.clone(), y),
+        ] {
+            entity.update(cx, |st, cx| {
+                if st.value() != value.as_str() {
+                    st.set_value(value, window, cx);
+                }
+            });
+        }
+    }
+
+    /// Selection section: count plus editable X/Y for a single point.
+    fn selection_section(&self) -> gpui::Div {
+        let count = self.editor.selected.len();
+        let single = self.single_selected_point();
+        let mut body = div().flex().flex_col().gap_2().child(
+            div()
+                .text_sm()
+                .text_color(t::text_muted())
+                .child(match count {
+                    0 => "No points selected".to_string(),
+                    1 => "1 point".to_string(),
+                    n => format!("{n} points"),
+                }),
+        );
+        if single.is_some() {
+            let field = |label: &'static str,
+                         input: &gpui::Entity<gpui_component::input::InputState>| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().w(px(14.0)).text_sm().text_color(t::text_muted()).child(label))
+                    .child(div().flex_1().child(gpui_component::input::Input::new(input)))
+            };
+            body = body
+                .child(field("X", &self.metric_inputs.x))
+                .child(field("Y", &self.metric_inputs.y));
+        }
+        Self::section("Selection", body)
+    }
+
     /// Flip/rotate the selection (whole glyph when nothing selected)
     /// about its bbox center, with an undo snapshot.
     fn apply_transform(&mut self, transform: Affine) {
@@ -3553,6 +3652,7 @@ impl Render for Workspace {
         self.ensure_axis_sliders(window, cx);
         if matches!(self.mode, Mode::Editor(_)) {
             self.refresh_metric_inputs(false, window, cx);
+            self.refresh_coord_inputs(false, window, cx);
         }
         use gpui_component::resizable::{h_resizable, resizable_panel};
 
@@ -3616,7 +3716,9 @@ impl Render for Workspace {
             .flex()
             .flex_col()
             .when(in_editor, |el| {
-                el.child(self.transform_section(cx))
+                el.child(self.glyph_info_panel())
+                    .child(self.selection_section())
+                    .child(self.transform_section(cx))
                     .child(self.layers_section(cx))
                     .child(self.mark_colors_panel(cx))
             })
@@ -3851,6 +3953,8 @@ fn main() {
                     let width_input = metric(cx, window);
                     let lsb_input = metric(cx, window);
                     let rsb_input = metric(cx, window);
+                    let x_input = metric(cx, window);
+                    let y_input = metric(cx, window);
                     let metric_sub = |cx: &mut Context<Workspace>,
                                       window: &mut Window,
                                       state: &gpui::Entity<gpui_component::input::InputState>,
@@ -3880,6 +3984,34 @@ fn main() {
                     let sub_w = metric_sub(cx, window, &width_input, MetricField::Width);
                     let sub_l = metric_sub(cx, window, &lsb_input, MetricField::Lsb);
                     let sub_r = metric_sub(cx, window, &rsb_input, MetricField::Rsb);
+                    let coord_sub = |cx: &mut Context<Workspace>,
+                                     window: &mut Window,
+                                     state: &gpui::Entity<gpui_component::input::InputState>,
+                                     is_x: bool| {
+                        let state = state.clone();
+                        cx.subscribe_in(&state, window, {
+                            let state = state.clone();
+                            move |this: &mut Workspace,
+                                  _,
+                                  ev: &gpui_component::input::InputEvent,
+                                  window,
+                                  cx| {
+                                if matches!(
+                                    ev,
+                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                ) {
+                                    let text = state.read(cx).value().to_string();
+                                    if let Ok(v) = text.trim().parse::<f64>() {
+                                        this.apply_coord(is_x, v);
+                                    }
+                                    this.refresh_coord_inputs(true, window, cx);
+                                    cx.notify();
+                                }
+                            }
+                        })
+                    };
+                    let sub_x = coord_sub(cx, window, &x_input, true);
+                    let sub_y = coord_sub(cx, window, &y_input, false);
                     let preview_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Preview text")
@@ -3928,6 +4060,8 @@ fn main() {
                             width: width_input,
                             lsb: lsb_input,
                             rsb: rsb_input,
+                            x: x_input,
+                            y: y_input,
                         },
                         preview_input,
                         preview_text: "hamburgevons".into(),
@@ -3939,7 +4073,9 @@ fn main() {
                         web_host: None,
                         _watcher: None,
                         last_save: Arc::new(Mutex::new(web_time::Instant::now())),
-                        _subscriptions: vec![subscription, sub_w, sub_l, sub_r, sub_p],
+                        _subscriptions: vec![
+                            subscription, sub_w, sub_l, sub_r, sub_p, sub_x, sub_y,
+                        ],
                     };
                     workspace.start_watching(cx);
                     #[cfg(target_family = "wasm")]
