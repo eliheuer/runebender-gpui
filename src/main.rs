@@ -1045,6 +1045,7 @@ enum Tool {
     Select,
     Pen,
     Shapes,
+    Text,
     Measure,
 }
 
@@ -1092,6 +1093,9 @@ enum Drag {
 /// Editor viewport and interaction state, on the shared
 /// `runebender_core` viewport (design Y-up ↔ screen Y-down).
 struct EditorState {
+    /// The active text-buffer sort's layout position (design units);
+    /// (0,0) when the glyph is alone in the editor.
+    sort_offset: (f64, f64),
     viewport: ViewPort,
     initialized: bool,
     tool: Tool,
@@ -1114,6 +1118,7 @@ struct EditorState {
 impl EditorState {
     fn new() -> Self {
         Self {
+            sort_offset: (0.0, 0.0),
             viewport: ViewPort::new(),
             initialized: false,
             tool: Tool::Select,
@@ -1129,9 +1134,13 @@ impl EditorState {
         }
     }
 
-    /// design → local pixels
+    /// design → local pixels, in the active sort's glyph space.
+    /// When the text tool has other sorts in the buffer, the open
+    /// glyph sits at its layout position; the offset keeps every
+    /// tool (points, pen, shapes, marquee) working in glyph-local
+    /// coordinates.
     fn transform(&self) -> Affine {
-        self.viewport.affine()
+        self.viewport.affine() * Affine::translate(self.sort_offset)
     }
 
     fn zoom(&self) -> f64 {
@@ -1149,7 +1158,7 @@ impl EditorState {
     /// window position → design coordinates
     fn window_to_design(&self, pos: Point<gpui::Pixels>) -> (f64, f64) {
         let p = self.viewport.screen_to_design(self.window_to_local(pos));
-        (p.x, p.y)
+        (p.x - self.sort_offset.0, p.y - self.sort_offset.1)
     }
 
     fn fit(&mut self, advance: f64, ascender: f64, descender: f64) {
@@ -1185,6 +1194,10 @@ struct Workspace {
     /// typing, caret, bidi, kerning, and shaping all come from
     /// runebender-core; this struct only draws it.
     preview_buffer: runebender_core::text::TextBuffer,
+    /// The editor's text buffer (the text tool): the open glyph is
+    /// the active sort; other sorts render as filled context around
+    /// it, exactly the web and xilem model.
+    edit_buffer: runebender_core::text::TextBuffer,
     /// Keys route to the preview buffer (click the strip to focus,
     /// Escape to leave).
     text_focus: bool,
@@ -1277,6 +1290,7 @@ impl Workspace {
         self.mode = Mode::Editor(index);
         // The info and colors sections follow the open glyph.
         self.selected = Some(index);
+        self.seed_edit_buffer(index);
         self.editor.initialized = false;
         self.editor.selected.clear();
         self.editor.drag = None;
@@ -1776,6 +1790,15 @@ impl Workspace {
                     }),
                 ),
             )
+            .child(
+                Self::icon_tile("tool-text", "text", tool == Tool::Text).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.pen_finish();
+                        this.editor.tool = Tool::Text;
+                        cx.notify();
+                    }),
+                ),
+            )
     }
 
     /// Transformations section for the right sidebar (editor mode).
@@ -2006,6 +2029,42 @@ impl Workspace {
         let outline = entry.contour_path.clone();
         let component_path = entry.component_path.clone();
         let component_names = entry.component_names.clone();
+        // The text tool's buffer context: every sort but the active
+        // one, as (path, offset relative to the active sort). The
+        // caret comes along when the text tool is up.
+        let (buffer_sorts, text_caret): (
+            Vec<(Arc<BezPath>, f64, f64)>,
+            Option<(f64, f64)>,
+        ) = {
+            let line_height = font.units_per_em * 1.2;
+            let layout = self.edit_buffer.layout(line_height);
+            let active = self.edit_buffer.active_sort();
+            let off = self.editor.sort_offset;
+            let sorts = layout
+                .items
+                .iter()
+                .filter(|item| Some(item.index) != active)
+                .filter_map(|item| {
+                    let sort = self.edit_buffer.sort(item.index)?;
+                    if sort.is_absorbed() {
+                        return None;
+                    }
+                    let name = sort.glyph_name()?;
+                    let glyph = *font.name_map.get(name)?;
+                    Some((
+                        font.glyphs[glyph].path.clone(),
+                        item.x - off.0,
+                        item.y - off.1,
+                    ))
+                })
+                .collect();
+            let caret = (self.editor.tool == Tool::Text)
+                .then(|| (layout.cursor_x - off.0, layout.cursor_y - off.1));
+            (sorts, caret)
+        };
+        let font_ascender_for_caret = font.ascender;
+        let font_descender_for_caret = font.descender;
+
         // Masters toggled visible in the Layers section, drawn as dim
         // reference underlays.
         let reference_paths: Vec<Arc<BezPath>> = self
@@ -2137,6 +2196,30 @@ impl Workspace {
                             window.paint_quad(gpui::fill(
                                 Bounds::from_corners(a, gpui::point(a.x + px(1.0), b.y)),
                                 t::metrics_line(),
+                            ));
+                        }
+
+                        // Text-buffer context: the other sorts as
+                        // quiet fills around the active glyph.
+                        for (path, sx, sy) in buffer_sorts.iter() {
+                            let sort_transform =
+                                transform * Affine::translate((*sx, *sy));
+                            if let Some(p) =
+                                build_fill_path(path, sort_transform, origin)
+                            {
+                                window.paint_path(p, t::glyph_fill());
+                            }
+                        }
+                        if let Some((cx_, cy)) = text_caret {
+                            let top = to_screen(cx_, cy + font_ascender_for_caret);
+                            let bottom =
+                                to_screen(cx_, cy + font_descender_for_caret);
+                            window.paint_quad(gpui::fill(
+                                Bounds::from_corners(
+                                    gpui::point(top.x - px(1.0), top.y),
+                                    gpui::point(top.x + px(1.0), bottom.y),
+                                ),
+                                t::accent(),
                             ));
                         }
 
@@ -2377,6 +2460,10 @@ impl Workspace {
         let Mode::Editor(index) = self.mode else {
             return;
         };
+        if self.editor.tool == Tool::Text {
+            self.text_tool_click(pos);
+            return;
+        }
         if self.editor.tool == Tool::Pen {
             self.pen_mouse_down(index, pos);
             return;
@@ -3349,11 +3436,175 @@ impl Workspace {
                 ))
             })
             .collect();
-        self.preview_buffer.set_glyph_inventory(inventory);
-        self.preview_buffer.set_kerning_model(kerning);
+        self.preview_buffer.set_glyph_inventory(inventory.clone());
+        self.preview_buffer.set_kerning_model(kerning.clone());
         for (i, name, codepoint, advance) in widths {
             self.preview_buffer.update_glyph(i, name, codepoint, advance);
         }
+        let edit_widths: Vec<(usize, String, Option<char>, f64)> = (0..self
+            .edit_buffer
+            .len())
+            .filter_map(|i| {
+                let sort = self.edit_buffer.sort(i)?;
+                let name = sort.glyph_name()?.to_string();
+                let index = *font.name_map.get(&name)?;
+                Some((
+                    i,
+                    name,
+                    font.glyphs[index].codepoint,
+                    font.glyphs[index].advance,
+                ))
+            })
+            .collect();
+        self.edit_buffer.set_glyph_inventory(inventory);
+        self.edit_buffer.set_kerning_model(kerning);
+        for (i, name, codepoint, advance) in edit_widths {
+            self.edit_buffer.update_glyph(i, name, codepoint, advance);
+        }
+        self.sync_sort_offset();
+    }
+
+    /// Keep the editor's glyph-space offset in step with the active
+    /// sort's layout position.
+    fn sync_sort_offset(&mut self) {
+        let Some(font) = self.font() else { return };
+        let line_height = font.units_per_em * 1.2;
+        let offset = self
+            .edit_buffer
+            .active_sort()
+            .and_then(|active| {
+                let layout = self.edit_buffer.layout(line_height);
+                layout
+                    .items
+                    .iter()
+                    .find(|item| item.index == active)
+                    .map(|item| (item.x, item.y))
+            })
+            .unwrap_or((0.0, 0.0));
+        self.editor.sort_offset = offset;
+    }
+
+    /// Text tool click: a sort activates (the editor follows it); an
+    /// empty spot places the caret.
+    fn text_tool_click(&mut self, pos: Point<gpui::Pixels>) {
+        let Some((upm, ascender, descender)) = self
+            .font()
+            .map(|f| (f.units_per_em, f.ascender, f.descender))
+        else {
+            return;
+        };
+        let line_height = upm * 1.2;
+        let (dx, dy) = self.editor.window_to_design(pos);
+        // window_to_design is glyph-local; the buffer wants buffer space.
+        let bx = dx + self.editor.sort_offset.0;
+        let by = dy + self.editor.sort_offset.1;
+        if let Some(activation) =
+            self.edit_buffer
+                .activate_sort_at(bx, by, line_height, ascender, descender)
+        {
+            let name = self
+                .edit_buffer
+                .sort(activation.index)
+                .and_then(|s| s.glyph_name())
+                .map(str::to_string);
+            let target = name.and_then(|n| {
+                self.font().and_then(|f| f.name_map.get(&n).copied())
+            });
+            if let Some(glyph) = target {
+                if !matches!(self.mode, Mode::Editor(i) if i == glyph) {
+                    self.mode = Mode::Editor(glyph);
+                    self.selected = Some(glyph);
+                    self.editor.selected.clear();
+                    self.editor.selected_anchor = None;
+                    self.editor.drag = None;
+                    self.editor.undo.clear();
+                    self.editor.redo.clear();
+                }
+            }
+            self.sync_sort_offset();
+        } else {
+            self.edit_buffer
+                .place_cursor_at(bx, by, line_height, ascender, descender);
+        }
+    }
+
+    /// A key while the editor's text tool is active. Typing composes
+    /// text around the open glyph; the open glyph follows the active
+    /// sort.
+    fn handle_edit_text_key(&mut self, event: &gpui::KeyDownEvent) -> bool {
+        let key = event.keystroke.key.as_str();
+        let Some(font) = self.font() else { return false };
+        let line_height = font.units_per_em * 1.2;
+        let handled = match key {
+            "backspace" => {
+                self.edit_buffer.delete_before_cursor();
+                true
+            }
+            "delete" => {
+                self.edit_buffer.delete_after_cursor();
+                true
+            }
+            "left" => {
+                self.edit_buffer.move_cursor_visual_left();
+                true
+            }
+            "right" => {
+                self.edit_buffer.move_cursor_visual_right();
+                true
+            }
+            "up" => self.edit_buffer.move_cursor_vertically(-1, line_height),
+            "down" => self.edit_buffer.move_cursor_vertically(1, line_height),
+            "enter" => {
+                self.edit_buffer.insert_line_break();
+                true
+            }
+            _ => {
+                let Some(text) = event.keystroke.key_char.as_deref() else {
+                    return true;
+                };
+                let mut inserted = false;
+                for c in text.chars() {
+                    if !c.is_control() {
+                        inserted |= self.edit_buffer.insert_character(c);
+                    }
+                }
+                inserted
+            }
+        };
+        if handled {
+            self.sync_sort_offset();
+        }
+        true
+    }
+
+    /// Seed the editor's text buffer for an opened glyph: keep the
+    /// buffer when the glyph is already a sort in it (the text tool
+    /// walking between sorts), otherwise start fresh with this glyph
+    /// as the single active sort.
+    fn seed_edit_buffer(&mut self, index: usize) {
+        let Some((name, codepoint, advance)) = self.font().map(|font| {
+            let entry = &font.glyphs[index];
+            (entry.name.to_string(), entry.codepoint, entry.advance)
+        }) else {
+            return;
+        };
+        let existing = (0..self.edit_buffer.len()).find(|&i| {
+            self.edit_buffer
+                .sort(i)
+                .and_then(|s| s.glyph_name())
+                .is_some_and(|n| n == name)
+        });
+        match existing {
+            Some(i) => {
+                self.edit_buffer.activate_sort(i);
+            }
+            None => {
+                self.edit_buffer.clear();
+                self.edit_buffer.insert_glyph(name, codepoint, advance);
+                self.edit_buffer.activate_sort(0);
+            }
+        }
+        self.sync_sort_offset();
     }
 
     /// The kern pair at the preview caret: the glyph sorts just
@@ -3601,6 +3852,7 @@ impl Workspace {
                         Tool::Pen => "P pen: click adds, drag curves, click start closes, Enter ends",
                         Tool::Shapes => "R shapes: drag draws (press again for ellipse)",
                         Tool::Measure => "M measure: drag to read distances",
+                        Tool::Text => "T text: type to compose · click a sort to edit it · Esc for select",
                     };
                     if let Some(Drag::Measure { start, current }) = &self.editor.drag {
                         let (dx, dy) = (current.0 - start.0, current.1 - start.1);
@@ -3946,6 +4198,10 @@ impl Workspace {
         let in_editor = matches!(self.mode, Mode::Editor(_));
         let step = if shift { 10.0 } else { 1.0 };
         match (key, cmd) {
+            ("escape", _) if in_editor && self.editor.tool == Tool::Text => {
+                self.editor.tool = Tool::Select;
+                true
+            }
             ("escape", _) if in_editor => {
                 if self.editor.pen.is_some() {
                     self.pen_finish();
@@ -3976,6 +4232,9 @@ impl Workspace {
                     false
                 }
             }
+            (_, false) if in_editor && self.editor.tool == Tool::Text => {
+                self.handle_edit_text_key(event)
+            }
             ("v", false) if in_editor => {
                 self.pen_finish();
                 self.editor.tool = Tool::Select;
@@ -3996,6 +4255,11 @@ impl Workspace {
             ("m", false) if in_editor => {
                 self.pen_finish();
                 self.editor.tool = Tool::Measure;
+                true
+            }
+            ("t", false) if in_editor => {
+                self.pen_finish();
+                self.editor.tool = Tool::Text;
                 true
             }
             ("a", false) if in_editor => {
@@ -4486,6 +4750,7 @@ fn main() {
                         mode: start_mode,
                         editor: EditorState::new(),
                         preview_buffer: runebender_core::text::TextBuffer::new(),
+                        edit_buffer: runebender_core::text::TextBuffer::new(),
                         text_focus: false,
                         collapsed_sections: std::collections::HashSet::new(),
                         reference_layers: std::collections::HashSet::new(),
