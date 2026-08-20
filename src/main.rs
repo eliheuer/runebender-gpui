@@ -243,6 +243,48 @@ impl FontModel {
         Some(result)
     }
 
+    /// Rebuild every cache from the norad font (glyph added or
+    /// removed); bookkeeping fields survive.
+    fn refresh_from_font(&mut self) {
+        let font = std::mem::replace(&mut self.font, norad::Font::new());
+        let mut fresh = Self::from_font(font, self.source_path.clone());
+        fresh.dirty = self.dirty;
+        fresh.kerning_dirty = self.kerning_dirty;
+        fresh.modified_glyphs = std::mem::take(&mut self.modified_glyphs);
+        fresh.glif_paths = std::mem::take(&mut self.glif_paths);
+        *self = fresh;
+    }
+
+    /// Add an empty glyph. Returns its index in the sorted list.
+    fn add_glyph(&mut self, name: &str, width: f64) -> Option<usize> {
+        if self.name_map.contains_key(name) {
+            return None;
+        }
+        let mut glyph = norad::Glyph::new(name);
+        glyph.width = width;
+        self.font.default_layer_mut().insert_glyph(glyph);
+        self.dirty = true;
+        self.modified_glyphs.insert(name.to_string());
+        self.refresh_from_font();
+        self.name_map.get(name).copied()
+    }
+
+    /// Remove a glyph outright.
+    fn remove_glyph(&mut self, name: &str) -> bool {
+        if self
+            .font
+            .default_layer_mut()
+            .remove_glyph(name)
+            .is_none()
+        {
+            return false;
+        }
+        self.dirty = true;
+        self.modified_glyphs.remove(name);
+        self.refresh_from_font();
+        true
+    }
+
     fn load(path: &std::path::Path) -> Result<Self, norad::error::FontLoadError> {
         let font = norad::Font::load(path)?;
         Ok(Self::from_font(font, path.to_path_buf()))
@@ -1334,8 +1376,11 @@ struct Workspace {
     sidebar_counts: Option<SidebarCounts>,
     expanded_scripts: std::collections::HashSet<usize>,
     expanded_categories: std::collections::HashSet<usize>,
-    /// Grid sort: false = by name (font order), true = by unicode.
+    /// Grid sort: false = by name, true = by unicode (web default).
     sort_unicode: bool,
+    /// Grid cell size in px, driven by the bottom bar's zoom slider.
+    grid_cell_size: f32,
+    cell_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
     mode: Mode,
     editor: EditorState,
     /// The preview strip's text, as a real text-engine buffer:
@@ -1452,7 +1497,7 @@ impl Workspace {
     }
 
     fn glyph_cell(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        self.glyph_cell_sized(index, CELL, false, cx)
+        self.glyph_cell_sized(index, self.grid_cell_size, false, cx)
     }
 
     fn glyph_cell_sized(
@@ -1503,6 +1548,9 @@ impl Workspace {
             .cursor_pointer()
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                 this.text_focus = false;
+                // Notes are transient: picking a glyph clears them so
+                // the bottom bar's count shows again.
+                this.status_note = None;
                 if jump_on_click {
                     this.open_editor(index);
                 } else {
@@ -5903,7 +5951,168 @@ impl Workspace {
         }
     }
 
-    fn status_bar(&self) -> impl IntoElement + use<> {
+    /// Add an empty glyph to every master (bottom bar +), like
+    /// Glyphs' new-glyph command, and select it.
+    fn command_add_glyph(&mut self) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        // First free name: glyph, glyph.001, glyph.002, ...
+        let taken: std::collections::HashSet<String> = project
+            .masters
+            .iter()
+            .flat_map(|m| m.name_map.keys().cloned())
+            .collect();
+        let mut name = "glyph".to_string();
+        let mut counter = 0;
+        while taken.contains(&name) {
+            counter += 1;
+            name = format!("glyph.{counter:03}");
+        }
+        let upm = project.active_font().units_per_em;
+        for master in project.masters.iter_mut() {
+            master.add_glyph(&name, (upm * 0.5).round());
+        }
+        let name_owned = name.clone();
+        project.recheck_compat(&name_owned);
+        self.selected = self
+            .font()
+            .and_then(|f| f.name_map.get(&name).copied());
+        self.sidebar_counts = None;
+        self.status_note = Some(format!("Added {name}").into());
+    }
+
+    /// Remove the selected glyph from every master (bottom bar −).
+    fn command_remove_glyph(&mut self) {
+        let Some(index) = self.selected else {
+            self.status_note = Some("Select a glyph to remove".into());
+            return;
+        };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if let Some(project) = self.project.as_mut() {
+            for master in project.masters.iter_mut() {
+                master.remove_glyph(&name);
+            }
+        }
+        self.selected = None;
+        self.sidebar_counts = None;
+        self.status_note = Some(format!("Removed {name}").into());
+    }
+
+    /// Create the bottom bar's cell-size slider once a window exists.
+    fn ensure_cell_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cell_slider.is_some() {
+            return;
+        }
+        let slider = cx.new(|_| {
+            gpui_component::slider::SliderState::new()
+                .max(200.0)
+                .min(48.0)
+                .step(4.0)
+                .default_value(CELL)
+        });
+        let sub = cx.subscribe_in(&slider, window, {
+            move |this: &mut Workspace,
+                  _,
+                  event: &gpui_component::slider::SliderEvent,
+                  _window,
+                  cx| {
+                let gpui_component::slider::SliderEvent::Change(value) = event
+                else {
+                    return;
+                };
+                this.grid_cell_size = value.start();
+                cx.notify();
+            }
+        });
+        self._subscriptions.push(sub);
+        self.cell_slider = Some(slider);
+    }
+
+    fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // Grid mode gets the Glyphs bottom bar: add/remove glyph on
+        // the left, the selection count centered, cell zoom on the
+        // right.
+        if !matches!(self.mode, Mode::Editor(_)) && self.project.is_some() {
+            let total = self.font().map(|f| f.glyphs.len()).unwrap_or(0);
+            let query = self.search_query.clone();
+            let shown = self
+                .font()
+                .map(|f| {
+                    f.glyphs
+                        .iter()
+                        .filter(|entry| {
+                            self.sidebar_matches
+                                .as_ref()
+                                .is_none_or(|m| m.contains(entry.name.as_ref()))
+                                && (query.is_empty()
+                                    || entry.name.to_lowercase().contains(&query))
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+            let center: SharedString = match &self.status_note {
+                Some(note) => note.clone(),
+                None => format!(
+                    "{} selected · {shown}/{total} glyphs",
+                    usize::from(self.selected.is_some())
+                )
+                .into(),
+            };
+            let bar_button = |id: &'static str, label: &'static str| {
+                div()
+                    .id(id)
+                    .w(px(24.0))
+                    .h(px(20.0))
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(t::cell_border())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(t::text())
+                    .cursor_pointer()
+                    .child(label)
+            };
+            return div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .bg(t::panel_bg())
+                .border_t_1()
+                .border_color(t::cell_border())
+                .child(bar_button("add-glyph", "+").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.command_add_glyph();
+                        cx.notify();
+                    },
+                )))
+                .child(bar_button("remove-glyph", "−").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.command_remove_glyph();
+                        cx.notify();
+                    },
+                )))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_center()
+                        .text_sm()
+                        .text_color(t::text_muted())
+                        .child(center),
+                )
+                .children(self.cell_slider.as_ref().map(|slider| {
+                    div()
+                        .w(px(140.0))
+                        .child(gpui_component::slider::Slider::new(slider))
+                }));
+        }
         let pair_status: Option<SharedString> = self
             .text_focus
             .then(|| self.preview_kern_pair())
@@ -6521,6 +6730,7 @@ impl Render for Workspace {
         }
 
         self.ensure_axis_sliders(window, cx);
+        self.ensure_cell_slider(window, cx);
         if self.sidebar_counts.is_none() && self.project.is_some() {
             self.rebuild_sidebar_cache();
         }
@@ -6563,13 +6773,11 @@ impl Render for Workspace {
                                             .contains(&query))
                             })
                             .collect();
-                        if sort_unicode {
-                            indices.sort_by_key(|&i| {
-                                (
-                                    font.glyphs[i].codepoint.is_none(),
-                                    font.glyphs[i].codepoint,
-                                )
-                            });
+                        if !sort_unicode {
+                            // Font order is already unicode order, so
+                            // the Name toggle sorts alphabetically.
+                            indices
+                                .sort_by_key(|&i| font.glyphs[i].name.clone());
                         }
                         indices
                             .into_iter()
@@ -6771,7 +6979,7 @@ impl Render for Workspace {
             .child(self.header(cx))
             .child(content)
             .child(self.preview_strip(cx))
-            .child(self.status_bar())
+            .child(self.status_bar(cx))
     }
 }
 
@@ -6975,7 +7183,9 @@ fn main() {
                         sidebar_counts: None,
                         expanded_scripts: std::collections::HashSet::new(),
                         expanded_categories: std::collections::HashSet::new(),
-                        sort_unicode: false,
+                        sort_unicode: true,
+                        grid_cell_size: CELL,
+                        cell_slider: None,
                         mode: start_mode,
                         editor: EditorState::new(),
                         preview_buffer: runebender_core::text::TextBuffer::new(),
