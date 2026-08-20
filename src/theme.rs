@@ -190,9 +190,14 @@ pub fn install_component_theme(cx: &mut gpui::App) {
     config.colors.danger = Some(hex(t.role("danger")));
     config.colors.caret = Some(hex(t.text("primary")));
 
+    config.colors.ring = Some(hex(t.role("accent")));
+
     let theme = Theme::global_mut(cx);
     theme.dark_theme = std::rc::Rc::new(config);
     Theme::change(ThemeMode::Dark, None, cx);
+    // Focused inputs keep a single accent border instead of the
+    // thick translucent ring painted outside it.
+    Theme::global_mut(cx).focus_ring = false;
 }
 
 // ---- glyph mark colors ----

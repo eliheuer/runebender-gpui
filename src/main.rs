@@ -70,6 +70,8 @@ gpui::actions!(
         Balance,
         Optimize,
         ZoomToFit,
+        SortByName,
+        SortByUnicode,
         NextMaster,
         PreviousMaster,
         Quit
@@ -136,6 +138,9 @@ fn app_menus() -> Vec<gpui::Menu> {
             name: "View".into(),
             items: vec![
                 MenuItem::action("Zoom to Fit", ZoomToFit),
+                MenuItem::separator(),
+                MenuItem::action("Sort Glyphs by Name", SortByName),
+                MenuItem::action("Sort Glyphs by Unicode", SortByUnicode),
                 MenuItem::separator(),
                 MenuItem::action("Next Master", NextMaster),
                 MenuItem::action("Previous Master", PreviousMaster),
@@ -2096,36 +2101,6 @@ impl Workspace {
             ));
         }
 
-        // Name / Unicode sort toggle, like the web sidebar's top row.
-        let sort_button = |id: &'static str,
-                           label: &'static str,
-                           active: bool,
-                           unicode: bool,
-                           cx: &mut Context<Self>| {
-            div()
-                .id(id)
-                .flex_1()
-                .px_2()
-                .py_0p5()
-                .rounded_sm()
-                .text_sm()
-                .text_center()
-                .cursor_pointer()
-                .when(active, |el| {
-                    el.border_1().border_color(t::accent()).text_color(t::accent())
-                })
-                .when(!active, |el| {
-                    el.border_1()
-                        .border_color(t::cell_border())
-                        .text_color(t::text_muted())
-                })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.sort_unicode = unicode;
-                    cx.notify();
-                }))
-        };
-
         div()
             .size_full()
             .flex()
@@ -2133,21 +2108,6 @@ impl Workspace {
             .child(
                 div()
                     .p_2()
-                    .flex()
-                    .gap_1()
-                    .child(sort_button("sort-name", "Name", !self.sort_unicode, false, cx))
-                    .child(sort_button(
-                        "sort-unicode",
-                        "Unicode",
-                        self.sort_unicode,
-                        true,
-                        cx,
-                    )),
-            )
-            .child(
-                div()
-                    .px_2()
-                    .pb_2()
                     .border_b_1()
                     .border_color(t::panel_outline())
                     .child(gpui_component::input::Input::new(&self.search)),
@@ -5482,7 +5442,6 @@ impl Workspace {
                 let el = el.child(div().flex_none().child(self.app_menu_bar.clone()));
                 el
             })
-            .child(self.tab_strip(cx))
             .child(
                 div()
                     .flex_1()
@@ -5503,6 +5462,7 @@ impl Workspace {
                 |el| el.child(self.direction_toolbar(cx)),
             )
             .when(in_editor, |el| el.child(self.header_tools(cx)))
+            .child(self.tab_strip(cx))
     }
 
     /// Create the axis sliders once a project with axes exists.
@@ -7036,6 +6996,14 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &Optimize, _, cx| {
                 this.apply_curve_op(CurveOp::Optimize(0.12));
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SortByName, _, cx| {
+                this.sort_unicode = false;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SortByUnicode, _, cx| {
+                this.sort_unicode = true;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ZoomToFit, _, cx| {
