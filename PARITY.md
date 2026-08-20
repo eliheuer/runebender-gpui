@@ -37,8 +37,8 @@ browser build over WebGPU with workspace-server load/save.
 - [x] Shift-lock constraints: shapes square/circular, knife and
       measure lines axis-locked (web keeps point drags free — shift
       is the selection modifier there)
-- [ ] Convert hyperbezier contour to cubic (web
-      `convertHyperToCubic`)
+- [x] Convert hyperbezier contour to cubic (Glyph menu; selected
+      contours, or all hyper contours when nothing is selected)
 - [x] Numeric move/scale with reference point: the Selection panel
       grew the 9-point quadrant picker with X/Y (move so the
       reference lands there) and W/H (scale about the reference),
@@ -54,8 +54,9 @@ browser build over WebGPU with workspace-server load/save.
       (core `composites` module)
 - [x] Add component to a glyph (context menu, name typed inline;
       lands anchor-locked so marks snap to their anchor)
-- [ ] Anchor panel: name + coords editing for the selected anchor
-      (web `updateSelectedAnchor`, AnchorPanel.vue)
+- [x] Anchor editing: name field in the Selection panel, coords via
+      the X/Y reference fields (anchor selected → bounds is its
+      point)
 - [ ] Measure-tool option toggles (web SelectPanel/measure options:
       colorize outline, handle lengths, segment lengths, stems &
       counters, side bearings, popcount sums)

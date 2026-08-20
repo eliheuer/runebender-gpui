@@ -70,6 +70,7 @@ gpui::actions!(
         DuplicateRepeat,
         Rotate180,
         RoundCorners,
+        HyperToCubic,
         Harmonize,
         Balance,
         Optimize,
@@ -128,6 +129,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Duplicate Selection", DuplicateSelection),
                 MenuItem::action("Duplicate + Repeat", DuplicateRepeat),
                 MenuItem::action("Round Corners", RoundCorners),
+                MenuItem::action("Hyperbezier to Cubic", HyperToCubic),
                 MenuItem::action("Reverse Contours", ReverseContours),
                 MenuItem::action("Set Start Point", SetStartPoint),
                 MenuItem::separator(),
@@ -1481,6 +1483,7 @@ struct Workspace {
     /// scale (web coordinate quadrant).
     coord_quadrant: runebender_core::path::Quadrant,
     component_name_input: gpui::Entity<gpui_component::input::InputState>,
+    anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
     axis_sliders: Vec<(usize, gpui::Entity<gpui_component::slider::SliderState>)>,
@@ -5554,6 +5557,28 @@ impl Workspace {
 
     /// Set one coordinate of the single selected point (Selection
     /// section X/Y inputs), with an undo snapshot.
+    /// Rename the selected anchor (Enter in the Selection panel).
+    fn apply_anchor_name(&mut self, text: &str) {
+        let Mode::Editor(index) = self.mode else { return };
+        let Some(ai) = self.editor.selected_anchor else { return };
+        let name = text.trim();
+        if name.is_empty() {
+            return;
+        }
+        let Ok(name) = norad::Name::new(name) else {
+            self.status_note = Some(format!("Bad anchor name: {text}").into());
+            return;
+        };
+        self.push_undo_snapshot(index);
+        self.font_mut().and_then(|f| {
+            f.edit_glyph(index, |g| {
+                if let Some(anchor) = g.anchors.get_mut(ai) {
+                    anchor.name = Some(name);
+                }
+            })
+        });
+    }
+
     /// Bounds of whatever is selected: points, else the component,
     /// else the anchor.
     fn selection_bounds(&self) -> Option<kurbo::Rect> {
@@ -5782,11 +5807,22 @@ impl Workspace {
             }
             None => Default::default(),
         };
+        let anchor_name = self
+            .editor
+            .selected_anchor
+            .and_then(|ai| {
+                let Mode::Editor(index) = self.mode else { return None };
+                self.font()
+                    .and_then(|f| f.glyphs[index].anchors.get(ai).cloned())
+            })
+            .map(|(name, _, _)| name.to_string())
+            .unwrap_or_default();
         for (entity, value) in [
             (self.metric_inputs.x.clone(), x),
             (self.metric_inputs.y.clone(), y),
             (self.metric_inputs.w.clone(), w),
             (self.metric_inputs.h.clone(), h),
+            (self.anchor_name_input.clone(), anchor_name),
         ] {
             entity.update(cx, |st, cx| {
                 if st.value() != value.as_str() {
@@ -5888,6 +5924,26 @@ impl Workspace {
                             .child(field("W", &self.metric_inputs.w))
                             .child(field("H", &self.metric_inputs.h)),
                     ),
+            );
+        }
+        // Selected anchor: editable name (web AnchorPanel).
+        if self.editor.selected_anchor.is_some() {
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(t::text_muted())
+                            .child("Anchor"),
+                    )
+                    .child(div().flex_1().child(
+                        gpui_component::input::Input::new(
+                            &self.anchor_name_input,
+                        ),
+                    )),
             );
         }
         // Selected component: name plus the anchor lock, the Glyphs
@@ -8208,6 +8264,28 @@ impl Render for Workspace {
                 this.command_duplicate_repeat();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &HyperToCubic, _, cx| {
+                if let Mode::Editor(index) = this.mode {
+                    this.push_undo_snapshot(index);
+                    let selected = this.editor.selected.clone();
+                    let ok = this
+                        .font_mut()
+                        .and_then(|f| {
+                            f.edit_glyph(index, |g| {
+                                runebender_core::glyph_ops::convert_hyper_to_cubic(
+                                    g, &selected,
+                                )
+                            })
+                        })
+                        .unwrap_or(false);
+                    if !ok {
+                        this.editor.undo.pop();
+                    } else {
+                        this.editor.selected.clear();
+                    }
+                }
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &RoundCorners, _, cx| {
                 this.command_round_corners();
                 cx.notify();
@@ -8530,6 +8608,27 @@ fn main() {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("glyph name")
                     });
+                    let anchor_name_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("anchor name")
+                    });
+                    let sub_anchor = cx.subscribe_in(&anchor_name_input, window, {
+                        let state = anchor_name_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _window,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text = state.read(cx).value().to_string();
+                                this.apply_anchor_name(&text);
+                                cx.notify();
+                            }
+                        }
+                    });
                     let sub_comp = cx.subscribe_in(&component_name_input, window, {
                         let state = component_name_input.clone();
                         move |this: &mut Workspace,
@@ -8596,6 +8695,7 @@ fn main() {
                         context_menu: None,
                         coord_quadrant: Default::default(),
                         component_name_input: component_name_input.clone(),
+                        anchor_name_input: anchor_name_input.clone(),
                         glyph_inputs: GlyphInputs {
                             name: name_input,
                             unicode: unicode_input,
@@ -8620,7 +8720,7 @@ fn main() {
                         _subscriptions: vec![
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_comp,
-                            sub_sw, sub_sh,
+                            sub_sw, sub_sh, sub_anchor,
                         ],
                     };
                     workspace.rebuild_text_models();
