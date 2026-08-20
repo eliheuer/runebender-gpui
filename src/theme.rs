@@ -243,6 +243,42 @@ pub fn reference_layer() -> Rgba {
     c(theme().role("reference"))
 }
 
+// ---- curve overlays (web curve_gradient + continuity palette) ----
+
+/// The comb's cool-to-warm curvature ramp.
+pub fn comb_gradient(t: f64) -> Rgba {
+    const STOPS: [[f32; 3]; 5] = [
+        [0.16, 0.80, 0.82], // teal
+        [0.40, 0.44, 0.95], // indigo
+        [0.86, 0.28, 0.72], // magenta
+        [1.00, 0.55, 0.24], // orange
+        [1.00, 0.84, 0.36], // amber
+    ];
+    let u = (t.clamp(0.0, 1.0) as f32) * (STOPS.len() as f32 - 1.0);
+    let i = (u.floor() as usize).min(STOPS.len() - 2);
+    let f = u - i as f32;
+    let (a, b) = (STOPS[i], STOPS[i + 1]);
+    Rgba {
+        r: a[0] + (b[0] - a[0]) * f,
+        g: a[1] + (b[1] - a[1]) * f,
+        b: a[2] + (b[2] - a[2]) * f,
+        a: 1.0,
+    }
+}
+
+pub fn continuity_g2() -> Rgba {
+    Rgba { r: 0.30, g: 0.85, b: 0.55, a: 1.0 }
+}
+pub fn continuity_g1() -> Rgba {
+    Rgba { r: 0.95, g: 0.80, b: 0.30, a: 1.0 }
+}
+pub fn continuity_line() -> Rgba {
+    Rgba { r: 0.55, g: 0.62, b: 0.70, a: 1.0 }
+}
+pub fn continuity_kink() -> Rgba {
+    Rgba { r: 0.95, g: 0.35, b: 0.30, a: 1.0 }
+}
+
 // ---- anchors ----
 
 pub fn anchor() -> Rgba {

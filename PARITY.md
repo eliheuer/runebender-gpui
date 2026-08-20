@@ -60,7 +60,8 @@ browser build over WebGPU with workspace-server load/save.
 - [ ] Measure-tool option toggles (web SelectPanel/measure options:
       colorize outline, handle lengths, segment lengths, stems &
       counters, side bearings, popcount sums)
-- [ ] Curvature comb + continuity display (web CurvePanel)
+- [x] Curvature comb + continuity display (Curves section toggles;
+      shared analyses from core's curve module, web's color ramp)
 - [ ] Sketch tool (parked deliberately; SketchPanel.vue)
 
 ## Glyph and font data gaps

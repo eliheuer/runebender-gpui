@@ -1482,6 +1482,9 @@ struct Workspace {
     /// The Selection panel's 9-point reference for numeric move and
     /// scale (web coordinate quadrant).
     coord_quadrant: runebender_core::path::Quadrant,
+    /// Curve overlays (web CurvePanel).
+    curve_comb: bool,
+    curve_continuity: bool,
     component_name_input: gpui::Entity<gpui_component::input::InputState>,
     anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
@@ -2968,6 +2971,53 @@ impl Workspace {
         )
     }
 
+    /// Curves section: comb + continuity toggles (web CurvePanel).
+    fn curves_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let toggle = |id: &'static str,
+                      label: &'static str,
+                      active: bool,
+                      cx: &mut Context<Self>,
+                      on: fn(&mut Self)| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .text_sm()
+                .cursor_pointer()
+                .border_1()
+                .when(active, |el| {
+                    el.border_color(t::accent()).text_color(t::accent())
+                })
+                .when(!active, |el| {
+                    el.border_color(t::cell_border()).text_color(t::text())
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    on(this);
+                    cx.notify();
+                }))
+        };
+        let body = div()
+            .flex()
+            .gap_1()
+            .child(toggle(
+                "curve-comb",
+                "Curvature comb",
+                self.curve_comb,
+                cx,
+                |this| this.curve_comb = !this.curve_comb,
+            ))
+            .child(toggle(
+                "curve-continuity",
+                "Continuity G0–G3",
+                self.curve_continuity,
+                cx,
+                |this| this.curve_continuity = !this.curve_continuity,
+            ));
+        self.section(cx, "Curves", body)
+    }
+
     /// Layers section: one row per master, the active one highlighted.
     fn layers_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let (names, active): (Vec<SharedString>, usize) = match &self.project {
@@ -3347,6 +3397,70 @@ impl Workspace {
             Some(Drag::Measure { start, current }) => Some((*start, *current)),
             _ => None,
         };
+        // Curve overlays: comb strips and continuity rings, computed
+        // in design space from the shared analyses in core.
+        let comb_strips: Vec<Vec<runebender_core::curve::CombSample>> =
+            if self.curve_comb && self.editor.tool != Tool::Preview {
+                font.font
+                    .get_glyph(entry.name.as_ref())
+                    .map(|g| {
+                        let cubics =
+                            runebender_core::curve::cubics_from_norad(g);
+                        let maxk =
+                            runebender_core::curve::max_curvature(&cubics);
+                        if maxk <= 1e-12 {
+                            (Vec::new(), 0.0)
+                        } else {
+                            (
+                                runebender_core::curve::curvature_comb(
+                                    &cubics,
+                                    1.0,
+                                    74.0 / maxk,
+                                    false,
+                                    16,
+                                ),
+                                maxk,
+                            )
+                        }
+                    })
+                    .map(|(strips, _)| strips)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+        let comb_maxk: f64 = comb_strips
+            .iter()
+            .flat_map(|s| s.iter())
+            .map(|s| s.kappa.abs())
+            .fold(0.0, f64::max);
+        let continuity_rings: Vec<(kurbo::Point, gpui::Rgba)> =
+            if self.curve_continuity && self.editor.tool != Tool::Preview {
+                font.font
+                    .get_glyph(entry.name.as_ref())
+                    .map(|g| {
+                        let cubics =
+                            runebender_core::curve::cubics_from_norad(g);
+                        runebender_core::curve::node_continuity(&cubics)
+                            .into_iter()
+                            .filter_map(|nc| {
+                                use runebender_core::curve::GLevel;
+                                let color = match nc.level {
+                                    GLevel::Corner => return None,
+                                    GLevel::G2 | GLevel::G3 => {
+                                        t::continuity_g2()
+                                    }
+                                    GLevel::G1 => t::continuity_g1(),
+                                    GLevel::G1Line => t::continuity_line(),
+                                    GLevel::Kink => t::continuity_kink(),
+                                };
+                                Some((nc.at, color))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
         // Alt-hover segment highlight (select tool).
         let hover_seg = self.editor.segment_hover;
         // Sidebearing edge under the pointer (or mid-drag).
@@ -3922,6 +4036,34 @@ impl Workspace {
                         {
                             window.paint_path(p, t::ghost());
                         }
+                        // Curvature comb, behind the outline so points
+                        // stay selectable over it.
+                        for strip in &comb_strips {
+                            for w in strip.windows(2) {
+                                let (s0, s1) = (&w[0], &w[1]);
+                                let mut quad = BezPath::new();
+                                quad.move_to(transform * s0.on);
+                                quad.line_to(transform * s1.on);
+                                quad.line_to(transform * s1.outer);
+                                quad.line_to(transform * s0.outer);
+                                quad.close_path();
+                                let k = if comb_maxk > 1e-12 {
+                                    (s0.kappa.abs() + s1.kappa.abs()) * 0.5
+                                        / comb_maxk
+                                } else {
+                                    0.0
+                                };
+                                if let Some(p) = build_fill_path(
+                                    &quad,
+                                    Affine::IDENTITY,
+                                    origin,
+                                ) {
+                                    window
+                                        .paint_path(p, t::comb_gradient(k));
+                                }
+                            }
+                        }
+
                         // Ghost fill under the glyph being edited: the
                         // same grey the inactive sorts use at a tenth
                         // strength, so counters read as counters
@@ -4167,6 +4309,25 @@ impl Workspace {
                                 window.paint_path(p, t::accent());
                             }
                         }
+                        // Continuity rings around on-curve nodes.
+                        if !continuity_rings.is_empty() {
+                            use kurbo::Shape as _;
+                            let r = (4.5 * 1.9) as f64;
+                            for (at, color) in &continuity_rings {
+                                let c = transform * *at;
+                                let circle = kurbo::Circle::new(c, r)
+                                    .to_path(0.25);
+                                if let Some(p) = build_path(
+                                    &circle,
+                                    Affine::IDENTITY,
+                                    origin,
+                                    PathBuilder::stroke(px(1.5)),
+                                ) {
+                                    window.paint_path(p, *color);
+                                }
+                            }
+                        }
+
                         // Marquee rectangle.
                         if let Some((a, b)) = marquee {
                             let pa = to_screen(a.0, a.1);
@@ -8129,6 +8290,7 @@ impl Render for Workspace {
                     .child(self.glyph_info_panel(cx))
                     .child(self.selection_section(cx))
                     .child(self.transform_section(cx))
+                    .child(self.curves_section(cx))
                     .child(self.layers_section(cx))
                     .children(self.axes_section(cx))
                     .child(self.mark_colors_panel(cx))
@@ -8694,6 +8856,8 @@ fn main() {
                         search_query: String::new(),
                         context_menu: None,
                         coord_quadrant: Default::default(),
+                        curve_comb: false,
+                        curve_continuity: false,
                         component_name_input: component_name_input.clone(),
                         anchor_name_input: anchor_name_input.clone(),
                         glyph_inputs: GlyphInputs {
