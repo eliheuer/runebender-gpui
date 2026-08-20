@@ -15,9 +15,36 @@ An experimental in-browser build runs at
 cargo run
 ```
 
-The repo pins the stable Rust toolchain in `rust-toolchain.toml`. A
-GPUI dependency (`pathfinder_simd`) does not compile on current
-nightly toolchains.
+Or install it and open a font from anywhere:
+
+```sh
+cargo install --locked --git https://github.com/eliheuer/runebender-gpui
+runebender-gpui path/to/Font.designspace
+```
+
+Every dependency comes from crates.io or a public git repository, so a
+plain clone builds. Use `--locked` when installing: several
+dependencies track a git branch, and the committed `Cargo.lock` holds
+the revisions this editor is known to build against. The repo pins the stable Rust toolchain in
+`rust-toolchain.toml`. A GPUI dependency (`pathfinder_simd`) does not
+compile on current nightly toolchains.
+
+The shared editing crate,
+[runebender-core](https://github.com/eliheuer/runebender-core), is a
+git dependency. To work on both at once, clone it and add a cargo
+`paths` override so the local copy replaces the published one:
+
+```sh
+git clone https://github.com/eliheuer/runebender-core
+```
+
+```toml
+# .cargo/config.toml in the directory that holds both checkouts
+paths = ["runebender-core"]
+```
+
+Put that file above the two repositories, not inside them: the
+override is a local development setting, not part of either repo.
 
 GPUI and `gpui_platform` come from the Zed git repository (not
 crates.io) because the editor shell uses

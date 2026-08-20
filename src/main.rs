@@ -3070,10 +3070,44 @@ impl Workspace {
                         )),
                 )
         };
+        // Width and the sidebearings are edited here, beside the name
+        // and the kerning groups, the way the web keeps a glyph's
+        // metrics in one panel. Enter commits each field.
+        let metric_field = |label_text: &'static str,
+                            input: &gpui::Entity<gpui_component::input::InputState>| {
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(t::info_header())
+                        .child(label_text),
+                )
+                .child(gpui_component::input::Input::new(input))
+        };
+        // In the editor the metric fields live in the floating panel
+        // over the canvas (Glyphs-style), so they appear here only in
+        // the grid: one input entity, one place on screen.
+        let in_editor = matches!(self.mode, Mode::Editor(_));
         panel = panel
             .child(row("Master", master))
             .child(input_row("Glyph Name", &self.glyph_inputs.name))
-            .child(row("Width", format!("{:.0}", entry.advance).into()))
+            .when(in_editor, |el| {
+                el.child(row("Width", format!("{:.0}", entry.advance).into()))
+            })
+            .when(!in_editor, |el| {
+                el.child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .child(metric_field("Width", &self.metric_inputs.width))
+                        .child(metric_field("LSB", &self.metric_inputs.lsb))
+                        .child(metric_field("RSB", &self.metric_inputs.rsb)),
+                )
+            })
             .child(pair_row(
                 "Kerning Groups (L · R)",
                 &self.glyph_inputs.group_l,
@@ -5937,6 +5971,185 @@ impl Workspace {
                 )
                 .size_full(),
             )
+            .child(self.editor_info_panel(index, cx))
+    }
+
+    /// The floating info panel Glyphs puts at the bottom of the edit
+    /// view: the glyph's name and codepoint, its sidebearings and
+    /// width, its kerning groups, and — while something is selected —
+    /// the selection's position and size.
+    fn editor_info_panel(
+        &self,
+        index: usize,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        if self.editor.tool == Tool::Preview {
+            return div().into_any_element();
+        }
+        let Some(font) = self.font() else {
+            return div().into_any_element();
+        };
+        let entry = &font.glyphs[index];
+        let name: SharedString = entry.name.to_string().into();
+        let unicode: SharedString = entry
+            .codepoint
+            .map(|c| format!("{:04X}", c as u32))
+            .unwrap_or_default()
+            .into();
+        let group_l = runebender_core::glyph_ops::kern_group(
+            &font.font,
+            entry.name.as_ref(),
+            true,
+        )
+        .map(|g| g.as_str().replace("public.kern1.", ""))
+        .unwrap_or_default();
+        let group_r = runebender_core::glyph_ops::kern_group(
+            &font.font,
+            entry.name.as_ref(),
+            false,
+        )
+        .map(|g| g.as_str().replace("public.kern2.", ""))
+        .unwrap_or_default();
+
+        let card = || {
+            div()
+                .rounded_md()
+                .border_1()
+                .border_color(t::panel_outline())
+                .bg(t::panel_bg())
+                .overflow_hidden()
+        };
+        let label = |text: SharedString| {
+            div().text_xs().text_color(t::text_muted()).child(text)
+        };
+        let value = |text: SharedString| {
+            div().text_sm().text_color(t::text()).child(text)
+        };
+        let metric = |input: &gpui::Entity<gpui_component::input::InputState>| {
+            use gpui_component::Sizable as _;
+            div()
+                .w(px(58.0))
+                .child(gpui_component::input::Input::new(input).small())
+        };
+
+        let metrics = card()
+            .child(
+                // Title bar, Glyphs-style: the glyph on the left, its
+                // codepoint on the right.
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .px_2()
+                    .py_0p5()
+                    .bg(t::accent())
+                    .text_sm()
+                    .text_color(t::window_bg())
+                    .child(name)
+                    .child(unicode),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .child(label("LSB".into()))
+                    .child(metric(&self.metric_inputs.lsb))
+                    .child(metric(&self.metric_inputs.width))
+                    .child(metric(&self.metric_inputs.rsb))
+                    .child(label("RSB".into())),
+            )
+            .child(
+                // Kerning groups sit under the sidebearings they apply
+                // to, the way Glyphs stacks them.
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .px_2()
+                    .pb_1()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child(SharedString::from(group_l))
+                    .child(SharedString::from(group_r)),
+            );
+
+        let selection = self.selection_bounds().map(|r| {
+            card()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_2()
+                        .py_1()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .child(label("X".into()))
+                                        .child(value(
+                                            format!("{:.0}", r.x0).into(),
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .child(label("Y".into()))
+                                        .child(value(
+                                            format!("{:.0}", r.y0).into(),
+                                        )),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .child(label("↔".into()))
+                                        .child(value(
+                                            format!("{:.0}", r.width()).into(),
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .child(label("↕".into()))
+                                        .child(value(
+                                            format!("{:.0}", r.height()).into(),
+                                        )),
+                                ),
+                        ),
+                )
+        });
+
+        div()
+            .absolute()
+            .bottom(px(12.0))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .items_end()
+            .gap_2()
+            .child(metrics)
+            .children(selection)
+            .into_any_element()
     }
 
     fn ensure_editor_fit(&mut self) {
@@ -7140,7 +7353,10 @@ impl Workspace {
     }
 
     fn apply_metric(&mut self, which: MetricField, value: f64) {
-        let Mode::Editor(index) = self.mode else {
+        let Some(index) = (match self.mode {
+            Mode::Editor(index) => Some(index),
+            Mode::Grid => self.selected,
+        }) else {
             return;
         };
         self.push_undo_snapshot(index);
@@ -7365,7 +7581,12 @@ impl Workspace {
     }
 
     fn refresh_metric_inputs(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Mode::Editor(index) = self.mode else {
+        // The metric fields live in the Glyph panel, which is up in
+        // both modes: in the grid they follow the selected cell.
+        let Some(index) = (match self.mode {
+            Mode::Editor(index) => Some(index),
+            Mode::Grid => self.selected,
+        }) else {
             return;
         };
         if !force {
@@ -8868,30 +9089,6 @@ impl Workspace {
     }
 
     /// Bottom bar in editor mode: Width / LSB / RSB fields.
-    fn metrics_bar(&self) -> impl IntoElement + use<> {
-        let field = |label_text: &'static str,
-                     state: &gpui::Entity<gpui_component::input::InputState>| {
-            div()
-                .flex()
-                .items_center()
-                .gap_1()
-                .child(div().text_sm().text_color(t::text_muted()).child(label_text))
-                .child(div().w(px(80.0)).child(gpui_component::input::Input::new(state)))
-        };
-        div()
-            .flex()
-            .items_center()
-            .gap_4()
-            .px_4()
-            .py_2()
-            .bg(t::panel_bg())
-            .border_t_1()
-            .border_color(t::cell_border())
-            .child(field("Width", &self.metric_inputs.width))
-            .child(field("LSB", &self.metric_inputs.lsb))
-            .child(field("RSB", &self.metric_inputs.rsb))
-    }
-
     /// The resolved preview line: glyph index, pen x position (font
     /// units, kerning applied), and advance.
     /// The text sort metric box bounds: top = max(upm, ascender),
@@ -10111,8 +10308,8 @@ impl Render for Workspace {
         if self.sidebar_counts.is_none() && self.project.is_some() {
             self.rebuild_sidebar_cache();
         }
+        self.refresh_metric_inputs(false, window, cx);
         if matches!(self.mode, Mode::Editor(_)) {
-            self.refresh_metric_inputs(false, window, cx);
             self.refresh_coord_inputs(false, window, cx);
         }
         self.refresh_glyph_inputs(false, window, cx);
@@ -10129,7 +10326,6 @@ impl Render for Workspace {
                     .size_full()
                     .min_h(px(0.0))
                     .child(self.editor_view(index, cx).into_any_element())
-                    .child(self.metrics_bar())
                     .into_any_element(),
             ),
             _ => {

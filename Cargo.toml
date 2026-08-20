@@ -27,10 +27,12 @@ linesweeper = "0.4"
 web-time = "1"
 include_dir = "0.7.4"
 
-# Shared editing/model crate used by all Runebender editors. Sibling
-# checkout, same convention as runebender-xilem and runebender-web.
+# Shared editing/model crate used by all Runebender editors. Pulled
+# from git so a plain clone (or `cargo install --git`) builds without
+# a sibling checkout. To develop the two together, point cargo at a
+# local copy — see "Building" in the README.
 [dependencies.runebender-core]
-path = "../runebender-core"
+git = "https://github.com/eliheuer/runebender-core"
 
 [dependencies.serde]
 version = "1.0"
