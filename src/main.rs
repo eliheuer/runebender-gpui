@@ -1449,6 +1449,7 @@ struct Workspace {
     search: gpui::Entity<gpui_component::input::InputState>,
     search_query: String,
     metric_inputs: MetricInputs,
+    glyph_inputs: GlyphInputs,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
     axis_sliders: Vec<(usize, gpui::Entity<gpui_component::slider::SliderState>)>,
@@ -1468,6 +1469,14 @@ struct Workspace {
 }
 
 /// The editor's Width / LSB / RSB / X / Y fields.
+/// Editable glyph-data fields in the Glyph panel.
+struct GlyphInputs {
+    name: gpui::Entity<gpui_component::input::InputState>,
+    unicode: gpui::Entity<gpui_component::input::InputState>,
+    group_l: gpui::Entity<gpui_component::input::InputState>,
+    group_r: gpui::Entity<gpui_component::input::InputState>,
+}
+
 struct MetricInputs {
     width: gpui::Entity<gpui_component::input::InputState>,
     lsb: gpui::Entity<gpui_component::input::InputState>,
@@ -2195,28 +2204,48 @@ impl Workspace {
             .get_glyph(name.as_str())
             .map(|g| g.contours.len())
             .unwrap_or(0);
-        let left_group = runebender_core::glyph_ops::kern_group(&font.font, &name, true)
-            .map(|g| g.as_str().replace("public.kern1.", ""))
-            .unwrap_or_else(|| "(empty)".into());
-        let right_group = runebender_core::glyph_ops::kern_group(&font.font, &name, false)
-            .map(|g| g.as_str().replace("public.kern2.", ""))
-            .unwrap_or_else(|| "(empty)".into());
+        let _ = name;
+        // Editable fields commit on Enter (rename, unicode, kerning
+        // groups); the rest stay read-only rows.
+        let input_row = |header: &'static str,
+                         input: &gpui::Entity<gpui_component::input::InputState>| {
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_sm().text_color(t::info_header()).child(header))
+                .child(gpui_component::input::Input::new(input))
+        };
+        let pair_row = |header: &'static str,
+                        a: &gpui::Entity<gpui_component::input::InputState>,
+                        b: &gpui::Entity<gpui_component::input::InputState>| {
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_sm().text_color(t::info_header()).child(header))
+                .child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .child(div().flex_1().child(
+                            gpui_component::input::Input::new(a),
+                        ))
+                        .child(div().flex_1().child(
+                            gpui_component::input::Input::new(b),
+                        )),
+                )
+        };
         panel = panel
             .child(row("Master", master))
-            .child(row("Glyph Name", entry.name.clone()))
+            .child(input_row("Glyph Name", &self.glyph_inputs.name))
             .child(row("Width", format!("{:.0}", entry.advance).into()))
-            .child(row(
-                "Kerning Groups",
-                format!("L {left_group} · R {right_group}").into(),
+            .child(pair_row(
+                "Kerning Groups (L · R)",
+                &self.glyph_inputs.group_l,
+                &self.glyph_inputs.group_r,
             ))
-            .child(row(
-                "Unicode",
-                entry
-                    .codepoint
-                    .map(|c| format!("{:04X}", c as u32))
-                    .unwrap_or_else(|| "—".into())
-                    .into(),
-            ))
+            .child(input_row("Unicode", &self.glyph_inputs.unicode))
             .child(row("Contours", format!("{contours}").into()));
         self.section(cx, "Glyph", panel)
     }
@@ -4778,6 +4807,195 @@ impl Workspace {
 
     /// Push current glyph metrics into the input fields. Skipped when
     /// an input has focus (unless forced) so typing is not clobbered.
+    /// After a rename or unicode change reorders the glyph list,
+    /// re-point selection, the open editor, and the parked session at
+    /// the glyph by name.
+    fn remap_glyph_indices(&mut self, name: &str) {
+        let Some(&index) = self.font().and_then(|f| f.name_map.get(name)) else {
+            return;
+        };
+        if self.selected.is_some() {
+            self.selected = Some(index);
+        }
+        if matches!(self.mode, Mode::Editor(_)) {
+            self.mode = Mode::Editor(index);
+        }
+        if self.last_editor.is_some() {
+            self.last_editor = Some(index);
+        }
+    }
+
+    /// Rename the selected glyph in every master, updating components,
+    /// groups, kerning, and the open text session.
+    fn apply_glyph_rename(&mut self, new_name: &str) {
+        let Some(index) = self.selected else { return };
+        let Some(old) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        let new_name = new_name.trim().to_string();
+        if new_name.is_empty() || new_name == old {
+            return;
+        }
+        let Some(project) = self.project.as_mut() else { return };
+        let mut renamed = false;
+        for master in project.masters.iter_mut() {
+            if runebender_core::glyph_ops::rename_glyph(
+                &mut master.font,
+                &old,
+                &new_name,
+            ) {
+                master.dirty = true;
+                master.kerning_dirty = true;
+                master.modified_glyphs.remove(&old);
+                master.modified_glyphs.insert(new_name.clone());
+                master.refresh_from_font();
+                renamed = true;
+            }
+        }
+        if !renamed {
+            self.status_note =
+                Some(format!("Cannot rename {old} to {new_name}").into());
+            return;
+        }
+        project.compat.remove(&old);
+        let recheck = new_name.clone();
+        project.recheck_compat(&recheck);
+        // The open text session keeps working under the new name.
+        for i in 0..self.edit_buffer.len() {
+            let matches_old = self
+                .edit_buffer
+                .sort(i)
+                .and_then(|s| s.glyph_name())
+                .is_some_and(|n| n == old);
+            if matches_old {
+                let (codepoint, advance) = self
+                    .font()
+                    .and_then(|f| f.name_map.get(&new_name).copied())
+                    .and_then(|g| {
+                        self.font()
+                            .map(|f| (f.glyphs[g].codepoint, f.glyphs[g].advance))
+                    })
+                    .unwrap_or((None, 0.0));
+                self.edit_buffer.update_glyph(
+                    i,
+                    new_name.clone(),
+                    codepoint,
+                    advance,
+                );
+            }
+        }
+        self.sidebar_counts = None;
+        self.remap_glyph_indices(&new_name);
+        self.status_note = Some(format!("Renamed {old} → {new_name}").into());
+    }
+
+    /// Set the selected glyph's unicode in every master ("0041",
+    /// "U+0041", "0x41"; empty clears).
+    fn apply_glyph_unicode(&mut self, text: &str) {
+        let Some(index) = self.selected else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        let Some(project) = self.project.as_mut() else { return };
+        let mut ok = false;
+        for master in project.masters.iter_mut() {
+            if let Some(glyph_index) = master.name_map.get(&name).copied() {
+                let changed = master
+                    .edit_glyph(glyph_index, |g| {
+                        runebender_core::glyph_ops::set_glyph_unicode(g, text)
+                    })
+                    .unwrap_or(false);
+                if changed {
+                    master.refresh_from_font();
+                    ok = true;
+                }
+            }
+        }
+        if !ok {
+            self.status_note = Some(format!("Bad unicode: {text}").into());
+            return;
+        }
+        self.sidebar_counts = None;
+        self.rebuild_text_models();
+        self.remap_glyph_indices(&name);
+    }
+
+    /// Set the selected glyph's kerning group on one side, in every
+    /// master (groups.plist; empty clears).
+    fn apply_kern_group(&mut self, first_side: bool, text: &str) {
+        let Some(index) = self.selected else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        let Some(project) = self.project.as_mut() else { return };
+        for master in project.masters.iter_mut() {
+            if runebender_core::glyph_ops::set_kern_group(
+                &mut master.font,
+                &name,
+                first_side,
+                text,
+            ) {
+                master.dirty = true;
+                master.kerning_dirty = true;
+            }
+        }
+        self.rebuild_text_models();
+    }
+
+    /// Fill the Glyph panel's editable fields from the selected glyph
+    /// unless one of them is being typed in.
+    fn refresh_glyph_inputs(
+        &mut self,
+        force: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !force
+            && window
+                .focused(cx)
+                .is_some_and(|f| f != self.focus_handle)
+        {
+            return;
+        }
+        let Some(index) = self.selected else { return };
+        let Some(font) = self.font() else { return };
+        let Some(entry) = font.glyphs.get(index) else { return };
+        let name = entry.name.to_string();
+        let unicode = entry
+            .codepoint
+            .map(|c| format!("{:04X}", c as u32))
+            .unwrap_or_default();
+        let group_l =
+            runebender_core::glyph_ops::kern_group(&font.font, &name, true)
+                .map(|g| g.as_str().replace("public.kern1.", ""))
+                .unwrap_or_default();
+        let group_r =
+            runebender_core::glyph_ops::kern_group(&font.font, &name, false)
+                .map(|g| g.as_str().replace("public.kern2.", ""))
+                .unwrap_or_default();
+        let set = |entity: &gpui::Entity<gpui_component::input::InputState>,
+                   value: String,
+                   window: &mut Window,
+                   cx: &mut Context<Self>| {
+            entity.update(cx, |st, cx| {
+                if st.value() != value.as_str() {
+                    st.set_value(value, window, cx);
+                }
+            });
+        };
+        let name_input = self.glyph_inputs.name.clone();
+        let unicode_input = self.glyph_inputs.unicode.clone();
+        let l_input = self.glyph_inputs.group_l.clone();
+        let r_input = self.glyph_inputs.group_r.clone();
+        set(&name_input, name, window, cx);
+        set(&unicode_input, unicode, window, cx);
+        set(&l_input, group_l, window, cx);
+        set(&r_input, group_r, window, cx);
+    }
+
     fn refresh_metric_inputs(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -6912,6 +7130,7 @@ impl Render for Workspace {
             self.refresh_metric_inputs(false, window, cx);
             self.refresh_coord_inputs(false, window, cx);
         }
+        self.refresh_glyph_inputs(false, window, cx);
         use gpui_component::resizable::{h_resizable, resizable_panel};
 
         // Glyphs-style docked layout: left sidebar | center | right
@@ -7351,6 +7570,47 @@ fn main() {
                     };
                     let sub_x = coord_sub(cx, window, &x_input, true);
                     let sub_y = coord_sub(cx, window, &y_input, false);
+                    let name_input = metric(cx, window);
+                    let unicode_input = metric(cx, window);
+                    let group_l_input = metric(cx, window);
+                    let group_r_input = metric(cx, window);
+                    // 0=name, 1=unicode, 2=left group, 3=right group.
+                    let glyph_sub = |cx: &mut Context<Workspace>,
+                                     window: &mut Window,
+                                     state: &gpui::Entity<
+                        gpui_component::input::InputState,
+                    >,
+                                     which: u8| {
+                        let state = state.clone();
+                        cx.subscribe_in(&state, window, {
+                            let state = state.clone();
+                            move |this: &mut Workspace,
+                                  _,
+                                  ev: &gpui_component::input::InputEvent,
+                                  window,
+                                  cx| {
+                                if matches!(
+                                    ev,
+                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                ) {
+                                    let text =
+                                        state.read(cx).value().to_string();
+                                    match which {
+                                        0 => this.apply_glyph_rename(&text),
+                                        1 => this.apply_glyph_unicode(&text),
+                                        2 => this.apply_kern_group(true, &text),
+                                        _ => this.apply_kern_group(false, &text),
+                                    }
+                                    this.refresh_glyph_inputs(true, window, cx);
+                                    cx.notify();
+                                }
+                            }
+                        })
+                    };
+                    let sub_gn = glyph_sub(cx, window, &name_input, 0);
+                    let sub_gu = glyph_sub(cx, window, &unicode_input, 1);
+                    let sub_gl = glyph_sub(cx, window, &group_l_input, 2);
+                    let sub_gr = glyph_sub(cx, window, &group_r_input, 3);
                     let subscription = cx.subscribe_in(&search, window, {
                         let search = search.clone();
                         move |this: &mut Workspace,
@@ -7390,6 +7650,12 @@ fn main() {
                         status_note: None,
                         search,
                         search_query: String::new(),
+                        glyph_inputs: GlyphInputs {
+                            name: name_input,
+                            unicode: unicode_input,
+                            group_l: group_l_input,
+                            group_r: group_r_input,
+                        },
                         metric_inputs: MetricInputs {
                             width: width_input,
                             lsb: lsb_input,
@@ -7405,6 +7671,7 @@ fn main() {
                         last_save: Arc::new(Mutex::new(web_time::Instant::now())),
                         _subscriptions: vec![
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
+                            sub_gn, sub_gu, sub_gl, sub_gr,
                         ],
                     };
                     workspace.rebuild_text_models();

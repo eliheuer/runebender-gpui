@@ -59,10 +59,13 @@ browser build over WebGPU with workspace-server load/save.
 
 ## Glyph and font data gaps
 
-- [ ] Edit kerning groups (web `glifWithKerningGroup`; shown
-      read-only today)
-- [ ] Edit unicode assignment (web `glifWithUnicode`)
-- [ ] Rename glyph (web `setGlyphNameWithCachedComponents`)
+- [x] Edit kerning groups (Glyph panel inputs → groups.plist, both
+      sides, empty clears; every master)
+- [x] Edit unicode assignment (Glyph panel input, 0041/U+0041/0x41)
+- [x] Rename glyph (Glyph panel name field; updates components in
+      other glyphs, group memberships, kerning keys, the open text
+      session, and re-points selection). Native-only until the
+      browser input-focus bug is fixed.
 - [ ] Font info editing (web `setFontInfo`: upm, metrics, names)
 - [ ] New font from template (web newProject.ts /
       newFontTemplate.generated.ts)
@@ -76,8 +79,9 @@ browser build over WebGPU with workspace-server load/save.
 
 All four are gpui_web/upstream issues; native is unaffected.
 
-- [ ] Text inputs cannot take focus in editor mode (metrics fields
-      dead in the browser) — needs a minimal repro against zed
+- [ ] Text inputs cannot take focus in the browser except the
+      left-panel search (metrics fields, Glyph panel fields — grid
+      and editor mode alike) — needs a minimal repro against zed
 - [ ] In-window menu items never activate — same class of focus
       bug; needs upstream repro
 - [ ] All gpui action dispatch panics on wasm: gpui-component
