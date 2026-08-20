@@ -1464,6 +1464,17 @@ struct SidebarCounts {
     builtins: Vec<usize>,
 }
 
+/// One edit tab: the open glyph (by name, so it survives renames
+/// and master switches), plus the parked editor state and text
+/// buffer. The ACTIVE tab's live state lives in `Workspace::editor`
+/// and `edit_buffer`; its slot here is stale until the next switch
+/// parks it back.
+struct EditSession {
+    glyph_name: String,
+    editor: EditorState,
+    buffer: runebender_core::text::TextBuffer,
+}
+
 struct Workspace {
     project: Option<Project>,
     load_error: Option<SharedString>,
@@ -1471,6 +1482,9 @@ struct Workspace {
     /// The glyph whose edit session the tab strip returns to after
     /// the Font tab switched back to the overview.
     last_editor: Option<usize>,
+    /// Edit tabs, Glyphs-style. Empty until a glyph is first opened.
+    sessions: Vec<EditSession>,
+    active_session: usize,
     sidebar_filter: SidebarFilter,
     /// Names matched by the current sidebar filter (None = all).
     sidebar_matches: Option<std::collections::HashSet<String>>,
@@ -1658,7 +1672,155 @@ impl Workspace {
         self.rebuild_text_models();
     }
 
+    /// Write the live editor state back into the active session's
+    /// slot before switching to another tab.
+    fn park_active_session(&mut self) {
+        let glyph = match self.mode {
+            Mode::Editor(i) => Some(i),
+            Mode::Grid => self.last_editor,
+        };
+        let name = glyph
+            .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))
+            .map(|g| g.name.to_string());
+        let Some(slot) = self.sessions.get_mut(self.active_session) else {
+            return;
+        };
+        if let Some(name) = name {
+            slot.glyph_name = name;
+        }
+        slot.editor = std::mem::replace(&mut self.editor, EditorState::new());
+        slot.buffer = std::mem::replace(
+            &mut self.edit_buffer,
+            runebender_core::text::TextBuffer::new(),
+        );
+    }
+
+    /// Switch to another edit tab, restoring its buffer, tool,
+    /// selection, viewport, and undo stack as they were left.
+    fn activate_session(&mut self, target: usize) {
+        if target >= self.sessions.len() {
+            return;
+        }
+        let switching = target != self.active_session;
+        if switching {
+            self.park_active_session();
+            let slot = &mut self.sessions[target];
+            self.editor =
+                std::mem::replace(&mut slot.editor, EditorState::new());
+            self.edit_buffer = std::mem::replace(
+                &mut slot.buffer,
+                runebender_core::text::TextBuffer::new(),
+            );
+            self.active_session = target;
+        }
+        let name = self.sessions[target].glyph_name.clone();
+        let Some(&index) =
+            self.font().and_then(|f| f.name_map.get(name.as_str()))
+        else {
+            // The glyph is gone (removed, or absent from this
+            // master): drop the dead tab.
+            self.close_session(target);
+            return;
+        };
+        self.mode = Mode::Editor(index);
+        self.selected = Some(index);
+        self.last_editor = Some(index);
+        self.status_note = None;
+    }
+
+    /// Close an edit tab. Closing the active one activates its
+    /// neighbor; closing the last returns to the overview.
+    fn close_session(&mut self, target: usize) {
+        if target >= self.sessions.len() {
+            return;
+        }
+        self.sessions.remove(target);
+        if self.sessions.is_empty() {
+            self.active_session = 0;
+            self.editor = EditorState::new();
+            self.edit_buffer = runebender_core::text::TextBuffer::new();
+            self.last_editor = None;
+            self.mode = Mode::Grid;
+            return;
+        }
+        match target.cmp(&self.active_session) {
+            std::cmp::Ordering::Less => self.active_session -= 1,
+            std::cmp::Ordering::Equal => {
+                // The live state belonged to the removed tab: load the
+                // neighbor without parking.
+                let next = target.min(self.sessions.len() - 1);
+                let slot = &mut self.sessions[next];
+                self.editor =
+                    std::mem::replace(&mut slot.editor, EditorState::new());
+                self.edit_buffer = std::mem::replace(
+                    &mut slot.buffer,
+                    runebender_core::text::TextBuffer::new(),
+                );
+                self.active_session = next;
+                let name = self.sessions[next].glyph_name.clone();
+                match self
+                    .font()
+                    .and_then(|f| f.name_map.get(name.as_str()))
+                    .copied()
+                {
+                    Some(index) => {
+                        if matches!(self.mode, Mode::Editor(_)) {
+                            self.mode = Mode::Editor(index);
+                        }
+                        self.selected = Some(index);
+                        self.last_editor = Some(index);
+                    }
+                    None => self.close_session(next),
+                }
+            }
+            std::cmp::Ordering::Greater => {}
+        }
+    }
+
+    /// The tab strip's "+": a fresh session on the current glyph.
+    fn command_new_session(&mut self) {
+        let glyph = match self.mode {
+            Mode::Editor(i) => Some(i),
+            Mode::Grid => self.last_editor.or(self.selected),
+        };
+        let Some(glyph) = glyph else { return };
+        let Some(name) = self
+            .font()
+            .and_then(|f| f.glyphs.get(glyph))
+            .map(|g| g.name.to_string())
+        else {
+            return;
+        };
+        self.park_active_session();
+        self.sessions.push(EditSession {
+            glyph_name: name,
+            editor: EditorState::new(),
+            buffer: runebender_core::text::TextBuffer::new(),
+        });
+        self.active_session = self.sessions.len() - 1;
+        self.open_editor(glyph);
+    }
+
     fn open_editor(&mut self, index: usize) {
+        // Opening from the grid lands in the active tab; the first
+        // open creates it.
+        if self.sessions.is_empty() {
+            self.sessions.push(EditSession {
+                glyph_name: String::new(),
+                editor: EditorState::new(),
+                buffer: runebender_core::text::TextBuffer::new(),
+            });
+            self.active_session = 0;
+        }
+        if let Some(name) = self
+            .font()
+            .and_then(|f| f.glyphs.get(index))
+            .map(|g| g.name.to_string())
+        {
+            if let Some(slot) = self.sessions.get_mut(self.active_session) {
+                slot.glyph_name = name;
+            }
+        }
         self.mode = Mode::Editor(index);
         // The info and colors sections follow the open glyph.
         self.selected = Some(index);
@@ -2055,6 +2217,8 @@ impl Workspace {
         #[cfg(not(target_family = "wasm"))]
         let path = std::env::temp_dir().join("Untitled.ufo");
         self.axis_sliders.clear();
+        self.sessions.clear();
+        self.active_session = 0;
         self.project = Some(Project::new_font(path));
         self.mode = Mode::Grid;
         self.selected = None;
@@ -6753,6 +6917,12 @@ impl Workspace {
         project.compat.remove(&old);
         let recheck = new_name.clone();
         project.recheck_compat(&recheck);
+        // Parked tabs on the renamed glyph follow it.
+        for slot in &mut self.sessions {
+            if slot.glyph_name == old {
+                slot.glyph_name = new_name.clone();
+            }
+        }
         // The open text session keeps working under the new name.
         for i in 0..self.edit_buffer.len() {
             let matches_old = self
@@ -8016,11 +8186,7 @@ impl Workspace {
             return div().into_any_element();
         }
         let in_editor = matches!(self.mode, Mode::Editor(_));
-        let session = match self.mode {
-            Mode::Editor(index) => Some(index),
-            Mode::Grid => self.last_editor,
-        };
-        let tab = |id: &'static str, label: SharedString, active: bool| {
+        let tab = |id: gpui::ElementId, label: SharedString, active: bool| {
             div()
                 .id(id)
                 .px_3()
@@ -8040,12 +8206,14 @@ impl Workspace {
                 })
                 .child(label)
         };
-        // The session tab reads like Glyphs: the buffer's text, with
+        // Each session tab reads like Glyphs: the buffer's text, with
         // /name for unencoded glyphs, trimmed to fit.
-        let session_label: Option<SharedString> = session.map(|index| {
+        let session_label = |buffer: &runebender_core::text::TextBuffer,
+                             fallback: &str|
+         -> SharedString {
             let mut label = String::new();
-            for i in 0..self.edit_buffer.len() {
-                let Some(sort) = self.edit_buffer.sort(i) else {
+            for i in 0..buffer.len() {
+                let Some(sort) = buffer.sort(i) else {
                     continue;
                 };
                 if sort.is_absorbed() {
@@ -8078,18 +8246,38 @@ impl Workspace {
                 }
             }
             if label.is_empty() {
-                label = self
-                    .font()
-                    .map(|f| f.glyphs[index].name.to_string())
-                    .unwrap_or_default();
+                label = fallback.to_string();
             }
             label.into()
-        });
+        };
+        let labels: Vec<SharedString> = self
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let fallback: String = if i == self.active_session {
+                    match self.mode {
+                        Mode::Editor(index) => self
+                            .font()
+                            .map(|f| f.glyphs[index].name.to_string())
+                            .unwrap_or_default(),
+                        Mode::Grid => s.glyph_name.clone(),
+                    }
+                } else {
+                    s.glyph_name.clone()
+                };
+                if i == self.active_session {
+                    session_label(&self.edit_buffer, &fallback)
+                } else {
+                    session_label(&s.buffer, &fallback)
+                }
+            })
+            .collect();
         div()
             .flex()
             .items_center()
             .gap_1()
-            .child(tab("tab-font", "Font".into(), !in_editor).on_click(
+            .child(tab("tab-font".into(), "Font".into(), !in_editor).on_click(
                 cx.listener(|this, _, _, cx| {
                     if let Mode::Editor(index) = this.mode {
                         this.last_editor = Some(index);
@@ -8107,20 +8295,41 @@ impl Workspace {
                     }
                 }),
             ))
-            .children(session.zip(session_label).map(|(index, label)| {
-                tab("tab-session", label, in_editor).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        if !matches!(this.mode, Mode::Editor(_)) {
-                            // Return to the session as it was left:
-                            // same buffer, tool, undo stack.
-                            this.mode = Mode::Editor(index);
-                            this.selected = Some(index);
-                            this.status_note = None;
-                            cx.notify();
-                        }
-                    },
-                ))
+            .children(labels.into_iter().enumerate().map(|(i, label)| {
+                let active = in_editor && i == self.active_session;
+                tab(("tab-session", i).into(), label, active)
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        // Return to the session as it was left: same
+                        // buffer, tool, undo stack.
+                        this.activate_session(i);
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .id(("tab-close", i))
+                            .px_0p5()
+                            .rounded_sm()
+                            .text_color(t::text_muted())
+                            .hover(|el| el.text_color(t::text()))
+                            .child("×")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.close_session(i);
+                                cx.notify();
+                            })),
+                    )
             }))
+            .child(
+                tab("tab-new".into(), "+".into(), false).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.command_new_session();
+                        cx.notify();
+                    },
+                )),
+            )
             .into_any_element()
     }
 
@@ -9115,6 +9324,9 @@ impl Workspace {
                     Ok((fetched, (project, ufo_prefixes))) => {
                         let n = project.masters.len();
                         workspace.axis_sliders.clear();
+                        workspace.sessions.clear();
+                        workspace.active_session = 0;
+                        workspace.last_editor = None;
                         workspace.project = Some(project);
                         workspace.sidebar_counts = None;
                         workspace.load_error = None;
@@ -9265,6 +9477,9 @@ impl Workspace {
                 match loaded {
                     Ok(project) => {
                         workspace.axis_sliders.clear();
+                        workspace.sessions.clear();
+                        workspace.active_session = 0;
+                        workspace.last_editor = None;
                         workspace.project = Some(project);
                         workspace.sidebar_counts = None;
                         workspace.load_error = None;
@@ -10181,6 +10396,8 @@ fn main() {
                         load_error,
                         selected: None,
                         last_editor: None,
+                        sessions: Vec::new(),
+                        active_session: 0,
                         sidebar_filter: SidebarFilter::All,
                         sidebar_matches: None,
                         sidebar_counts: None,

@@ -57,9 +57,10 @@ browser build over WebGPU with workspace-server load/save.
 - [x] Anchor editing: name field in the Selection panel, coords via
       the X/Y reference fields (anchor selected → bounds is its
       point)
-- [ ] Measure-tool option toggles (web SelectPanel/measure options:
-      colorize outline, handle lengths, segment lengths, stems &
-      counters, side bearings, popcount sums)
+- [x] Measure-tool option toggles (Measure section while the tool
+      is active: colorize outline, handle lengths, segment lengths,
+      stems & counters, side bearings, popcount sums; core measure
+      module, popcount-tiered colors, dodging canvas labels)
 - [x] Curvature comb + continuity display (Curves section toggles;
       shared analyses from core's curve module, web's color ramp)
 - [ ] Sketch tool (parked deliberately; SketchPanel.vue)
@@ -85,8 +86,12 @@ browser build over WebGPU with workspace-server load/save.
       drawn as a quiet outline behind the drawing
 - [x] Reference glyph underlay (name field in the Background
       section; ghost fill behind the drawing)
-- [ ] Image trace to glyph (web `traceImageToGlif`)
-- [ ] Glyph anatomy panel (web GlyphAnatomyPanel.vue)
+- [x] Image trace to glyph (Glyph → Trace Image…: img2bez through
+      core's adapter, same crate and defaults as the web editor;
+      replaces the current glyph's contours, undoable)
+- [x] Glyph anatomy panel — the right-panel glyph preview already
+      draws the web/xilem anatomy x-ray (outline + handle lines +
+      points) plus a metric frame
 
 ## Browser build blockers (the runebender.org end goal)
 
@@ -126,8 +131,12 @@ All four are gpui_web/upstream issues; native is unaffected.
 - [x] Master thumbnails: each Masters row shows the current glyph
       rendered in that master (web MasterToolbar's buttons,
       relocated into the section)
-- [ ] Multiple edit-session tabs (the strip supports one session;
-      web's "+" spawns tabs)
+- [x] Multiple edit-session tabs: "+" spawns a tab on the current
+      glyph, each tab parks its own buffer, tool, selection,
+      viewport, and undo stack, "x" closes; sessions track glyphs by
+      name so they survive renames and master switches. (Web's
+      TopBar tab strip turns out to be an unmounted orphan — its
+      live UI has a single session — so this lands beyond web.)
 - [x] Missing-glyph indicators + generate: target-bearing language
       rows show a "+" that adds the missing glyphs (named and
       encoded) to every master
