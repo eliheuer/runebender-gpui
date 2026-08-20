@@ -1,7 +1,7 @@
 # runebender-gpui
 
-A font editor built on [GPUI](https://gpui.rs/), the UI framework from
-[Zed](https://zed.dev/). This is a sibling of
+A font editor built on [GPUI](https://gpui.rs/) and
+[Linebender](https://linebender.org/) crates. This is a sibling of
 [runebender-xilem](https://github.com/eliheuer/runebender-xilem). The
 two ports exist to compare Xilem and GPUI on the same application and
 to measure the trade-offs between them.
