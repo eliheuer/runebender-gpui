@@ -1485,6 +1485,11 @@ struct Workspace {
     /// Curve overlays (web CurvePanel).
     curve_comb: bool,
     curve_continuity: bool,
+    /// Show the UFO background layer as a quiet outline.
+    show_background: bool,
+    /// Another glyph ghosted behind the drawing for comparison.
+    reference_glyph: Option<String>,
+    reference_glyph_input: gpui::Entity<gpui_component::input::InputState>,
     component_name_input: gpui::Entity<gpui_component::input::InputState>,
     anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
@@ -2971,6 +2976,97 @@ impl Workspace {
         )
     }
 
+    /// Copy the open glyph's outline into the UFO background layer
+    /// (public.background), creating the layer on first use.
+    fn command_send_to_background(&mut self) {
+        let Mode::Editor(index) = self.mode else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if let Some(font) = self.font_mut() {
+            let source = font.font.get_glyph(name.as_str()).cloned();
+            if let (Some(source), Ok(layer)) = (
+                source,
+                font.font.layers.get_or_create_layer("public.background"),
+            ) {
+                let mut background = norad::Glyph::new(name.as_str());
+                background.width = source.width;
+                background.contours = source.contours.clone();
+                layer.insert_glyph(background);
+                font.dirty = true;
+            }
+        }
+        self.status_note = Some("Sent to background".into());
+    }
+
+    /// Exchange the outline with the background layer's copy.
+    fn command_swap_background(&mut self) {
+        let Mode::Editor(index) = self.mode else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        self.push_undo_snapshot(index);
+        let mut swapped = false;
+        if let Some(font) = self.font_mut() {
+            let background = Self::background_layer_name(&font.font);
+            if let Some(background) = background {
+                let fg = font.font.get_glyph(name.as_str()).map(|g| g.contours.clone());
+                let bg = font
+                    .font
+                    .layers
+                    .get(&background)
+                    .and_then(|l| l.get_glyph(name.as_str()))
+                    .map(|g| g.contours.clone());
+                if let (Some(fg), Some(bg)) = (fg, bg) {
+                    if let Some(layer) = font.font.layers.get_mut(&background) {
+                        if let Some(g) = layer.get_glyph_mut(name.as_str()) {
+                            g.contours = fg;
+                        }
+                    }
+                    font.edit_glyph(index, |g| {
+                        g.contours = bg;
+                    });
+                    swapped = true;
+                }
+            }
+        }
+        if !swapped {
+            self.editor.undo.pop();
+            self.status_note = Some("No background to swap".into());
+        }
+    }
+
+    /// Drop the background layer's copy of the open glyph.
+    fn command_clear_background(&mut self) {
+        let Mode::Editor(index) = self.mode else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if let Some(font) = self.font_mut() {
+            let background = Self::background_layer_name(&font.font);
+            if let Some(background) = background
+                && let Some(layer) = font.font.layers.get_mut(&background)
+            {
+                layer.remove_glyph(name.as_str());
+                font.dirty = true;
+            }
+        }
+    }
+
+    /// The background layer we read: public.background first, then
+    /// RoboFont's conventional plain "background".
+    fn background_layer_name(font: &norad::Font) -> Option<String> {
+        for candidate in ["public.background", "background"] {
+            if font.layers.get(candidate).is_some() {
+                return Some(candidate.to_string());
+            }
+        }
+        None
+    }
+
     /// Curves section: comb + continuity toggles (web CurvePanel).
     fn curves_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let toggle = |id: &'static str,
@@ -3016,6 +3112,84 @@ impl Workspace {
                 |this| this.curve_continuity = !this.curve_continuity,
             ));
         self.section(cx, "Curves", body)
+    }
+
+    /// Background section: show/send/swap/clear plus the reference
+    /// glyph (web's Background block).
+    fn background_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let button = |id: &'static str,
+                      label: &'static str,
+                      active: bool,
+                      cx: &mut Context<Self>,
+                      on: fn(&mut Self)| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .text_sm()
+                .cursor_pointer()
+                .border_1()
+                .when(active, |el| {
+                    el.border_color(t::accent()).text_color(t::accent())
+                })
+                .when(!active, |el| {
+                    el.border_color(t::cell_border()).text_color(t::text())
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    on(this);
+                    cx.notify();
+                }))
+        };
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .child(button(
+                        "bg-show",
+                        "Show background",
+                        self.show_background,
+                        cx,
+                        |this| this.show_background = !this.show_background,
+                    ))
+                    .child(button(
+                        "bg-send",
+                        "Send to background",
+                        false,
+                        cx,
+                        |this| this.command_send_to_background(),
+                    ))
+                    .child(button("bg-swap", "Swap", false, cx, |this| {
+                        this.command_swap_background()
+                    }))
+                    .child(button("bg-clear", "Clear", false, cx, |this| {
+                        this.command_clear_background()
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(t::text_muted())
+                            .child("Reference"),
+                    )
+                    .child(div().flex_1().child(
+                        gpui_component::input::Input::new(
+                            &self.reference_glyph_input,
+                        ),
+                    )),
+            );
+        self.section(cx, "Background", body)
     }
 
     /// Layers section: one row per master, the active one highlighted.
@@ -3461,6 +3635,28 @@ impl Workspace {
             } else {
                 Vec::new()
             };
+        // Background layer outline + reference glyph ghost.
+        let background_path: Option<Arc<BezPath>> = self
+            .show_background
+            .then(|| {
+                Self::background_layer_name(&font.font).and_then(|layer| {
+                    font.font
+                        .layers
+                        .get(&layer)
+                        .and_then(|l| l.get_glyph(entry.name.as_ref()))
+                        .map(|g| {
+                            Arc::new(
+                                runebender_core::glyph_paths::contours_to_bezpath(g),
+                            )
+                        })
+                })
+            })
+            .flatten();
+        let reference_path: Option<Arc<BezPath>> = self
+            .reference_glyph
+            .as_ref()
+            .and_then(|name| font.name_map.get(name))
+            .map(|&g| font.glyphs[g].path.clone());
         // Alt-hover segment highlight (select tool).
         let hover_seg = self.editor.segment_hover;
         // Sidebearing edge under the pointer (or mid-drag).
@@ -4035,6 +4231,28 @@ impl Workspace {
                             )
                         {
                             window.paint_path(p, t::ghost());
+                        }
+                        // Reference glyph: a ghost fill so it never
+                        // reads as the background layer's outline.
+                        if let Some(path) = &reference_path
+                            && let Some(p) =
+                                build_fill_path(path, transform, origin)
+                        {
+                            let mut fill = t::glyph_fill();
+                            fill.a *= 0.22;
+                            window.paint_path(p, fill);
+                        }
+                        // Background layer: a quiet outline behind the
+                        // drawing, the way Glyphs shows a background.
+                        if let Some(path) = &background_path
+                            && let Some(p) = build_path(
+                                path,
+                                transform,
+                                origin,
+                                PathBuilder::stroke(px(1.0)),
+                            )
+                        {
+                            window.paint_path(p, t::metric_quiet());
                         }
                         // Curvature comb, behind the outline so points
                         // stay selectable over it.
@@ -8291,6 +8509,7 @@ impl Render for Workspace {
                     .child(self.selection_section(cx))
                     .child(self.transform_section(cx))
                     .child(self.curves_section(cx))
+                    .child(self.background_section(cx))
                     .child(self.layers_section(cx))
                     .children(self.axes_section(cx))
                     .child(self.mark_colors_panel(cx))
@@ -8770,6 +8989,29 @@ fn main() {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("glyph name")
                     });
+                    let reference_glyph_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("glyph name")
+                    });
+                    let sub_ref = cx.subscribe_in(&reference_glyph_input, window, {
+                        let state = reference_glyph_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _window,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text =
+                                    state.read(cx).value().trim().to_string();
+                                this.reference_glyph =
+                                    (!text.is_empty()).then_some(text);
+                                cx.notify();
+                            }
+                        }
+                    });
                     let anchor_name_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("anchor name")
@@ -8858,6 +9100,9 @@ fn main() {
                         coord_quadrant: Default::default(),
                         curve_comb: false,
                         curve_continuity: false,
+                        show_background: true,
+                        reference_glyph: None,
+                        reference_glyph_input: reference_glyph_input.clone(),
                         component_name_input: component_name_input.clone(),
                         anchor_name_input: anchor_name_input.clone(),
                         glyph_inputs: GlyphInputs {
@@ -8884,7 +9129,7 @@ fn main() {
                         _subscriptions: vec![
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_comp,
-                            sub_sw, sub_sh, sub_anchor,
+                            sub_sw, sub_sh, sub_anchor, sub_ref,
                         ],
                     };
                     workspace.rebuild_text_models();

@@ -73,12 +73,16 @@ browser build over WebGPU with workspace-server load/save.
       other glyphs, group memberships, kerning keys, the open text
       session, and re-points selection). Native-only until the
       browser input-focus bug is fixed.
-- [ ] Font info editing (web `setFontInfo`: upm, metrics, names)
+- [ ] Font info editing — NOTE: web cannot edit font info either
+      (setFontInfo only feeds renderer metrics), so this is
+      beyond-parity; keep for the daily-driver goal
 - [ ] New font from template (web newProject.ts /
       newFontTemplate.generated.ts)
-- [ ] Background layer outline behind the drawing (web
-      `setBackgroundOutline`, "show background")
-- [ ] Reference glyph underlay (web `setReferenceOutline`)
+- [x] Background layer: show/send/swap/clear against the UFO
+      public.background layer (norad layers, saved with the font),
+      drawn as a quiet outline behind the drawing
+- [x] Reference glyph underlay (name field in the Background
+      section; ghost fill behind the drawing)
 - [ ] Image trace to glyph (web `traceImageToGlif`)
 - [ ] Glyph anatomy panel (web GlyphAnatomyPanel.vue)
 
