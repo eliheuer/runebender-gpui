@@ -1483,6 +1483,9 @@ struct Workspace {
     search_mode: u8,
     /// Wall-clock time of the last save, for the header.
     last_save_label: Option<SharedString>,
+    /// Multi-selected glyph names (grid cmd/shift-click); `selected`
+    /// stays the primary.
+    multi_selected: std::collections::HashSet<String>,
     search_regex: bool,
     search_case: bool,
     metric_inputs: MetricInputs,
@@ -1617,6 +1620,7 @@ impl Workspace {
             matches!(self.mode, Mode::Editor(i) if i == index)
         } else {
             self.selected == Some(index)
+                || self.multi_selected.contains(name.as_ref())
         };
         let outline = entry.path.clone();
         let advance = entry.advance;
@@ -1653,7 +1657,16 @@ impl Workspace {
                 if jump_on_click {
                     this.open_editor(index);
                 } else {
-                    this.selected = Some(index);
+                    let modifiers = event.modifiers();
+                    if modifiers.platform {
+                        // Cmd-click toggles membership.
+                        this.grid_toggle_multi(index);
+                    } else if modifiers.shift {
+                        this.grid_extend_multi(index);
+                    } else {
+                        this.selected = Some(index);
+                        this.multi_selected.clear();
+                    }
                     if event.click_count() >= 2 {
                         this.open_editor(index);
                     }
@@ -1955,6 +1968,114 @@ impl Workspace {
             .map(|entry| entry.name.to_string())
             .collect();
         self.sidebar_matches = Some(matches);
+    }
+
+    /// The grid's visible order (same filter + sort the grid draws).
+    fn visible_grid_indices(&self) -> Vec<usize> {
+        let Some(font) = self.font() else { return Vec::new() };
+        let mut indices: Vec<usize> = (0..font.glyphs.len())
+            .filter(|&i| {
+                let entry = &font.glyphs[i];
+                self.sidebar_matches
+                    .as_ref()
+                    .is_none_or(|m| m.contains(entry.name.as_ref()))
+                    && self.search_matches(entry.name.as_ref(), entry.codepoint)
+            })
+            .collect();
+        if !self.sort_unicode {
+            indices.sort_by_key(|&i| font.glyphs[i].name.clone());
+        }
+        indices
+    }
+
+    /// Cmd-click: toggle a glyph in the multi-selection.
+    fn grid_toggle_multi(&mut self, index: usize) {
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if let Some(primary) = self.selected {
+            if let Some(primary_name) =
+                self.font().map(|f| f.glyphs[primary].name.to_string())
+            {
+                self.multi_selected.insert(primary_name);
+            }
+        }
+        if !self.multi_selected.remove(&name) {
+            self.multi_selected.insert(name);
+        }
+        self.selected = Some(index);
+    }
+
+    /// Shift-click: extend from the primary through the visible order.
+    fn grid_extend_multi(&mut self, index: usize) {
+        let order = self.visible_grid_indices();
+        let Some(primary) = self.selected else {
+            self.selected = Some(index);
+            return;
+        };
+        let (Some(a), Some(b)) = (
+            order.iter().position(|&i| i == primary),
+            order.iter().position(|&i| i == index),
+        ) else {
+            self.selected = Some(index);
+            return;
+        };
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        let names: Vec<String> = self
+            .font()
+            .map(|font| {
+                order[lo..=hi]
+                    .iter()
+                    .map(|&i| font.glyphs[i].name.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.multi_selected.extend(names);
+    }
+
+    /// Every selected glyph name (primary plus multi), in font order.
+    fn selection_names(&self) -> Vec<String> {
+        let Some(font) = self.font() else { return Vec::new() };
+        let mut names: Vec<String> = font
+            .glyphs
+            .iter()
+            .filter(|entry| {
+                self.multi_selected.contains(entry.name.as_ref())
+                    || self
+                        .selected
+                        .is_some_and(|i| font.glyphs[i].name == entry.name)
+            })
+            .map(|entry| entry.name.to_string())
+            .collect();
+        names.dedup();
+        names
+    }
+
+    /// Copy the selection as text (the glyphs' characters), the web
+    /// sidebar footer's action.
+    fn command_copy_selection_text(&mut self, cx: &mut Context<Self>) {
+        let Some(font) = self.font() else { return };
+        let text: String = self
+            .selection_names()
+            .iter()
+            .filter_map(|name| {
+                font.name_map
+                    .get(name)
+                    .and_then(|&i| font.glyphs[i].codepoint)
+            })
+            .collect();
+        if text.is_empty() {
+            self.status_note = Some("Nothing encoded to copy".into());
+            return;
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+        self.status_note = Some(
+            format!("Copied {} character{}", text.chars().count(), {
+                if text.chars().count() == 1 { "" } else { "s" }
+            })
+            .into(),
+        );
     }
 
     /// Does a glyph match the sidebar search, honoring scope, regex,
@@ -2440,6 +2561,40 @@ impl Workspace {
                     .child(self.section(cx, "Filters", filters))
                     .children(self.axes_section(cx)),
             )
+            .child(
+                div()
+                    .p_2()
+                    .border_t_1()
+                    .border_color(t::panel_outline())
+                    .child(
+                        div()
+                            .id("copy-selection")
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(t::cell_border())
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_sm()
+                            .text_color(t::text())
+                            .cursor_pointer()
+                            .child(div().flex_1().child("Copy Selection"))
+                            .child(
+                                div()
+                                    .text_color(t::text_muted())
+                                    .child(format!(
+                                        "{}",
+                                        self.selection_names().len()
+                                    )),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.command_copy_selection_text(cx);
+                                cx.notify();
+                            })),
+                    ),
+            )
     }
 
     /// Right tile: details of the selected glyph, like
@@ -2773,13 +2928,23 @@ impl Workspace {
         self.section(cx, "Colors", swatches)
     }
 
-    /// Set or clear the selected glyph's mark color.
+    /// Set or clear the mark color on every selected glyph.
     fn set_selected_mark(&mut self, label: Option<String>) {
-        let Some(index) = self.selected else { return };
+        let names = self.selection_names();
+        if names.is_empty() {
+            return;
+        }
         let Some(font) = self.font_mut() else { return };
-        font.edit_glyph(index, |glyph| {
-            runebender_core::theme_oklch::set_glyph_mark(glyph, label.as_deref());
-        });
+        for name in names {
+            if let Some(&index) = font.name_map.get(&name) {
+                font.edit_glyph(index, |glyph| {
+                    runebender_core::theme_oklch::set_glyph_mark(
+                        glyph,
+                        label.as_deref(),
+                    );
+                });
+            }
+        }
     }
 
     /// Editor sidebar: search + scrollable mini glyph grid, so glyph
@@ -9364,6 +9529,7 @@ fn main() {
                         search_query: String::new(),
                         search_mode: 0,
                         last_save_label: None,
+                        multi_selected: std::collections::HashSet::new(),
                         search_regex: false,
                         search_case: false,
                         context_menu: None,

@@ -116,7 +116,9 @@ All four are gpui_web/upstream issues; native is unaffected.
 
 - [x] Search modes: scope (all/name/unicode), regex, and match-case
       toggles beside the search box
-- [ ] Copy Selection footer in the sidebar (web CategorySidebar)
+- [x] Copy Selection footer + grid multi-select (cmd-click toggles,
+      shift-click ranges in visible order; marks apply to the whole
+      selection; the footer copies the selection as text)
 - [x] Header save state with timestamp (Saved 1:16 PM after a
       save; the on-disk path was already shown)
 - [ ] Master switcher as glyph thumbnails (web MasterToolbar)
