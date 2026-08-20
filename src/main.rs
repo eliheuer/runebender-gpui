@@ -1369,6 +1369,9 @@ struct Workspace {
     project: Option<Project>,
     load_error: Option<SharedString>,
     selected: Option<usize>,
+    /// The glyph whose edit session the tab strip returns to after
+    /// the Font tab switched back to the overview.
+    last_editor: Option<usize>,
     sidebar_filter: SidebarFilter,
     /// Names matched by the current sidebar filter (None = all).
     sidebar_matches: Option<std::collections::HashSet<String>>,
@@ -5115,6 +5118,127 @@ impl Workspace {
         }
     }
 
+    /// The Glyphs-style tab strip under the header: a Font tab that
+    /// returns to the full glyph overview, plus one tab per edit
+    /// session, titled with the session's text.
+    fn tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        if self.project.is_none() {
+            return div().into_any_element();
+        }
+        let in_editor = matches!(self.mode, Mode::Editor(_));
+        let session = match self.mode {
+            Mode::Editor(index) => Some(index),
+            Mode::Grid => self.last_editor,
+        };
+        let tab = |id: &'static str, label: SharedString, active: bool| {
+            div()
+                .id(id)
+                .px_3()
+                .py_0p5()
+                .rounded_sm()
+                .text_sm()
+                .cursor_pointer()
+                .when(active, |el| {
+                    el.border_1()
+                        .border_color(t::accent())
+                        .text_color(t::accent())
+                })
+                .when(!active, |el| {
+                    el.border_1()
+                        .border_color(t::cell_border())
+                        .text_color(t::text_muted())
+                })
+                .child(label)
+        };
+        // The session tab reads like Glyphs: the buffer's text, with
+        // /name for unencoded glyphs, trimmed to fit.
+        let session_label: Option<SharedString> = session.map(|index| {
+            let mut label = String::new();
+            for i in 0..self.edit_buffer.len() {
+                let Some(sort) = self.edit_buffer.sort(i) else {
+                    continue;
+                };
+                if sort.is_absorbed() {
+                    continue;
+                }
+                match &sort.kind {
+                    runebender_core::text::TextSortKind::Glyph {
+                        codepoint,
+                        name,
+                        ..
+                    } => match codepoint {
+                        Some(c) => label.push(*c),
+                        None => {
+                            label.push('/');
+                            label.push_str(name);
+                        }
+                    },
+                    _ => label.push(' '),
+                }
+                if label.chars().count() > 24 {
+                    label.truncate(
+                        label
+                            .char_indices()
+                            .nth(24)
+                            .map(|(i, _)| i)
+                            .unwrap_or(label.len()),
+                    );
+                    label.push('…');
+                    break;
+                }
+            }
+            if label.is_empty() {
+                label = self
+                    .font()
+                    .map(|f| f.glyphs[index].name.to_string())
+                    .unwrap_or_default();
+            }
+            label.into()
+        });
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .bg(t::panel_bg())
+            .border_b_1()
+            .border_color(t::cell_border())
+            .child(tab("tab-font", "Font".into(), !in_editor).on_click(
+                cx.listener(|this, _, _, cx| {
+                    if let Mode::Editor(index) = this.mode {
+                        this.last_editor = Some(index);
+                        let name = this
+                            .font()
+                            .map(|f| f.glyphs[index].name.to_string());
+                        if let (Some(name), Some(project)) =
+                            (name, this.project.as_mut())
+                        {
+                            project.recheck_compat(&name);
+                        }
+                        this.mode = Mode::Grid;
+                        this.status_note = None;
+                        cx.notify();
+                    }
+                }),
+            ))
+            .children(session.zip(session_label).map(|(index, label)| {
+                tab("tab-session", label, in_editor).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        if !matches!(this.mode, Mode::Editor(_)) {
+                            // Return to the session as it was left:
+                            // same buffer, tool, undo stack.
+                            this.mode = Mode::Editor(index);
+                            this.selected = Some(index);
+                            this.status_note = None;
+                            cx.notify();
+                        }
+                    },
+                ))
+            }))
+            .into_any_element()
+    }
+
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (title, status): (SharedString, SharedString) =
             match (self.font(), &self.load_error) {
@@ -6332,6 +6456,9 @@ impl Workspace {
                     if let (Some(name), Some(project)) = (name, self.project.as_mut()) {
                         project.recheck_compat(&name);
                     }
+                    if let Mode::Editor(index) = self.mode {
+                        self.last_editor = Some(index);
+                    }
                     self.mode = Mode::Grid;
                     self.status_note = None;
                 }
@@ -6780,6 +6907,7 @@ impl Render for Workspace {
                 }
             }))
             .child(self.header(cx))
+            .child(self.tab_strip(cx))
             .child(content)
             .children(
                 matches!(self.mode, Mode::Editor(_))
@@ -6984,6 +7112,7 @@ fn main() {
                         project,
                         load_error,
                         selected: None,
+                        last_editor: None,
                         sidebar_filter: SidebarFilter::All,
                         sidebar_matches: None,
                         sidebar_counts: None,
