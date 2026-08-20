@@ -76,8 +76,10 @@ browser build over WebGPU with workspace-server load/save.
 - [ ] Font info editing — NOTE: web cannot edit font info either
       (setFontInfo only feeds renderer metrics), so this is
       beyond-parity; keep for the daily-driver goal
-- [ ] New font from template (web newProject.ts /
-      newFontTemplate.generated.ts)
+- [x] New font from template (Cmd+N: an Untitled GF-shaped UFO —
+      GF metrics, the Latin Core set as empty encoded glyphs —
+      plus Save As… to pick where it lives; single-master for now,
+      web also offers a two-master designspace)
 - [x] Background layer: show/send/swap/clear against the UFO
       public.background layer (norad layers, saved with the font),
       drawn as a quiet outline behind the drawing

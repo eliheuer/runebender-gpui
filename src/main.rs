@@ -49,7 +49,9 @@ gpui::actions!(
     runebender,
     [
         OpenFont,
+        NewFont,
         SaveFont,
+        SaveFontAs,
         Undo,
         Redo,
         CopyContours,
@@ -98,9 +100,11 @@ fn app_menus() -> Vec<gpui::Menu> {
         Menu {
             name: "File".into(),
             items: vec![
+                MenuItem::action("New Font", NewFont),
                 MenuItem::action("Open…", OpenFont),
                 MenuItem::separator(),
                 MenuItem::action("Save", SaveFont),
+                MenuItem::action("Save As…", SaveFontAs),
             ],
             disabled: false,
         },
@@ -726,6 +730,26 @@ struct Project {
 }
 
 impl Project {
+    /// File → New Font: one master from the GF-shaped template. The
+    /// source path is where Save will write; Save As picks it.
+    fn new_font(path: PathBuf) -> Self {
+        let font = runebender_core::new_font::new_font("Untitled", "Regular", 400);
+        let mut model = FontModel::from_font(font, path);
+        model.dirty = true;
+        let mut project = Self {
+            masters: vec![model],
+            active: 0,
+            master_names: vec!["Regular".into()],
+            axes: Vec::new(),
+            master_locations: Vec::new(),
+            model: None,
+            location: runebender_core::var_model::Location::new(),
+            compat: std::collections::HashMap::new(),
+        };
+        project.compute_compat();
+        project
+    }
+
     fn load(path: &std::path::Path) -> Result<Self, String> {
         let mut project = Self::load_inner(path)?;
         project.compute_compat();
@@ -1968,6 +1992,77 @@ impl Workspace {
             .map(|entry| entry.name.to_string())
             .collect();
         self.sidebar_matches = Some(matches);
+    }
+
+    /// File → New Font: an Untitled GF-template UFO, in memory until
+    /// Save As picks a destination.
+    fn command_new_font(&mut self) {
+        // No std::env::temp_dir here: it panics on wasm. The path is
+        // provisional either way — Save As replaces it.
+        #[cfg(target_family = "wasm")]
+        let path = PathBuf::from("Untitled.ufo");
+        #[cfg(not(target_family = "wasm"))]
+        let path = std::env::temp_dir().join("Untitled.ufo");
+        self.axis_sliders.clear();
+        self.project = Some(Project::new_font(path));
+        self.mode = Mode::Grid;
+        self.selected = None;
+        self.multi_selected.clear();
+        self.last_editor = None;
+        self.sidebar_counts = None;
+        self.sidebar_matches = None;
+        self.sidebar_filter = SidebarFilter::All;
+        self.search_query.clear();
+        self.rebuild_text_models();
+        self.status_note = Some(
+            "New font · Save As… picks where it lives on disk".into(),
+        );
+    }
+
+    /// Save As: pick a directory; the active master saves there under
+    /// its family-style name and keeps saving there from now on.
+    fn command_save_as(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Save In".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(dir) = paths.into_iter().next() else {
+                return;
+            };
+            this.update(cx, |workspace, cx| {
+                if let Some(project) = workspace.project.as_mut() {
+                    for master in project.masters.iter_mut() {
+                        let family = master
+                            .font
+                            .font_info
+                            .family_name
+                            .clone()
+                            .unwrap_or_else(|| "Untitled".into())
+                            .replace(' ', "");
+                        let style = master
+                            .font
+                            .font_info
+                            .style_name
+                            .clone()
+                            .unwrap_or_else(|| "Regular".into())
+                            .replace(' ', "");
+                        master.source_path =
+                            dir.join(format!("{family}-{style}.ufo"));
+                        master.dirty = true;
+                    }
+                }
+                workspace.command_save(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The grid's visible order (same filter + sort the grid draws).
@@ -7674,7 +7769,9 @@ impl Workspace {
         }
         let mut rows = div().flex().flex_col().gap_2();
         for (axis_index, slider) in &self.axis_sliders {
-            let axis = &project.axes[*axis_index];
+            let Some(axis) = project.axes.get(*axis_index) else {
+                continue;
+            };
             rows = rows.child(
                 div()
                     .flex()
@@ -8520,6 +8617,7 @@ impl Workspace {
                 }) {
                     Ok((fetched, (project, ufo_prefixes))) => {
                         let n = project.masters.len();
+                        workspace.axis_sliders.clear();
                         workspace.project = Some(project);
                         workspace.sidebar_counts = None;
                         workspace.load_error = None;
@@ -8669,6 +8767,7 @@ impl Workspace {
             this.update(cx, |workspace, cx| {
                 match loaded {
                     Ok(project) => {
+                        workspace.axis_sliders.clear();
                         workspace.project = Some(project);
                         workspace.sidebar_counts = None;
                         workspace.load_error = None;
@@ -9067,6 +9166,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &OpenFont, _, cx| {
                 this.open_dialog(cx);
             }))
+            .on_action(cx.listener(|this, _: &NewFont, _, cx| {
+                this.command_new_font();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SaveFontAs, _, cx| {
+                this.command_save_as(cx);
+            }))
             .on_action(cx.listener(|this, _: &SaveFont, _, cx| {
                 this.command_save(cx);
                 cx.notify();
@@ -9302,6 +9408,8 @@ fn main() {
         // key equivalents.
         cx.bind_keys([
             gpui::KeyBinding::new("cmd-o", OpenFont, None),
+            gpui::KeyBinding::new("cmd-n", NewFont, None),
+            gpui::KeyBinding::new("cmd-shift-s", SaveFontAs, None),
             gpui::KeyBinding::new("cmd-s", SaveFont, None),
             gpui::KeyBinding::new("cmd-z", Undo, None),
             gpui::KeyBinding::new("cmd-shift-z", Redo, None),
@@ -9678,6 +9786,7 @@ fn main() {
                     let handled = shortcut_target.update(cx, |this, cx| {
                         match (ks.key.as_str(), shift) {
                             ("s", false) => this.command_save(cx),
+                            ("n", false) => this.command_new_font(),
                             ("z", false) => {
                                 this.undo();
                                 this.rebuild_text_models();
