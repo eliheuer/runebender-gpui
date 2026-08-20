@@ -29,13 +29,13 @@ browser build over WebGPU with workspace-server load/save.
 ## Editing gaps
 
 - [ ] Round selected corners (web `round_selected_corners`)
-- [ ] Duplicate selection / duplicate-repeat (icons already in the
-      shared icon set; web `duplicateSelection`,
-      `duplicateRepeatSelection`)
-- [ ] Rotate selection 180°
-- [ ] Shift-lock constraints: shapes to squares/circles, pen and
-      point drags to axes (web `setShapeShiftLocked`,
-      `setKnifeShiftLocked`, pointer-move shift handling)
+- [x] Duplicate selection / duplicate-repeat (Cmd+D / Cmd+Shift+T,
+      Transformations tiles, Glyph menu; contours, components, and
+      anchors; repeat re-applies the last flip/rotate)
+- [x] Rotate selection 180° (Glyph menu)
+- [x] Shift-lock constraints: shapes square/circular, knife and
+      measure lines axis-locked (web keeps point drags free — shift
+      is the selection modifier there)
 - [ ] Convert hyperbezier contour to cubic (web
       `convertHyperToCubic`)
 - [ ] Numeric move/scale with reference point (web Transform panel:

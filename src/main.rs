@@ -66,6 +66,9 @@ gpui::actions!(
         BooleanIntersect,
         BooleanExclude,
         SetStartPoint,
+        DuplicateSelection,
+        DuplicateRepeat,
+        Rotate180,
         Harmonize,
         Balance,
         Optimize,
@@ -120,6 +123,9 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Flip Vertical", FlipVertical),
                 MenuItem::action("Rotate 90° Left", RotateLeft),
                 MenuItem::action("Rotate 90° Right", RotateRight),
+                MenuItem::action("Rotate 180°", Rotate180),
+                MenuItem::action("Duplicate Selection", DuplicateSelection),
+                MenuItem::action("Duplicate + Repeat", DuplicateRepeat),
                 MenuItem::action("Reverse Contours", ReverseContours),
                 MenuItem::action("Set Start Point", SetStartPoint),
                 MenuItem::separator(),
@@ -1269,6 +1275,8 @@ struct EditorState {
     hyper_contour: Option<usize>,
     /// Alt-hover segment preview (select tool), in glyph space.
     segment_hover: Option<kurbo::PathSeg>,
+    /// The last flip/rotate, re-applied by duplicate-repeat.
+    last_transform: Option<Affine>,
     /// The selected component of the open glyph, if any.
     selected_component: Option<usize>,
     /// Sidebearing edge under the cursor (false = left, true = right).
@@ -1301,6 +1309,7 @@ impl EditorState {
             previous_tool: Tool::Select,
             hyper_contour: None,
             segment_hover: None,
+            last_transform: None,
             selected_component: None,
             sidebearing_hover: None,
             pointer: None,
@@ -2822,7 +2831,27 @@ impl Workspace {
                                 ));
                                 cx.notify();
                             }),
-                        )),
+                        ))
+                        .child(
+                            Self::icon_tile("op-duplicate", "duplicate", false)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.command_duplicate();
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Self::icon_tile(
+                                "op-duplicate-repeat",
+                                "duplicate-repeat",
+                                false,
+                            )
+                            .on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.command_duplicate_repeat();
+                                    cx.notify();
+                                },
+                            )),
+                        ),
                 )
                 .child(
                     div()
@@ -3197,7 +3226,10 @@ impl Workspace {
             )
             .on_mouse_move(cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
                 if event.pressed_button == Some(MouseButton::Left) {
-                    if this.editor_mouse_drag(event.position) {
+                    if this.editor_mouse_drag(
+                        event.position,
+                        event.modifiers.shift,
+                    ) {
                         cx.notify();
                     }
                 } else if this.editor_hover(event.position, event.modifiers.alt) {
@@ -4246,7 +4278,7 @@ impl Workspace {
         }
     }
 
-    fn editor_mouse_drag(&mut self, pos: Point<gpui::Pixels>) -> bool {
+    fn editor_mouse_drag(&mut self, pos: Point<gpui::Pixels>, shift: bool) -> bool {
         let Mode::Editor(index) = self.mode else {
             return false;
         };
@@ -4398,13 +4430,37 @@ impl Workspace {
                 }
                 true
             }
-            Some(Drag::Knife { current, .. }) => {
-                *current = (dx, dy);
+            Some(Drag::Knife { start, current })
+            | Some(Drag::Measure { start, current }) => {
+                // Shift locks the line to an axis (web
+                // constrain_measure_end).
+                *current = if shift {
+                    let (sx, sy) = *start;
+                    if (dx - sx).abs() >= (dy - sy).abs() {
+                        (dx, sy)
+                    } else {
+                        (sx, dy)
+                    }
+                } else {
+                    (dx, dy)
+                };
                 true
             }
-            Some(Drag::Marquee { current, .. })
-            | Some(Drag::Shape { current, .. })
-            | Some(Drag::Measure { current, .. }) => {
+            Some(Drag::Shape { start, current }) => {
+                // Shift locks the shape square (web constrain_point).
+                *current = if shift {
+                    let (sx, sy) = *start;
+                    let size = (dx - sx).abs().max((dy - sy).abs());
+                    (
+                        sx + size * (dx - sx).signum(),
+                        sy + size * (dy - sy).signum(),
+                    )
+                } else {
+                    (dx, dy)
+                };
+                true
+            }
+            Some(Drag::Marquee { current, .. }) => {
                 *current = (dx, dy);
                 true
             }
@@ -5205,11 +5261,90 @@ impl Workspace {
         });
     }
 
+    /// Duplicate the selection: contours holding selected points, or
+    /// the selected component or anchor, offset (20, 20), clones
+    /// selected (web duplicateSelection).
+    fn command_duplicate(&mut self) {
+        let Mode::Editor(index) = self.mode else { return };
+        self.push_undo_snapshot(index);
+        let changed = if let Some(ci) = self.editor.selected_component {
+            let new_index = self
+                .font_mut()
+                .and_then(|f| {
+                    f.edit_glyph(index, |g| {
+                        runebender_core::glyph_ops::duplicate_component(g, ci)
+                    })
+                })
+                .flatten();
+            if let Some(new_index) = new_index {
+                self.editor.selected_component = Some(new_index);
+            }
+            new_index.is_some()
+        } else if let Some(ai) = self.editor.selected_anchor {
+            let new_index = self
+                .font_mut()
+                .and_then(|f| {
+                    f.edit_glyph(index, |g| {
+                        runebender_core::glyph_ops::duplicate_anchor(g, ai)
+                    })
+                })
+                .flatten();
+            if let Some(new_index) = new_index {
+                self.editor.selected_anchor = Some(new_index);
+            }
+            new_index.is_some()
+        } else {
+            let selected = self.editor.selected.clone();
+            let new_selection = self
+                .font_mut()
+                .and_then(|f| {
+                    f.edit_glyph(index, |g| {
+                        runebender_core::glyph_ops::duplicate_selection(
+                            g, &selected,
+                        )
+                    })
+                })
+                .flatten();
+            match new_selection {
+                Some(selection) => {
+                    self.editor.selected = selection;
+                    true
+                }
+                None => false,
+            }
+        };
+        if !changed {
+            self.editor.undo.pop();
+        }
+    }
+
+    /// Duplicate, then re-apply the last flip/rotate — the web's
+    /// duplicate-repeat, for rotated repeats around a center.
+    fn command_duplicate_repeat(&mut self) {
+        let before = self.editor.undo.len();
+        self.command_duplicate();
+        if self.editor.undo.len() == before {
+            return;
+        }
+        if let Some(transform) = self.editor.last_transform {
+            let Mode::Editor(index) = self.mode else { return };
+            let selected = self.editor.selected.clone();
+            self.font_mut().and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    runebender_core::glyph_ops::transform_selection(
+                        g, &selected, transform,
+                    )
+                })
+            });
+        }
+    }
+
     /// Flip/rotate the selection (whole glyph when nothing selected)
     /// about its bbox center, with an undo snapshot.
     fn apply_transform(&mut self, transform: Affine) {
         let Mode::Editor(index) = self.mode else { return };
         self.push_undo_snapshot(index);
+        self.editor.last_transform = Some(transform);
         let selected = self.editor.selected.clone();
         let changed = self
             .font_mut()
@@ -7331,6 +7466,18 @@ impl Render for Workspace {
                 this.command_boolean(linesweeper::BinaryOp::Xor);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &DuplicateSelection, _, cx| {
+                this.command_duplicate();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &DuplicateRepeat, _, cx| {
+                this.command_duplicate_repeat();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &Rotate180, _, cx| {
+                this.apply_transform(Affine::rotate(std::f64::consts::PI));
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &SetStartPoint, _, cx| {
                 this.command_set_start_point();
                 cx.notify();
@@ -7474,6 +7621,8 @@ fn main() {
             gpui::KeyBinding::new("cmd-shift-v", FlipVertical, None),
             gpui::KeyBinding::new("cmd-shift-r", ReverseContours, None),
             gpui::KeyBinding::new("cmd-0", ZoomToFit, None),
+            gpui::KeyBinding::new("cmd-d", DuplicateSelection, None),
+            gpui::KeyBinding::new("cmd-shift-t", DuplicateRepeat, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
@@ -7731,6 +7880,8 @@ fn main() {
                             ("v", false) => this.command_paste_routed(cx),
                             ("o", true) => this.command_remove_overlap(),
                             ("d", true) => this.command_decompose(),
+                            ("d", false) => this.command_duplicate(),
+                            ("t", true) => this.command_duplicate_repeat(),
                             ("h", true) => {
                                 this.apply_transform(Affine::scale_non_uniform(
                                     -1.0, 1.0,
