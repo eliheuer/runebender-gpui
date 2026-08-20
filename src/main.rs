@@ -73,6 +73,7 @@ gpui::actions!(
         Rotate180,
         RoundCorners,
         HyperToCubic,
+        TraceImage,
         Harmonize,
         Balance,
         Optimize,
@@ -141,6 +142,8 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Subtract", BooleanSubtract),
                 MenuItem::action("Intersect", BooleanIntersect),
                 MenuItem::action("Exclude", BooleanExclude),
+                MenuItem::separator(),
+                MenuItem::action("Trace Image…", TraceImage),
                 MenuItem::separator(),
                 MenuItem::action("Harmonize", Harmonize),
                 MenuItem::action("Balance", Balance),
@@ -1521,6 +1524,8 @@ struct Workspace {
     /// Curve overlays (web CurvePanel).
     curve_comb: bool,
     curve_continuity: bool,
+    /// Measure-tool HUD layers (web SelectPanel / MeasureOptions).
+    measure_opts: MeasureOpts,
     /// Show the UFO background layer as a quiet outline.
     show_background: bool,
     /// Another glyph ghosted behind the drawing for comparison.
@@ -1547,6 +1552,52 @@ struct Workspace {
 }
 
 /// The editor's Width / LSB / RSB / X / Y fields.
+/// Which measurement-HUD layers the Measure tool draws (web
+/// MeasureOptions). Every layer off returns the plain editor; the
+/// panel is purely additive.
+#[derive(Clone, Copy)]
+struct MeasureOpts {
+    /// Tint outline segments, curves, and handles by popcount.
+    colorize: bool,
+    /// Label Bézier handle lengths.
+    handles: bool,
+    /// Label straight outline segment lengths.
+    segments: bool,
+    /// Draw + label stem/counter/height spans (dimension lines).
+    spans: bool,
+    /// Draw + label left/right side bearings.
+    sidebearings: bool,
+    /// Spell lengths as sums of powers of two (`96 = 64+32`).
+    popcount: bool,
+}
+
+impl Default for MeasureOpts {
+    fn default() -> Self {
+        Self {
+            colorize: false,
+            handles: false,
+            segments: false,
+            spans: false,
+            sidebearings: false,
+            popcount: true,
+        }
+    }
+}
+
+impl MeasureOpts {
+    fn any(&self) -> bool {
+        self.colorize || self.handles || self.segments || self.spans || self.sidebearings
+    }
+
+    fn label(&self, value: i64) -> String {
+        if self.popcount {
+            runebender_core::measure::label(value)
+        } else {
+            value.to_string()
+        }
+    }
+}
+
 /// Editable glyph-data fields in the Glyph panel.
 struct GlyphInputs {
     name: gpui::Entity<gpui_component::input::InputState>,
@@ -3633,6 +3684,83 @@ impl Workspace {
         self.section(cx, "Curves", body)
     }
 
+    /// Measure-tool HUD layer toggles (web SelectPanel): only shown
+    /// while the Measure tool is active.
+    fn measure_section(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        if self.editor.tool != Tool::Measure {
+            return None;
+        }
+        let toggle = |id: &'static str,
+                      label: &'static str,
+                      active: bool,
+                      cx: &mut Context<Self>,
+                      on: fn(&mut MeasureOpts)| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .text_sm()
+                .cursor_pointer()
+                .border_1()
+                .when(active, |el| {
+                    el.border_color(t::accent()).text_color(t::accent())
+                })
+                .when(!active, |el| {
+                    el.border_color(t::cell_border()).text_color(t::text())
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    on(&mut this.measure_opts);
+                    cx.notify();
+                }))
+        };
+        let o = self.measure_opts;
+        let body = div()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .child(toggle("ms-colorize", "colorize outline", o.colorize, cx, |o| {
+                o.colorize = !o.colorize
+            }))
+            .child(toggle("ms-handles", "handle lengths", o.handles, cx, |o| {
+                o.handles = !o.handles
+            }))
+            .child(toggle("ms-segments", "segment lengths", o.segments, cx, |o| {
+                o.segments = !o.segments
+            }))
+            .child(toggle("ms-spans", "stems & counters", o.spans, cx, |o| {
+                o.spans = !o.spans
+            }))
+            .child(toggle(
+                "ms-sidebearings",
+                "side bearings",
+                o.sidebearings,
+                cx,
+                |o| o.sidebearings = !o.sidebearings,
+            ))
+            .child(toggle("ms-popcount", "popcount sums", o.popcount, cx, |o| {
+                o.popcount = !o.popcount
+            }))
+            // popcount is left out of all-on/all-off on purpose: it is
+            // not a layer, it is how the labels that are on get written.
+            .child(toggle("ms-all", "all on", false, cx, |o| {
+                o.colorize = true;
+                o.handles = true;
+                o.segments = true;
+                o.spans = true;
+                o.sidebearings = true;
+            }))
+            .child(toggle("ms-none", "all off", false, cx, |o| {
+                o.colorize = false;
+                o.handles = false;
+                o.segments = false;
+                o.spans = false;
+                o.sidebearings = false;
+            }));
+        Some(self.section(cx, "Measure", body))
+    }
+
     /// Background section: show/send/swap/clear plus the reference
     /// glyph (web's Background block).
     fn background_section(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -4219,6 +4347,49 @@ impl Workspace {
             } else {
                 Vec::new()
             };
+        // Measure-tool HUD: colorized strokes, measurements, and side
+        // bearings from core's measure module, in design space. The
+        // paint closure maps them to the screen and draws dimension
+        // lines + labels.
+        let measure_opts = self.measure_opts;
+        let measure_hud: Option<(
+            Vec<runebender_core::measure::ColoredStroke>,
+            Vec<runebender_core::measure::Measurement>,
+            Option<runebender_core::measure::SideBearings>,
+        )> = if self.editor.tool == Tool::Measure && measure_opts.any() {
+            font.font.get_glyph(entry.name.as_ref()).map(|g| {
+                use runebender_core::measure;
+                use runebender_core::model::workspace::Contour as WContour;
+                let paths: Vec<runebender_core::path::Path> = g
+                    .contours
+                    .iter()
+                    .map(|c| {
+                        runebender_core::path::Path::from_contour(
+                            &WContour::from_norad(c),
+                        )
+                    })
+                    .collect();
+                let strokes = if measure_opts.colorize {
+                    measure::colored_strokes(&paths)
+                } else {
+                    Vec::new()
+                };
+                let measurements = if measure_opts.handles
+                    || measure_opts.segments
+                    || measure_opts.spans
+                {
+                    measure::glyph_measurements(&paths)
+                } else {
+                    Vec::new()
+                };
+                let sb = (measure_opts.sidebearings && g.width > 0.0)
+                    .then(|| measure::side_bearings(&paths, g.width))
+                    .flatten();
+                (strokes, measurements, sb)
+            })
+        } else {
+            None
+        };
         // Background layer outline + reference glyph ghost.
         let background_path: Option<Arc<BezPath>> = self
             .show_background
@@ -5109,6 +5280,260 @@ impl Workspace {
                             pb.line_to(pbp);
                             if let Ok(p) = pb.build() {
                                 window.paint_path(p, t::accent());
+                            }
+                        }
+                        // Measure-tool HUD (web draw_measurements):
+                        // popcount-colored outline, dimension lines
+                        // with outward arrowheads, and labels that
+                        // dodge each other. Fades in with zoom.
+                        if let Some((strokes, measurements, sb)) = &measure_hud {
+                            use runebender_core::measure::{self, MeasureKind};
+                            let t32 = (((zoom - 0.30) / 0.40).clamp(0.0, 1.0)) as f32;
+                            if t32 > 0.0 {
+                                let fade = |mut c: gpui::Rgba, mul: f32| {
+                                    c.a *= t32 * mul;
+                                    c
+                                };
+                                for cs in strokes {
+                                    let width = if cs.wide { 1.5 } else { 1.0 };
+                                    if let Some(p) = build_path(
+                                        &cs.path,
+                                        transform,
+                                        origin,
+                                        PathBuilder::stroke(px(width)),
+                                    ) {
+                                        window.paint_path(
+                                            p,
+                                            fade(t::popcount_tier(cs.popcount), 1.0),
+                                        );
+                                    }
+                                }
+                                let gp = |p: kurbo::Point| {
+                                    gpui::point(
+                                        origin.x + px(p.x as f32),
+                                        origin.y + px(p.y as f32),
+                                    )
+                                };
+                                // A span's dimension line: a shaft that
+                                // stops short of both endpoints with an
+                                // outward arrowhead at each end.
+                                let dim_line = |window: &mut gpui::Window,
+                                                a: kurbo::Point,
+                                                b: kurbo::Point,
+                                                color: gpui::Rgba| {
+                                    let (dx, dy) = (b.x - a.x, b.y - a.y);
+                                    let len = dx.hypot(dy);
+                                    if len < 1e-3 {
+                                        return;
+                                    }
+                                    let (ux, uy) = (dx / len, dy / len);
+                                    let (nx, ny) = (-uy, ux);
+                                    let (end_gap, head, wing) = (3.0, 7.0, 4.0);
+                                    let a2 = kurbo::Point::new(
+                                        a.x + ux * end_gap,
+                                        a.y + uy * end_gap,
+                                    );
+                                    let b2 = kurbo::Point::new(
+                                        b.x - ux * end_gap,
+                                        b.y - uy * end_gap,
+                                    );
+                                    let mut pb = PathBuilder::stroke(px(1.25));
+                                    pb.move_to(gp(a2));
+                                    pb.line_to(gp(b2));
+                                    for (p0, sx) in [(a2, 1.0), (b2, -1.0)] {
+                                        for side in [1.0, -1.0] {
+                                            pb.move_to(gp(p0));
+                                            pb.line_to(gp(kurbo::Point::new(
+                                                p0.x + sx * ux * head + side * nx * wing,
+                                                p0.y + sx * uy * head + side * ny * wing,
+                                            )));
+                                        }
+                                    }
+                                    if let Ok(p) = pb.build() {
+                                        window.paint_path(p, color);
+                                    }
+                                };
+                                // Place a label just off its line, then
+                                // step it outward (and to the other
+                                // side) until it clears every label
+                                // already placed this frame.
+                                let label_px = px(13.0);
+                                let line_h = px(15.0);
+                                let label_font = window.text_style().font();
+                                let mut placed: Vec<kurbo::Rect> = Vec::new();
+                                let mut draw_label =
+                                    |window: &mut gpui::Window,
+                                     cx: &mut gpui::App,
+                                     a: kurbo::Point,
+                                     b: kurbo::Point,
+                                     text: String,
+                                     color: gpui::Rgba,
+                                     placed: &mut Vec<kurbo::Rect>| {
+                                        let run = gpui::TextRun {
+                                            len: text.len(),
+                                            font: label_font.clone(),
+                                            color: color.into(),
+                                            background_color: None,
+                                            underline: None,
+                                            strikethrough: None,
+                                        };
+                                        let line = window.text_system().shape_line(
+                                            gpui::SharedString::from(text),
+                                            label_px,
+                                            std::slice::from_ref(&run),
+                                            None,
+                                        );
+                                        let w = f32::from(line.width) as f64;
+                                        let h = f32::from(line_h) as f64;
+                                        let (dx, dy) = (b.x - a.x, b.y - a.y);
+                                        let len = dx.hypot(dy).max(1e-6);
+                                        let (mut nx, mut ny) = (-dy / len, dx / len);
+                                        let horizontalish = dx.abs() >= dy.abs();
+                                        if (horizontalish && ny > 0.0)
+                                            || (!horizontalish && nx < 0.0)
+                                        {
+                                            nx = -nx;
+                                            ny = -ny;
+                                        }
+                                        let mid = a.midpoint(b);
+                                        let (base, step, pad) = (6.0, h + 4.0, 2.0);
+                                        let top_left = |dirx: f64, diry: f64, dist: f64| {
+                                            let cx0 = mid.x + dirx * dist;
+                                            let cy0 = mid.y + diry * dist;
+                                            let x = if dirx > 0.3 {
+                                                cx0
+                                            } else if dirx < -0.3 {
+                                                cx0 - w
+                                            } else {
+                                                cx0 - w / 2.0
+                                            };
+                                            let y = if diry > 0.3 {
+                                                cy0
+                                            } else if diry < -0.3 {
+                                                cy0 - h
+                                            } else {
+                                                cy0 - h / 2.0
+                                            };
+                                            kurbo::Point::new(x, y)
+                                        };
+                                        let mut chosen = top_left(nx, ny, base);
+                                        'search: for &sign in &[1.0_f64, -1.0] {
+                                            let (dirx, diry) = (nx * sign, ny * sign);
+                                            for k in 0..6 {
+                                                let cand = top_left(
+                                                    dirx,
+                                                    diry,
+                                                    base + k as f64 * step,
+                                                );
+                                                let rect = kurbo::Rect::new(
+                                                    cand.x - pad,
+                                                    cand.y - pad,
+                                                    cand.x + w + pad,
+                                                    cand.y + h + pad,
+                                                );
+                                                let clear = !placed.iter().any(|r| {
+                                                    r.x0 < rect.x1
+                                                        && rect.x0 < r.x1
+                                                        && r.y0 < rect.y1
+                                                        && rect.y0 < r.y1
+                                                });
+                                                if clear {
+                                                    chosen = cand;
+                                                    break 'search;
+                                                }
+                                            }
+                                        }
+                                        placed.push(kurbo::Rect::new(
+                                            chosen.x,
+                                            chosen.y,
+                                            chosen.x + w,
+                                            chosen.y + h,
+                                        ));
+                                        let halo = kurbo::Rect::new(
+                                            chosen.x - 3.0,
+                                            chosen.y - 1.0,
+                                            chosen.x + w + 3.0,
+                                            chosen.y + h + 1.0,
+                                        );
+                                        let mut halo_color = t::measure_halo();
+                                        halo_color.a *= t32;
+                                        window.paint_quad(gpui::fill(
+                                            Bounds::new(
+                                                gp(halo.origin()),
+                                                gpui::size(
+                                                    px(halo.width() as f32),
+                                                    px(halo.height() as f32),
+                                                ),
+                                            ),
+                                            halo_color,
+                                        ));
+                                        let _ = line.paint(
+                                            gp(chosen),
+                                            line_h,
+                                            gpui::TextAlign::Left,
+                                            None,
+                                            window,
+                                            cx,
+                                        );
+                                    };
+                                if let Some(sb) = sb {
+                                    for (is_left, x, y, val) in [
+                                        (true, sb.min_x, sb.y_left, sb.lsb),
+                                        (false, sb.max_x, sb.y_right, sb.rsb),
+                                    ] {
+                                        let color = fade(
+                                            t::popcount_tier(measure::popcount(val)),
+                                            0.9,
+                                        );
+                                        let margin_x =
+                                            if is_left { 0.0 } else { sb.advance };
+                                        let a = transform
+                                            * kurbo::Point::new(margin_x, y);
+                                        let b = transform * kurbo::Point::new(x, y);
+                                        dim_line(window, a, b, color);
+                                        draw_label(
+                                            window,
+                                            cx,
+                                            a,
+                                            b,
+                                            measure_opts.label(val),
+                                            color,
+                                            &mut placed,
+                                        );
+                                    }
+                                }
+                                for m in measurements {
+                                    let show = match m.kind {
+                                        MeasureKind::Handle => measure_opts.handles,
+                                        MeasureKind::Segment => measure_opts.segments,
+                                        MeasureKind::Horizontal
+                                        | MeasureKind::Vertical => measure_opts.spans,
+                                    };
+                                    if !show {
+                                        continue;
+                                    }
+                                    let a = transform * m.a;
+                                    let b = transform * m.b;
+                                    let color = fade(
+                                        t::popcount_tier(measure::popcount(m.length)),
+                                        1.0,
+                                    );
+                                    if matches!(
+                                        m.kind,
+                                        MeasureKind::Horizontal | MeasureKind::Vertical
+                                    ) {
+                                        dim_line(window, a, b, color);
+                                    }
+                                    draw_label(
+                                        window,
+                                        cx,
+                                        a,
+                                        b,
+                                        measure_opts.label(m.length),
+                                        color,
+                                        &mut placed,
+                                    );
+                                }
                             }
                         }
                         // Continuity rings around on-curve nodes.
@@ -7008,6 +7433,78 @@ impl Workspace {
             Some(selection) => self.editor.selected = selection,
             None => {
                 self.editor.undo.pop();
+            }
+        }
+    }
+
+    /// Glyph → Trace Image…: pick an image, autotrace it through
+    /// img2bez (the web editor's tracer), and replace the current
+    /// glyph's contours with the result. Undoable.
+    fn command_trace_image(&mut self, cx: &mut Context<Self>) {
+        let Mode::Editor(index) = self.mode else { return };
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Trace".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let bytes = std::fs::read(&path);
+            this.update(cx, |workspace, cx| {
+                match bytes {
+                    Ok(bytes) => workspace.apply_image_trace(index, &bytes),
+                    Err(e) => {
+                        workspace.status_note =
+                            Some(format!("Trace: {e}").into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn apply_image_trace(&mut self, index: usize, bytes: &[u8]) {
+        let Some(font) = self.font() else { return };
+        let (ascender, descender) = (font.ascender, font.descender);
+        let advance = font
+            .glyphs
+            .get(index)
+            .map(|g| g.advance)
+            .unwrap_or(runebender_core::new_font::DEFAULT_WIDTH);
+        let config = runebender_core::image_trace::TraceConfig {
+            target_height: (ascender - descender).max(1.0),
+            y_offset: descender,
+            advance: advance.max(1.0),
+            ..Default::default()
+        };
+        match runebender_core::image_trace::trace_image(bytes, &config) {
+            Ok(traced) => {
+                self.push_undo_snapshot(index);
+                let count = traced.contours.len();
+                self.font_mut().and_then(|f| {
+                    f.edit_glyph(index, |g| {
+                        g.contours = traced.contours.clone();
+                    })
+                });
+                self.editor.selected.clear();
+                self.status_note = Some(
+                    format!(
+                        "Traced {count} contour{}",
+                        if count == 1 { "" } else { "s" }
+                    )
+                    .into(),
+                );
+            }
+            Err(e) => {
+                self.status_note = Some(format!("Trace failed: {e}").into());
             }
         }
     }
@@ -9102,6 +9599,7 @@ impl Render for Workspace {
                 el.child(self.navigate_section(cx))
                     .child(self.glyph_info_panel(cx))
                     .child(self.selection_section(cx))
+                    .children(self.measure_section(cx))
                     .child(self.transform_section(cx))
                     .child(self.curves_section(cx))
                     .child(self.background_section(cx))
@@ -9272,6 +9770,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &RoundCorners, _, cx| {
                 this.command_round_corners();
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &TraceImage, _, cx| {
+                this.command_trace_image(cx);
             }))
             .on_action(cx.listener(|this, _: &Rotate180, _, cx| {
                 this.apply_transform(Affine::rotate(std::f64::consts::PI));
@@ -9709,6 +10210,7 @@ fn main() {
                         coord_quadrant: Default::default(),
                         curve_comb: false,
                         curve_continuity: false,
+                        measure_opts: MeasureOpts::default(),
                         show_background: true,
                         reference_glyph: None,
                         reference_glyph_input: reference_glyph_input.clone(),

@@ -279,6 +279,24 @@ pub fn continuity_kink() -> Rgba {
     Rgba { r: 0.95, g: 0.35, b: 0.30, a: 1.0 }
 }
 
+// ---- measure HUD (web POPCOUNT_1..4 + HALO_COLOR) ----
+
+/// Popcount tier ramp: 1 power is structural (green), 2 an elegant
+/// sum (yellow), 3 acceptable (orange), 4+ a flagged correction (red).
+pub fn popcount_tier(pc: u32) -> Rgba {
+    match pc {
+        0 | 1 => Rgba { r: 0.09, g: 0.72, b: 0.44, a: 1.0 },
+        2 => Rgba { r: 1.0, g: 0.86, b: 0.20, a: 1.0 },
+        3 => Rgba { r: 1.0, g: 0.60, b: 0.06, a: 1.0 },
+        _ => Rgba { r: 1.0, g: 0.29, b: 0.24, a: 1.0 },
+    }
+}
+
+/// Dark halo behind measurement labels so they read over any outline.
+pub fn measure_halo() -> Rgba {
+    Rgba { r: 0.047, g: 0.047, b: 0.047, a: 0.85 }
+}
+
 // ---- anchors ----
 
 pub fn anchor() -> Rgba {
