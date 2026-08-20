@@ -44,9 +44,10 @@ browser build over WebGPU with workspace-server load/save.
 - [ ] Right-click context menus: contour (set start point, reverse,
       move contour order), anchor, component (web `contourContextAt`,
       `anchorContextAt`)
-- [ ] Component auto-alignment for composites (web
-      `componentAlignmentState`, `setComponentAlignment`,
-      `realignComposites`) — accents follow their base anchors
+- [x] Component auto-alignment for composites — accents follow
+      their base anchors live; anchor-locked components refuse
+      drags with a Lock/Free toggle in the Selection panel
+      (core `composites` module)
 - [ ] Add component to a glyph (web `addComponent`)
 - [ ] Anchor panel: name + coords editing for the selected anchor
       (web `updateSelectedAnchor`, AnchorPanel.vue)

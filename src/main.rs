@@ -243,9 +243,45 @@ impl FontModel {
             .get_glyph_mut(name.as_str())
             .map(op)?;
         self.dirty = true;
-        self.modified_glyphs.insert(name);
+        self.modified_glyphs.insert(name.clone());
         self.rebuild_entry(glyph_index);
+        self.realign_after_edit(&name);
         Some(result)
+    }
+
+    /// After any glyph edit: re-place anchor-locked components — the
+    /// edited glyph's own (its anchors may have moved; its own
+    /// anchors seed, the open-glyph behavior) and every composite
+    /// that places it, so accents follow their base live.
+    fn realign_after_edit(&mut self, edited: &str) {
+        use runebender_core::composites as comp;
+        let mut targets: Vec<(String, bool)> = vec![(edited.to_string(), true)];
+        for user in comp::composites_using(&self.font, edited) {
+            if user != edited {
+                targets.push((user, false));
+            }
+        }
+        for (name, seed_own) in targets {
+            let Some(glyph) = self.font.get_glyph(name.as_str()) else {
+                continue;
+            };
+            if glyph.components.is_empty() {
+                continue;
+            }
+            let mut copy = glyph.clone();
+            if comp::realign_glyph(&self.font, &mut copy, seed_own) {
+                if let Some(slot) =
+                    self.font.default_layer_mut().get_glyph_mut(name.as_str())
+                {
+                    *slot = copy;
+                }
+                self.modified_glyphs.insert(name.clone());
+                self.dirty = true;
+                if let Some(&i) = self.name_map.get(&name) {
+                    self.rebuild_entry(i);
+                }
+            }
+        }
     }
 
     /// Rebuild every cache from the norad font (glyph added or
@@ -4143,6 +4179,24 @@ impl Workspace {
                 if let Some((ci, orig)) = component_hit {
                     self.editor.selected_component = Some(ci);
                     self.editor.selected.clear();
+                    // An aligned component belongs to its anchor, so
+                    // dragging is refused rather than quietly breaking
+                    // the link — the Glyphs contract: unlock first,
+                    // then move (web translate_selected_component).
+                    let aligned = self
+                        .font()
+                        .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
+                        .and_then(|g| g.components.get(ci))
+                        .is_some_and(|c| {
+                            !runebender_core::composites::component_alignment_disabled(c)
+                        });
+                    if aligned {
+                        self.status_note = Some(
+                            "Component is anchor-locked · unlock it in the Selection panel to move it"
+                                .into(),
+                        );
+                        return;
+                    }
                     self.push_undo_snapshot(index);
                     self.editor.drag = Some(Drag::Component {
                         index: ci,
@@ -4854,7 +4908,83 @@ impl Workspace {
                 .child(field("X", &self.metric_inputs.x))
                 .child(field("Y", &self.metric_inputs.y));
         }
+        // Selected component: name plus the anchor lock, the Glyphs
+        // contract — locked follows its anchor, free is draggable.
+        if let (Mode::Editor(index), Some(ci)) =
+            (&self.mode, self.editor.selected_component)
+        {
+            let index = *index;
+            let info = self
+                .font()
+                .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
+                .and_then(|g| g.components.get(ci))
+                .map(|c| {
+                    (
+                        c.base.to_string(),
+                        !runebender_core::composites::component_alignment_disabled(c),
+                    )
+                });
+            if let Some((base, aligned)) = info {
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(t::text_muted())
+                                .child(format!("Component /{base}")),
+                        )
+                        .child(
+                            div()
+                                .id("component-lock")
+                                .px_2()
+                                .py_0p5()
+                                .rounded_sm()
+                                .text_sm()
+                                .cursor_pointer()
+                                .border_1()
+                                .when(aligned, |el| {
+                                    el.border_color(t::accent())
+                                        .text_color(t::accent())
+                                })
+                                .when(!aligned, |el| {
+                                    el.border_color(t::cell_border())
+                                        .text_color(t::text())
+                                })
+                                .child(if aligned { "Locked" } else { "Free" })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.toggle_component_alignment(index, ci);
+                                    cx.notify();
+                                })),
+                        ),
+                );
+            }
+        }
         self.section(cx, "Selection", body)
+    }
+
+    /// Lock the selected component back onto its anchor, or cut it
+    /// loose. Unlocking leaves it exactly where it sits; locking
+    /// snaps it home (the realign hook runs on the edit).
+    fn toggle_component_alignment(&mut self, index: usize, ci: usize) {
+        let currently_aligned = self
+            .font()
+            .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
+            .and_then(|g| g.components.get(ci))
+            .map(|c| !runebender_core::composites::component_alignment_disabled(c));
+        let Some(aligned) = currently_aligned else { return };
+        self.push_undo_snapshot(index);
+        self.font_mut().and_then(|f| {
+            f.edit_glyph(index, |g| {
+                if let Some(component) = g.components.get_mut(ci) {
+                    runebender_core::composites::set_component_alignment_disabled(
+                        component, aligned,
+                    );
+                }
+            })
+        });
     }
 
     /// Flip/rotate the selection (whole glyph when nothing selected)
