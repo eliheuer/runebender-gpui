@@ -121,7 +121,9 @@ All four are gpui_web/upstream issues; native is unaffected.
       selection; the footer copies the selection as text)
 - [x] Header save state with timestamp (Saved 1:16 PM after a
       save; the on-disk path was already shown)
-- [ ] Master switcher as glyph thumbnails (web MasterToolbar)
+- [x] Master thumbnails: each Masters row shows the current glyph
+      rendered in that master (web MasterToolbar's buttons,
+      relocated into the section)
 - [ ] Multiple edit-session tabs (the strip supports one session;
       web's "+" spawns tabs)
 - [x] Missing-glyph indicators + generate: target-bearing language

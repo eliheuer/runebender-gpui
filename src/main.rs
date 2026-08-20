@@ -3623,16 +3623,81 @@ impl Workspace {
             None => (Vec::new(), 0),
         };
         let reference = self.reference_layers.clone();
+        // A thumbnail of the current glyph in each master, the web
+        // MasterToolbar's glyph buttons relocated into this section.
+        let glyph_name: Option<String> = self
+            .selected
+            .and_then(|i| self.font().map(|f| f.glyphs[i].name.to_string()));
+        let thumbs: Vec<Option<(Arc<BezPath>, f64, f64, f64)>> = match (
+            &self.project,
+            &glyph_name,
+        ) {
+            (Some(p), Some(name)) => p
+                .masters
+                .iter()
+                .map(|m| {
+                    m.name_map.get(name).map(|&g| {
+                        (
+                            m.glyphs[g].path.clone(),
+                            m.glyphs[g].advance,
+                            m.ascender,
+                            m.descender,
+                        )
+                    })
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         let rows: Vec<_> = names
             .into_iter()
             .enumerate()
             .map(|(i, name)| {
                 let is_active = i == active;
                 let eye_on = reference.contains(&i);
+                let thumb = thumbs.get(i).cloned().flatten();
                 div()
                     .flex()
                     .items_center()
                     .gap_1()
+                    .children(thumb.map(|(path, advance, asc, desc)| {
+                        div().w(px(22.0)).h(px(22.0)).child(
+                            canvas(
+                                move |bounds, _, _| bounds,
+                                move |_,
+                                      bounds: Bounds<gpui::Pixels>,
+                                      window,
+                                      _| {
+                                    let h: f32 = bounds.size.height.into();
+                                    let w: f32 = bounds.size.width.into();
+                                    let em = (asc - desc).max(1.0);
+                                    let scale = (h as f64 / em)
+                                        .min(w as f64 / advance.max(1.0));
+                                    let ox = (w as f64
+                                        - advance * scale)
+                                        / 2.0;
+                                    let baseline =
+                                        h as f64 + desc * scale;
+                                    let view = Affine::translate((
+                                        ox, baseline,
+                                    ))
+                                        * Affine::scale_non_uniform(
+                                            scale, -scale,
+                                        );
+                                    if let Some(p) = build_fill_path(
+                                        &path,
+                                        view,
+                                        bounds.origin,
+                                    ) {
+                                        window.paint_path(
+                                            p,
+                                            t::glyph_fill(),
+                                        );
+                                    }
+                                },
+                            )
+                            .size_full(),
+                        )
+                    }))
                     .child(
                         // Eye: draw this master as a dim reference
                         // underlay in the editor (Glyphs-style layer
