@@ -6,8 +6,8 @@ A font editor built on [GPUI](https://gpui.rs/) and
 two ports exist to compare Xilem and GPUI on the same application and
 to measure the trade-offs between them.
 
-[runebender-web](https://github.com/eliheuer/runebender-web) is the
-most complete version and is the reference for features and behavior.
+An experimental in-browser build runs at
+<https://runebender.org/gpui/>.
 
 ## Run it
 
@@ -26,10 +26,8 @@ which tracks Zed main.
 
 ## Status
 
-Early but usable for simple edits: glyph grid with search,
-double-click to edit, drag points or marquee-select, arrows nudge,
-Cmd+Z/Cmd+Shift+Z undo/redo, wheel pan, Cmd+wheel zoom, Cmd+S
-saves the UFO.
+Close to feature parity with the previous web editor.
+[PARITY.md](PARITY.md) tracks what remains.
 
 ## License
 
