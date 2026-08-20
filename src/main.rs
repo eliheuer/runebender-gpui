@@ -2466,6 +2466,80 @@ impl Workspace {
                             gpui::point(origin.x + px(p.x as f32), origin.y + px(p.y as f32))
                         };
 
+                        // Zoom-dependent design grid behind everything
+                        // (web draw_design_grid): the 8-unit lattice
+                        // fades in past 0.8x, and past 8x a 2-unit fine
+                        // grid joins underneath — the 8s stay one grid
+                        // at every zoom. Anchored at the active sort's
+                        // origin (our design space is sort-relative),
+                        // so the baseline lands on a gridline.
+                        let smoothstep = |t: f64| t * t * (3.0 - 2.0 * t);
+                        let grid_mid_alpha =
+                            smoothstep(((zoom - 0.8) / 0.8).clamp(0.0, 1.0));
+                        if !preview_mode && grid_mid_alpha > 0.0 {
+                            let inv = transform.inverse();
+                            let bw: f32 = bounds.size.width.into();
+                            let bh: f32 = bounds.size.height.into();
+                            let c0 = inv * kurbo::Point::new(0.0, 0.0);
+                            let c1 = inv * kurbo::Point::new(bw as f64, bh as f64);
+                            let (min_x, max_x) = (c0.x.min(c1.x), c0.x.max(c1.x));
+                            let (min_y, max_y) = (c0.y.min(c1.y), c0.y.max(c1.y));
+                            let mut level = |spacing: f64,
+                                             skip_every: u64,
+                                             width_px: f32,
+                                             color: gpui::Rgba,
+                                             window: &mut Window| {
+                                let mut pb = PathBuilder::stroke(px(width_px));
+                                for ix in (min_x / spacing).floor() as i64
+                                    ..=(max_x / spacing).ceil() as i64
+                                {
+                                    if skip_every > 0
+                                        && ix.unsigned_abs() % skip_every == 0
+                                    {
+                                        continue;
+                                    }
+                                    let x = ix as f64 * spacing;
+                                    pb.move_to(to_screen(x, min_y));
+                                    pb.line_to(to_screen(x, max_y));
+                                }
+                                for iy in (min_y / spacing).floor() as i64
+                                    ..=(max_y / spacing).ceil() as i64
+                                {
+                                    if skip_every > 0
+                                        && iy.unsigned_abs() % skip_every == 0
+                                    {
+                                        continue;
+                                    }
+                                    let y = iy as f64 * spacing;
+                                    pb.move_to(to_screen(min_x, y));
+                                    pb.line_to(to_screen(max_x, y));
+                                }
+                                if let Ok(p) = pb.build() {
+                                    window.paint_path(p, color);
+                                }
+                            };
+                            level(
+                                8.0,
+                                0,
+                                1.0,
+                                t::design_grid_coarse(grid_mid_alpha as f32),
+                                window,
+                            );
+                            let close_alpha =
+                                smoothstep(((zoom - 8.0) / 8.0).clamp(0.0, 1.0));
+                            if close_alpha > 0.0 {
+                                // The 2s only; every 4th line is an 8
+                                // the mid pass already drew.
+                                level(
+                                    2.0,
+                                    4,
+                                    0.5,
+                                    t::design_grid_fine(close_alpha as f32),
+                                    window,
+                                );
+                            }
+                        }
+
                         // Metrics: baseline, ascender, descender,
                         // sidebearings.
                         let hline = |y: f64, window: &mut Window| {
@@ -2605,7 +2679,21 @@ impl Workspace {
                         }
                         // Sort fills: everyone but the active sort —
                         // and the active one too while the text tool
-                        // is up (points return with select).
+                        // is up (points return with select). Once the
+                        // design grid is up (you are drawing, not
+                        // reading) the neighbours thin to a 0.34 fill
+                        // plus an outline with read-only grey points,
+                        // the web's zoomed-in treatment.
+                        let zoomed_in = !preview_mode && zoom > 0.8;
+                        // The web's point_scale curve, simplified to
+                        // its zoom ramps (device scale is 1 here).
+                        let point_scale = if zoom <= 0.8 {
+                            0.72 + (1.0 - 0.72) * smoothstep((zoom / 0.8).clamp(0.0, 1.0))
+                        } else if zoom <= 8.0 {
+                            1.0 + 0.6 * smoothstep(((zoom - 0.8) / 7.2).clamp(0.0, 1.0))
+                        } else {
+                            1.6 + 0.8 * smoothstep(((zoom - 8.0) / 20.0).clamp(0.0, 1.0))
+                        };
                         for sp in sort_paints.iter() {
                             // The active sort renders as editable
                             // chrome except in text mode, where it is
@@ -2617,12 +2705,134 @@ impl Workspace {
                             let Some(path) = sp.path.as_ref() else {
                                 continue;
                             };
+                            let dim = zoomed_in && !sp.active;
                             let sort_transform =
                                 transform * Affine::translate((sp.x, sp.y));
                             if let Some(p) =
                                 build_fill_path(path, sort_transform, origin)
                             {
+                                let mut fill = t::glyph_fill();
+                                if dim {
+                                    fill.a *= 0.34;
+                                }
+                                window.paint_path(p, fill);
+                            }
+                            if !dim {
+                                continue;
+                            }
+                            // Outline + read-only points so the
+                            // neighbour reads as structure.
+                            if let Some(p) = build_path(
+                                path,
+                                sort_transform,
+                                origin,
+                                PathBuilder::stroke(px(1.0)),
+                            ) {
                                 window.paint_path(p, t::glyph_fill());
+                            }
+                            use kurbo::Shape as _;
+                            let on_r = 4.5 * point_scale * 0.85;
+                            let off_r = 4.5 * point_scale * 0.6;
+                            let screen = |pt: kurbo::Point| {
+                                let sp2 = sort_transform * pt;
+                                kurbo::Point::new(
+                                    sp2.x + f64::from(f32::from(origin.x)),
+                                    sp2.y + f64::from(f32::from(origin.y)),
+                                )
+                            };
+                            let mut dots = BezPath::new();
+                            let mut handles = PathBuilder::stroke(px(1.0));
+                            let mut any_handles = false;
+                            let mut current = kurbo::Point::ZERO;
+                            let mut start = kurbo::Point::ZERO;
+                            let mut hline2 = |a: kurbo::Point,
+                                              b: kurbo::Point,
+                                              pb: &mut PathBuilder,
+                                              any: &mut bool| {
+                                pb.move_to(gpui::point(
+                                    px(a.x as f32),
+                                    px(a.y as f32),
+                                ));
+                                pb.line_to(gpui::point(
+                                    px(b.x as f32),
+                                    px(b.y as f32),
+                                ));
+                                *any = true;
+                            };
+                            for el in path.elements() {
+                                match *el {
+                                    kurbo::PathEl::MoveTo(p) => {
+                                        let p = screen(p);
+                                        dots.extend(
+                                            kurbo::Circle::new(p, on_r)
+                                                .to_path(0.25),
+                                        );
+                                        current = p;
+                                        start = p;
+                                    }
+                                    kurbo::PathEl::LineTo(p) => {
+                                        let p = screen(p);
+                                        dots.extend(
+                                            kurbo::Circle::new(p, on_r)
+                                                .to_path(0.25),
+                                        );
+                                        current = p;
+                                    }
+                                    kurbo::PathEl::QuadTo(c, p) => {
+                                        let (c, p) = (screen(c), screen(p));
+                                        dots.extend(
+                                            kurbo::Circle::new(c, off_r)
+                                                .to_path(0.25),
+                                        );
+                                        dots.extend(
+                                            kurbo::Circle::new(p, on_r)
+                                                .to_path(0.25),
+                                        );
+                                        hline2(current, c, &mut handles, &mut any_handles);
+                                        hline2(c, p, &mut handles, &mut any_handles);
+                                        current = p;
+                                    }
+                                    kurbo::PathEl::CurveTo(c1, c2, p) => {
+                                        let (c1, c2, p) =
+                                            (screen(c1), screen(c2), screen(p));
+                                        dots.extend(
+                                            kurbo::Circle::new(c1, off_r)
+                                                .to_path(0.25),
+                                        );
+                                        dots.extend(
+                                            kurbo::Circle::new(c2, off_r)
+                                                .to_path(0.25),
+                                        );
+                                        dots.extend(
+                                            kurbo::Circle::new(p, on_r)
+                                                .to_path(0.25),
+                                        );
+                                        hline2(current, c1, &mut handles, &mut any_handles);
+                                        hline2(c2, p, &mut handles, &mut any_handles);
+                                        current = p;
+                                    }
+                                    kurbo::PathEl::ClosePath => {
+                                        current = start;
+                                    }
+                                }
+                            }
+                            if any_handles && let Ok(p) = handles.build() {
+                                window.paint_path(p, t::point_readonly());
+                            }
+                            if let Some(p) = build_fill_path(
+                                &dots,
+                                Affine::IDENTITY,
+                                gpui::point(px(0.0), px(0.0)),
+                            ) {
+                                window.paint_path(p, t::point_inner());
+                            }
+                            if let Some(p) = build_path(
+                                &dots,
+                                Affine::IDENTITY,
+                                gpui::point(px(0.0), px(0.0)),
+                                PathBuilder::stroke(px(1.0)),
+                            ) {
+                                window.paint_path(p, t::point_readonly());
                             }
                         }
                         // Caret: line plus inward triangles, sized off
@@ -2694,6 +2904,23 @@ impl Workspace {
                             )
                         {
                             window.paint_path(p, t::ghost());
+                        }
+                        // Ghost fill under the glyph being edited: the
+                        // same grey the inactive sorts use at a tenth
+                        // strength, so counters read as counters
+                        // without competing with the outline (web
+                        // ACTIVE_GLYPH_FILL_ALPHA).
+                        if !preview_mode && !text_mode {
+                            let mut combined = outline.as_ref().clone();
+                            combined
+                                .extend(component_path.elements().iter().cloned());
+                            if let Some(p) =
+                                build_fill_path(&combined, transform, origin)
+                            {
+                                let mut fill = t::glyph_fill();
+                                fill.a *= 0.16;
+                                window.paint_path(p, fill);
+                            }
                         }
                         // Edit mode is a stroked outline (no fill),
                         // like the other editors.
@@ -4031,6 +4258,75 @@ impl Workspace {
             let name = project.active_font().glyphs[index].name.to_string();
             project.recheck_compat(&name);
         }
+    }
+
+    /// Cmd+V, routed the web way: copied contours paste whenever the
+    /// outline clipboard holds something and the Text tool isn't the
+    /// one in hand; otherwise the system clipboard's text types into
+    /// the editor's buffer.
+    fn command_paste_routed(&mut self, cx: &mut Context<Self>) {
+        let text_target = matches!(self.mode, Mode::Editor(_));
+        if (!self.clipboard.is_empty() && self.editor.tool != Tool::Text)
+            || !text_target
+        {
+            self.command_paste();
+            return;
+        }
+        self.paste_text_into_buffer(cx);
+    }
+
+    /// Paste the system clipboard's text into the editor's buffer,
+    /// character by character (web pasteTextIntoBuffer): switches to
+    /// the Text tool, line breaks for newlines, characters with no
+    /// glyph skipped.
+    fn paste_text_into_buffer(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
+        else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        if self.editor.tool != Tool::Text {
+            self.editor.previous_tool = self.editor.tool;
+            self.editor.tool = Tool::Text;
+        }
+        let mut inserted = 0usize;
+        let mut skipped = 0usize;
+        for c in text.chars() {
+            if c == '\r' {
+                continue;
+            }
+            if c == '\n' {
+                self.edit_buffer.insert_line_break();
+                inserted += 1;
+                continue;
+            }
+            if self.edit_buffer.insert_character(c) {
+                inserted += 1;
+            } else {
+                skipped += 1;
+            }
+        }
+        if inserted == 0 && skipped == 0 {
+            return;
+        }
+        self.edit_buffer.shape_arabic_if_rtl();
+        self.sync_sort_offset();
+        self.status_note = Some(
+            if skipped > 0 {
+                format!(
+                    "pasted {inserted} character{} ({skipped} with no glyph skipped)",
+                    if inserted == 1 { "" } else { "s" }
+                )
+            } else {
+                format!(
+                    "pasted {inserted} character{}",
+                    if inserted == 1 { "" } else { "s" }
+                )
+            }
+            .into(),
+        );
     }
 
     /// Remove overlap on the open glyph, with undo.
@@ -5846,7 +6142,7 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &PasteContours, _, cx| {
-                this.command_paste();
+                this.command_paste_routed(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &RemoveOverlap, _, cx| {
@@ -6230,7 +6526,7 @@ fn main() {
                                 this.rebuild_text_models();
                             }
                             ("c", false) => this.command_copy(),
-                            ("v", false) => this.command_paste(),
+                            ("v", false) => this.command_paste_routed(cx),
                             ("o", true) => this.command_remove_overlap(),
                             ("d", true) => this.command_decompose(),
                             ("h", true) => {

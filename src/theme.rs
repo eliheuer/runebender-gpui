@@ -100,6 +100,27 @@ pub fn component_selected_fill() -> Rgba {
 pub fn ghost() -> Rgba {
     c(theme().role("component"))
 }
+/// Zoom-dependent design grid, faded by the level's ramp-in alpha
+/// (the web's DESIGN_GRID_FINE/COARSE, shared constants in core).
+pub fn design_grid_fine(alpha: f32) -> Rgba {
+    let mut rgba = c(runebender_core::theme::design_grid::FINE);
+    rgba.a *= alpha;
+    rgba
+}
+pub fn design_grid_coarse(alpha: f32) -> Rgba {
+    let mut rgba = c(runebender_core::theme::design_grid::COARSE);
+    rgba.a *= alpha;
+    rgba
+}
+/// Greyed-out ring on read-only points (inactive sorts, zoomed in).
+pub fn point_readonly() -> Rgba {
+    Rgba {
+        r: 0x8a as f32 / 255.0,
+        g: 0x8a as f32 / 255.0,
+        b: 0x8a as f32 / 255.0,
+        a: 1.0,
+    }
+}
 
 // ---- points (dark inner, colored ring — the web style) ----
 
