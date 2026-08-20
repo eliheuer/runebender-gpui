@@ -1285,11 +1285,57 @@ enum Mode {
     Editor(usize),
 }
 
+/// The category rows, in web order. Labels double as the keys for
+/// core's category_subfilters.
+const SIDEBAR_CATEGORIES: [(runebender_core::category::GlyphCategory, &str); 8] = {
+    use runebender_core::category::GlyphCategory as GC;
+    [
+        (GC::All, "All"),
+        (GC::Letter, "Letter"),
+        (GC::Number, "Number"),
+        (GC::Punctuation, "Punctuation"),
+        (GC::Symbol, "Symbol"),
+        (GC::Mark, "Mark"),
+        (GC::Separator, "Separator"),
+        (GC::Other, "Other"),
+    ]
+};
+
+/// What the sidebar has selected (web GlyphSidebarFilter).
+#[derive(Clone, PartialEq, Eq)]
+enum SidebarFilter {
+    All,
+    Category(runebender_core::category::GlyphCategory),
+    Subfilter(runebender_core::category::GlyphCategory, &'static str),
+    LanguageGroup(usize),
+    Language(usize, usize),
+    Builtin(usize),
+}
+
+/// Glyph counts for every sidebar row, computed once per font state.
+struct SidebarCounts {
+    #[allow(dead_code)]
+    total: usize,
+    categories: Vec<usize>,
+    subfilters: std::collections::HashMap<(usize, usize), usize>,
+    groups: Vec<usize>,
+    languages: Vec<Vec<usize>>,
+    builtins: Vec<usize>,
+}
+
 struct Workspace {
     project: Option<Project>,
     load_error: Option<SharedString>,
     selected: Option<usize>,
-    category: runebender_core::category::GlyphCategory,
+    sidebar_filter: SidebarFilter,
+    /// Names matched by the current sidebar filter (None = all).
+    sidebar_matches: Option<std::collections::HashSet<String>>,
+    /// Per-row glyph counts, rebuilt on load/reload/master switch.
+    sidebar_counts: Option<SidebarCounts>,
+    expanded_scripts: std::collections::HashSet<usize>,
+    expanded_categories: std::collections::HashSet<usize>,
+    /// Grid sort: false = by name (font order), true = by unicode.
+    sort_unicode: bool,
     mode: Mode,
     editor: EditorState,
     /// The preview strip's text, as a real text-engine buffer:
@@ -1363,6 +1409,7 @@ impl Workspace {
     /// Switch the active master, keeping the open glyph (by name)
     /// when it exists in the target master.
     fn switch_master(&mut self, master: usize) {
+        self.sidebar_counts = None;
         let Some(project) = self.project.as_mut() else {
             return;
         };
@@ -1535,63 +1582,506 @@ impl Workspace {
 
     /// Left sidebar tile: search plus the category filter list,
     /// like runebender-web's CategorySidebar.
-    fn category_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// All codepoints of a glyph in the active master (norad keeps
+    /// the full list; GlyphEntry only caches the first).
+    fn glyph_codepoints(font: &FontModel, name: &str) -> Vec<u32> {
+        font.font
+            .get_glyph(name)
+            .map(|g| g.codepoints.iter().map(|c| c as u32).collect())
+            .unwrap_or_default()
+    }
+
+    /// Does a glyph pass the given sidebar filter?
+    fn glyph_passes_filter(
+        &self,
+        font: &FontModel,
+        name: &str,
+        codepoint: Option<char>,
+        filter: &SidebarFilter,
+    ) -> bool {
         use runebender_core::category::GlyphCategory as GC;
-        const CATEGORIES: [(GC, &str); 8] = [
-            (GC::All, "All"),
-            (GC::Letter, "Letter"),
-            (GC::Number, "Number"),
-            (GC::Punctuation, "Punctuation"),
-            (GC::Symbol, "Symbol"),
-            (GC::Mark, "Mark"),
-            (GC::Separator, "Separator"),
-            (GC::Other, "Other"),
-        ];
-        // Glyph counts per category, like the web sidebar.
-        let mut counts = [0usize; 8];
-        if let Some(font) = self.font() {
-            for entry in &font.glyphs {
-                counts[0] += 1;
-                let category = entry
-                    .codepoint
-                    .map(GC::from_codepoint)
-                    .unwrap_or(GC::Other);
-                if let Some(slot) =
-                    CATEGORIES.iter().position(|(c, _)| *c == category)
-                {
-                    counts[slot] += 1;
+        use runebender_core::sidebar as sb;
+        let category = codepoint.map(GC::from_codepoint).unwrap_or(GC::Other);
+        match filter {
+            SidebarFilter::All => true,
+            SidebarFilter::Category(c) => category == *c,
+            SidebarFilter::Subfilter(c, sub) => {
+                category == *c
+                    && sb::glyph_matches_subfilter(
+                        name,
+                        &Self::glyph_codepoints(font, name),
+                        sub,
+                    )
+            }
+            SidebarFilter::LanguageGroup(gi) => sb::language_groups()
+                .get(*gi)
+                .is_some_and(|group| {
+                    sb::glyph_matches_language_group(
+                        name,
+                        &Self::glyph_codepoints(font, name),
+                        group,
+                    )
+                }),
+            SidebarFilter::Language(gi, fi) => sb::language_groups()
+                .get(*gi)
+                .and_then(|group| group.filters.get(*fi))
+                .is_some_and(|f| {
+                    sb::glyph_matches_character_filter(
+                        name,
+                        &Self::glyph_codepoints(font, name),
+                        f,
+                    )
+                }),
+            SidebarFilter::Builtin(bi) => {
+                let Some(builtin) = sb::builtin_filters().get(*bi) else {
+                    return false;
+                };
+                match &builtin.glyphset {
+                    Some(set) => sb::glyph_matches_character_filter(
+                        name,
+                        &Self::glyph_codepoints(font, name),
+                        set,
+                    ),
+                    // Runebender builtins: exporting = everything;
+                    // incompatible = glyphs whose masters disagree.
+                    None => match builtin.id.as_str() {
+                        "incompatible" => self
+                            .project
+                            .as_ref()
+                            .and_then(|p| p.compat.get(name))
+                            .is_some_and(|ok| !ok),
+                        _ => true,
+                    },
                 }
             }
         }
-        let mut list = div().flex().flex_col().gap_1();
-        for (i, (category, label)) in CATEGORIES.into_iter().enumerate() {
-            let active = self.category == category;
-            list = list.child(
-                div()
-                    .id(("category", i))
-                    .px_2()
-                    .py_0p5()
-                    .rounded_sm()
-                    .text_sm()
-                    .cursor_pointer()
-                    .flex()
-                    .justify_between()
-                    .when(active, |el| {
-                        el.border_1().border_color(t::accent()).text_color(t::accent())
+    }
+
+    /// Rebuild the per-row counts and the current filter's match set.
+    /// Called lazily from render after anything font-shaped changes.
+    fn rebuild_sidebar_cache(&mut self) {
+        use runebender_core::category::GlyphCategory as GC;
+        use runebender_core::sidebar as sb;
+        let Some(font) = self.font() else {
+            self.sidebar_counts = None;
+            self.sidebar_matches = None;
+            return;
+        };
+        let glyphs: Vec<(String, Option<char>, Vec<u32>)> = font
+            .glyphs
+            .iter()
+            .map(|entry| {
+                (
+                    entry.name.to_string(),
+                    entry.codepoint,
+                    Self::glyph_codepoints(font, entry.name.as_ref()),
+                )
+            })
+            .collect();
+        let categories = SIDEBAR_CATEGORIES
+            .iter()
+            .map(|(category, _)| {
+                if *category == GC::All {
+                    glyphs.len()
+                } else {
+                    glyphs
+                        .iter()
+                        .filter(|(_, cp, _)| {
+                            cp.map(GC::from_codepoint).unwrap_or(GC::Other)
+                                == *category
+                        })
+                        .count()
+                }
+            })
+            .collect();
+        let mut subfilters = std::collections::HashMap::new();
+        for (ci, (category, label)) in SIDEBAR_CATEGORIES.iter().enumerate() {
+            for (si, (sub, _)) in
+                sb::category_subfilters(label).iter().enumerate()
+            {
+                let count = glyphs
+                    .iter()
+                    .filter(|(name, cp, cps)| {
+                        cp.map(GC::from_codepoint).unwrap_or(GC::Other)
+                            == *category
+                            && sb::glyph_matches_subfilter(name, cps, sub)
                     })
-                    .when(!active, |el| el.text_color(t::text()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.category = category;
-                        cx.notify();
-                    }))
-                    .child(label)
-                    .child(
-                        div()
-                            .text_color(if active { t::accent() } else { t::text_muted() })
-                            .child(format!("{}", counts[i])),
-                    ),
+                    .count();
+                subfilters.insert((ci, si), count);
+            }
+        }
+        let mut groups = Vec::new();
+        let mut languages = Vec::new();
+        for group in sb::language_groups() {
+            groups.push(
+                glyphs
+                    .iter()
+                    .filter(|(name, _, cps)| {
+                        sb::glyph_matches_language_group(name, cps, group)
+                    })
+                    .count(),
+            );
+            languages.push(
+                group
+                    .filters
+                    .iter()
+                    .map(|filter| {
+                        glyphs
+                            .iter()
+                            .filter(|(name, _, cps)| {
+                                sb::glyph_matches_character_filter(
+                                    name, cps, filter,
+                                )
+                            })
+                            .count()
+                    })
+                    .collect(),
             );
         }
+        let builtins = sb::builtin_filters()
+            .iter()
+            .map(|builtin| match &builtin.glyphset {
+                Some(set) => glyphs
+                    .iter()
+                    .filter(|(name, _, cps)| {
+                        sb::glyph_matches_character_filter(name, cps, set)
+                    })
+                    .count(),
+                None => match builtin.id.as_str() {
+                    "incompatible" => self
+                        .project
+                        .as_ref()
+                        .map(|p| p.compat.values().filter(|ok| !**ok).count())
+                        .unwrap_or(0),
+                    _ => glyphs.len(),
+                },
+            })
+            .collect();
+        self.sidebar_counts = Some(SidebarCounts {
+            total: glyphs.len(),
+            categories,
+            subfilters,
+            groups,
+            languages,
+            builtins,
+        });
+        self.rebuild_sidebar_matches();
+    }
+
+    /// Recompute the current filter's match set only (filter clicks).
+    fn rebuild_sidebar_matches(&mut self) {
+        let filter = self.sidebar_filter.clone();
+        if filter == SidebarFilter::All {
+            self.sidebar_matches = None;
+            return;
+        }
+        let Some(font) = self.font() else {
+            self.sidebar_matches = None;
+            return;
+        };
+        let matches: std::collections::HashSet<String> = font
+            .glyphs
+            .iter()
+            .filter(|entry| {
+                self.glyph_passes_filter(
+                    font,
+                    entry.name.as_ref(),
+                    entry.codepoint,
+                    &filter,
+                )
+            })
+            .map(|entry| entry.name.to_string())
+            .collect();
+        self.sidebar_matches = Some(matches);
+    }
+
+    /// Select a sidebar row.
+    fn set_sidebar_filter(&mut self, filter: SidebarFilter) {
+        self.sidebar_filter = filter;
+        self.rebuild_sidebar_matches();
+    }
+
+    /// A small disclosure triangle for expandable sidebar rows
+    /// (painted: IBM Plex has no triangle codepoints).
+    fn row_chevron(expanded: bool) -> impl IntoElement {
+        canvas(
+            move |bounds, _, _| bounds,
+            move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+                let o = bounds.origin;
+                let w: f32 = bounds.size.width.into();
+                let h: f32 = bounds.size.height.into();
+                let (cx_, cy) = (w / 2.0, h / 2.0);
+                let mut path = gpui::PathBuilder::fill();
+                let pt = |dx: f32, dy: f32| {
+                    gpui::point(o.x + px(cx_ + dx), o.y + px(cy + dy))
+                };
+                if expanded {
+                    path.move_to(pt(-3.5, -1.5));
+                    path.line_to(pt(3.5, -1.5));
+                    path.line_to(pt(0.0, 2.5));
+                } else {
+                    path.move_to(pt(-1.5, -3.5));
+                    path.line_to(pt(2.5, 0.0));
+                    path.line_to(pt(-1.5, 3.5));
+                }
+                if let Ok(p) = path.build() {
+                    window.paint_path(p, t::text_muted());
+                }
+            },
+        )
+        .w(px(10.0))
+        .h(px(10.0))
+    }
+
+    /// One sidebar row: optional chevron, optional icon, label, and a
+    /// right-aligned count ("n" or "n/m" coverage).
+    #[allow(clippy::too_many_arguments)]
+    fn sidebar_row(
+        &self,
+        id: (&'static str, usize),
+        indent: bool,
+        chevron: Option<bool>,
+        icon: Option<SharedString>,
+        label: SharedString,
+        count: SharedString,
+        filter: SidebarFilter,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let active = self.sidebar_filter == filter;
+        div()
+            .id(id)
+            .px_2()
+            .py_0p5()
+            .when(indent, |el| el.ml_4())
+            .rounded_sm()
+            .text_sm()
+            .cursor_pointer()
+            .flex()
+            .items_center()
+            .gap_1()
+            .when(active, |el| {
+                el.border_1().border_color(t::accent()).text_color(t::accent())
+            })
+            .when(!active, |el| el.text_color(t::text()))
+            .when_some(chevron, |el, expanded| {
+                el.child(Self::row_chevron(expanded))
+            })
+            .when_some(icon, |el, icon| {
+                el.child(
+                    div()
+                        .w(px(16.0))
+                        .text_color(if active {
+                            t::accent()
+                        } else {
+                            t::text_muted()
+                        })
+                        .child(icon),
+                )
+            })
+            .child(div().flex_1().child(label))
+            .child(
+                div()
+                    .text_color(if active { t::accent() } else { t::text_muted() })
+                    .child(count),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_sidebar_filter(filter.clone());
+                cx.notify();
+            }))
+    }
+
+    fn category_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        use runebender_core::sidebar as sb;
+        let counts = self.sidebar_counts.as_ref();
+
+        // Categories: expandable rows with the web's subfilters.
+        let mut categories = div().flex().flex_col().gap_1();
+        for (ci, (category, label)) in SIDEBAR_CATEGORIES.iter().enumerate() {
+            let subs = sb::category_subfilters(label);
+            let count = counts.map(|c| c.categories[ci]).unwrap_or(0);
+            let expanded = self.expanded_categories.contains(&ci);
+            let mut row = self
+                .sidebar_row(
+                    ("category", ci),
+                    false,
+                    (!subs.is_empty()).then_some(expanded),
+                    None,
+                    SharedString::from(*label),
+                    format!("{count}").into(),
+                    if ci == 0 {
+                        SidebarFilter::All
+                    } else {
+                        SidebarFilter::Category(*category)
+                    },
+                    cx,
+                )
+                .into_any_element();
+            if !subs.is_empty() {
+                // A separate click target for the chevron would fight
+                // the row click; double-purpose: clicking an already
+                // selected row toggles expansion instead.
+                let category = *category;
+                let selected = self.sidebar_filter
+                    == SidebarFilter::Category(category)
+                    || subs.iter().any(|(sub, _)| {
+                        self.sidebar_filter
+                            == SidebarFilter::Subfilter(category, sub)
+                    });
+                row = self
+                    .sidebar_row(
+                        ("category", ci),
+                        false,
+                        Some(expanded),
+                        None,
+                        SharedString::from(*label),
+                        format!("{count}").into(),
+                        SidebarFilter::Category(category),
+                        cx,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if selected {
+                            if !this.expanded_categories.remove(&ci) {
+                                this.expanded_categories.insert(ci);
+                            }
+                        }
+                        this.set_sidebar_filter(SidebarFilter::Category(
+                            category,
+                        ));
+                        cx.notify();
+                    }))
+                    .into_any_element();
+            }
+            categories = categories.child(row);
+            if expanded {
+                for (si, (sub, sub_label)) in subs.iter().enumerate() {
+                    let count = counts
+                        .and_then(|c| c.subfilters.get(&(ci, si)).copied())
+                        .unwrap_or(0);
+                    categories = categories.child(self.sidebar_row(
+                        ("subfilter", ci * 100 + si),
+                        true,
+                        None,
+                        None,
+                        SharedString::from(*sub_label),
+                        format!("{count}").into(),
+                        SidebarFilter::Subfilter(*category, sub),
+                        cx,
+                    ));
+                }
+            }
+        }
+
+        // Languages: script groups with per-set coverage, like the
+        // web sidebar and Glyphs.
+        let mut languages = div().flex().flex_col().gap_1();
+        for (gi, group) in sb::language_groups().iter().enumerate() {
+            let count = counts.map(|c| c.groups[gi]).unwrap_or(0);
+            let expanded = self.expanded_scripts.contains(&gi);
+            let selected = self.sidebar_filter
+                == SidebarFilter::LanguageGroup(gi)
+                || (0..group.filters.len()).any(|fi| {
+                    self.sidebar_filter == SidebarFilter::Language(gi, fi)
+                });
+            languages = languages.child(
+                self.sidebar_row(
+                    ("script", gi),
+                    false,
+                    Some(expanded),
+                    Some(group.icon.clone().into()),
+                    group.label.clone().into(),
+                    format!("{count}").into(),
+                    SidebarFilter::LanguageGroup(gi),
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if selected {
+                        if !this.expanded_scripts.remove(&gi) {
+                            this.expanded_scripts.insert(gi);
+                        }
+                    } else {
+                        this.expanded_scripts.insert(gi);
+                    }
+                    this.set_sidebar_filter(SidebarFilter::LanguageGroup(gi));
+                    cx.notify();
+                })),
+            );
+            if expanded {
+                for (fi, filter) in group.filters.iter().enumerate() {
+                    let count = counts
+                        .map(|c| c.languages[gi][fi])
+                        .unwrap_or(0);
+                    let count_text = match filter.expected_count {
+                        Some(expected) => format!("{count}/{expected}"),
+                        None => format!("{count}"),
+                    };
+                    languages = languages.child(self.sidebar_row(
+                        ("language", gi * 100 + fi),
+                        true,
+                        None,
+                        None,
+                        filter.label.clone().into(),
+                        count_text.into(),
+                        SidebarFilter::Language(gi, fi),
+                        cx,
+                    ));
+                }
+            }
+        }
+
+        // Filters: the Runebender builtins plus headline GF sets.
+        let mut filters = div().flex().flex_col().gap_1();
+        for (bi, builtin) in sb::builtin_filters().iter().enumerate() {
+            let count = counts.map(|c| c.builtins[bi]).unwrap_or(0);
+            let count_text = match builtin
+                .glyphset
+                .as_ref()
+                .and_then(|set| set.expected_count)
+            {
+                Some(expected) => format!("{count}/{expected}"),
+                None => format!("{count}"),
+            };
+            filters = filters.child(self.sidebar_row(
+                ("builtin", bi),
+                false,
+                None,
+                None,
+                builtin.label.clone().into(),
+                count_text.into(),
+                SidebarFilter::Builtin(bi),
+                cx,
+            ));
+        }
+
+        // Name / Unicode sort toggle, like the web sidebar's top row.
+        let sort_button = |id: &'static str,
+                           label: &'static str,
+                           active: bool,
+                           unicode: bool,
+                           cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .flex_1()
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .text_sm()
+                .text_center()
+                .cursor_pointer()
+                .when(active, |el| {
+                    el.border_1().border_color(t::accent()).text_color(t::accent())
+                })
+                .when(!active, |el| {
+                    el.border_1()
+                        .border_color(t::cell_border())
+                        .text_color(t::text_muted())
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.sort_unicode = unicode;
+                    cx.notify();
+                }))
+        };
+
         div()
             .size_full()
             .flex()
@@ -1599,12 +2089,38 @@ impl Workspace {
             .child(
                 div()
                     .p_2()
+                    .flex()
+                    .gap_1()
+                    .child(sort_button("sort-name", "Name", !self.sort_unicode, false, cx))
+                    .child(sort_button(
+                        "sort-unicode",
+                        "Unicode",
+                        self.sort_unicode,
+                        true,
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .px_2()
+                    .pb_2()
                     .border_b_1()
                     .border_color(t::panel_outline())
                     .child(gpui_component::input::Input::new(&self.search)),
             )
-            .child(self.section(cx, "Categories", list))
-            .children(self.axes_section(cx))
+            .child(
+                div()
+                    .id("sidebar-scroll")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .child(self.section(cx, "Categories", categories))
+                    .child(self.section(cx, "Languages", languages))
+                    .child(self.section(cx, "Filters", filters))
+                    .children(self.axes_section(cx)),
+            )
     }
 
     /// Right tile: details of the selected glyph, like
@@ -5545,6 +6061,7 @@ impl Workspace {
 
     /// Re-read every clean master from disk, keeping the open glyph.
     fn reload_from_disk(&mut self) {
+        self.sidebar_counts = None;
         let Some(project) = self.project.as_mut() else {
             return;
         };
@@ -5600,6 +6117,7 @@ impl Workspace {
                     Ok((fetched, (project, ufo_prefixes))) => {
                         let n = project.masters.len();
                         workspace.project = Some(project);
+                        workspace.sidebar_counts = None;
                         workspace.load_error = None;
                         workspace.mode = Mode::Grid;
                         workspace.selected = None;
@@ -5748,6 +6266,7 @@ impl Workspace {
                 match loaded {
                     Ok(project) => {
                         workspace.project = Some(project);
+                        workspace.sidebar_counts = None;
                         workspace.load_error = None;
                         workspace.mode = Mode::Grid;
                         workspace.selected = None;
@@ -6002,6 +6521,9 @@ impl Render for Workspace {
         }
 
         self.ensure_axis_sliders(window, cx);
+        if self.sidebar_counts.is_none() && self.project.is_some() {
+            self.rebuild_sidebar_cache();
+        }
         if matches!(self.mode, Mode::Editor(_)) {
             self.refresh_metric_inputs(false, window, cx);
             self.refresh_coord_inputs(false, window, cx);
@@ -6024,27 +6546,36 @@ impl Render for Workspace {
             ),
             _ => {
                 let query = self.search_query.clone();
-                let category = self.category;
+                let matches = self.sidebar_matches.clone();
+                let sort_unicode = self.sort_unicode;
                 let grid: Vec<_> = match self.font() {
-                    Some(font) => (0..font.glyphs.len())
-                        .filter(|&i| {
-                            let entry = &font.glyphs[i];
-                            let category_ok = category
-                                == runebender_core::category::GlyphCategory::All
-                                || entry.codepoint.map_or(
-                                    category
-                                        == runebender_core::category::GlyphCategory::Other,
-                                    |c| {
-                                        runebender_core::category::GlyphCategory::from_codepoint(c)
-                                            == category
-                                    },
-                                );
-                            category_ok
-                                && (query.is_empty()
-                                    || entry.name.to_lowercase().contains(&query))
-                        })
-                        .map(|i| self.glyph_cell(i, cx).into_any_element())
-                        .collect(),
+                    Some(font) => {
+                        let mut indices: Vec<usize> = (0..font.glyphs.len())
+                            .filter(|&i| {
+                                let entry = &font.glyphs[i];
+                                matches
+                                    .as_ref()
+                                    .is_none_or(|m| m.contains(entry.name.as_ref()))
+                                    && (query.is_empty()
+                                        || entry
+                                            .name
+                                            .to_lowercase()
+                                            .contains(&query))
+                            })
+                            .collect();
+                        if sort_unicode {
+                            indices.sort_by_key(|&i| {
+                                (
+                                    font.glyphs[i].codepoint.is_none(),
+                                    font.glyphs[i].codepoint,
+                                )
+                            });
+                        }
+                        indices
+                            .into_iter()
+                            .map(|i| self.glyph_cell(i, cx).into_any_element())
+                            .collect()
+                    }
                     None => Vec::new(),
                 };
                 (
@@ -6439,7 +6970,12 @@ fn main() {
                         project,
                         load_error,
                         selected: None,
-                        category: runebender_core::category::GlyphCategory::All,
+                        sidebar_filter: SidebarFilter::All,
+                        sidebar_matches: None,
+                        sidebar_counts: None,
+                        expanded_scripts: std::collections::HashSet::new(),
+                        expanded_categories: std::collections::HashSet::new(),
+                        sort_unicode: false,
                         mode: start_mode,
                         editor: EditorState::new(),
                         preview_buffer: runebender_core::text::TextBuffer::new(),
