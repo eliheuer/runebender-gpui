@@ -7,6 +7,8 @@ description = "A font editor built on GPUI, a sibling of runebender-xilem for co
 repository = "https://github.com/eliheuer/runebender-gpui"
 
 [dependencies]
+regex = "1"
+chrono = "0.4"
 # gpui-component requires gpui from the zed git repo (it tracks zed
 # main, where the platform layer was split into gpui_platform).
 gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed" }

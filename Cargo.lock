@@ -6019,6 +6019,7 @@ dependencies = [
 name = "runebender-gpui"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "futures",
  "gpui",
  "gpui-component",
@@ -6030,6 +6031,7 @@ dependencies = [
  "linesweeper",
  "norad",
  "notify 8.2.0",
+ "regex",
  "runebender-core",
  "serde",
  "serde_json",

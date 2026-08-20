@@ -1431,6 +1431,9 @@ struct SidebarCounts {
     subfilters: std::collections::HashMap<(usize, usize), usize>,
     groups: Vec<usize>,
     languages: Vec<Vec<usize>>,
+    /// Missing-target counts per (group, filter); 0 = complete or
+    /// not target-bearing.
+    missing: Vec<Vec<usize>>,
     builtins: Vec<usize>,
 }
 
@@ -1476,6 +1479,12 @@ struct Workspace {
     status_note: Option<SharedString>,
     search: gpui::Entity<gpui_component::input::InputState>,
     search_query: String,
+    /// Search scope: 0 = all, 1 = name, 2 = unicode.
+    search_mode: u8,
+    /// Wall-clock time of the last save, for the header.
+    last_save_label: Option<SharedString>,
+    search_regex: bool,
+    search_case: bool,
     metric_inputs: MetricInputs,
     glyph_inputs: GlyphInputs,
     context_menu: Option<ContextMenu>,
@@ -1848,8 +1857,13 @@ impl Workspace {
                 subfilters.insert((ci, si), count);
             }
         }
+        let name_cps: Vec<(String, Vec<u32>)> = glyphs
+            .iter()
+            .map(|(name, _, cps)| (name.clone(), cps.clone()))
+            .collect();
         let mut groups = Vec::new();
         let mut languages = Vec::new();
+        let mut missing = Vec::new();
         for group in sb::language_groups() {
             groups.push(
                 glyphs
@@ -1872,6 +1886,15 @@ impl Workspace {
                                 )
                             })
                             .count()
+                    })
+                    .collect(),
+            );
+            missing.push(
+                group
+                    .filters
+                    .iter()
+                    .map(|filter| {
+                        sb::missing_targets(&name_cps, filter).len()
                     })
                     .collect(),
             );
@@ -1901,6 +1924,7 @@ impl Workspace {
             subfilters,
             groups,
             languages,
+            missing,
             builtins,
         });
         self.rebuild_sidebar_matches();
@@ -1931,6 +1955,106 @@ impl Workspace {
             .map(|entry| entry.name.to_string())
             .collect();
         self.sidebar_matches = Some(matches);
+    }
+
+    /// Does a glyph match the sidebar search, honoring scope, regex,
+    /// and case options (web glyphMatchesSidebarSearch)?
+    fn search_matches(&self, name: &str, codepoint: Option<char>) -> bool {
+        let query = self.search_query.trim();
+        if query.is_empty() {
+            return true;
+        }
+        let unicode_hex = codepoint
+            .map(|c| format!("{:04X}", c as u32))
+            .unwrap_or_default();
+        let chars = codepoint.map(String::from).unwrap_or_default();
+        let haystacks: Vec<&str> = match self.search_mode {
+            1 => vec![name],
+            2 => vec![unicode_hex.as_str(), chars.as_str()],
+            _ => vec![name, unicode_hex.as_str(), chars.as_str()],
+        };
+        if self.search_regex {
+            let pattern = if self.search_case {
+                query.to_string()
+            } else {
+                format!("(?i){query}")
+            };
+            return match regex::Regex::new(&pattern) {
+                Ok(re) => haystacks.iter().any(|h| re.is_match(h)),
+                // A half-typed pattern matches everything, like the web.
+                Err(_) => true,
+            };
+        }
+        if self.search_case {
+            haystacks.iter().any(|h| h.contains(query))
+        } else {
+            let needle = query.to_lowercase();
+            haystacks
+                .iter()
+                .any(|h| h.to_lowercase().contains(&needle))
+        }
+    }
+
+    /// Add every glyph a target-bearing language filter still misses
+    /// (web generateMissing): empty glyphs named and encoded from the
+    /// filter's targets, in every master.
+    fn command_generate_missing(&mut self, group: usize, filter_index: usize) {
+        use runebender_core::sidebar as sb;
+        let Some(filter) = sb::language_groups()
+            .get(group)
+            .and_then(|g| g.filters.get(filter_index))
+        else {
+            return;
+        };
+        let existing: Vec<(String, Vec<u32>)> = self
+            .font()
+            .map(|f| {
+                f.glyphs
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.name.to_string(),
+                            Self::glyph_codepoints(f, entry.name.as_ref()),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let targets: Vec<(String, u32)> = sb::missing_targets(&existing, filter)
+            .into_iter()
+            .map(|t| (t.name.clone(), t.unicode))
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        let Some(project) = self.project.as_mut() else { return };
+        let upm = project.active_font().units_per_em;
+        let mut added = 0usize;
+        for master in project.masters.iter_mut() {
+            for (name, unicode) in &targets {
+                if master.name_map.contains_key(name) {
+                    continue;
+                }
+                let mut glyph = norad::Glyph::new(name.as_str());
+                glyph.width = (upm * 0.5).round();
+                if let Some(c) = char::from_u32(*unicode) {
+                    glyph.codepoints = norad::Codepoints::new([c]);
+                }
+                master.font.default_layer_mut().insert_glyph(glyph);
+                master.dirty = true;
+                master.modified_glyphs.insert(name.clone());
+            }
+            master.refresh_from_font();
+        }
+        added += targets.len();
+        self.sidebar_counts = None;
+        self.status_note = Some(
+            format!(
+                "Added {added} missing glyph{}",
+                if added == 1 { "" } else { "s" }
+            )
+            .into(),
+        );
     }
 
     /// Select a sidebar row.
@@ -2024,6 +2148,39 @@ impl Workspace {
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.set_sidebar_filter(filter.clone());
+                cx.notify();
+            }))
+    }
+
+    /// A tiny toggle beside the search box (scope / regex / case).
+    fn search_toggle(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        active: bool,
+        on: fn(&mut Self),
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .w(px(24.0))
+            .h(px(22.0))
+            .rounded_sm()
+            .border_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_xs()
+            .cursor_pointer()
+            .when(active, |el| {
+                el.border_color(t::accent()).text_color(t::accent())
+            })
+            .when(!active, |el| {
+                el.border_color(t::cell_border()).text_color(t::text_muted())
+            })
+            .child(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                on(this);
                 cx.notify();
             }))
     }
@@ -2148,11 +2305,14 @@ impl Workspace {
                     let count = counts
                         .map(|c| c.languages[gi][fi])
                         .unwrap_or(0);
+                    let missing = counts
+                        .map(|c| c.missing[gi][fi])
+                        .unwrap_or(0);
                     let count_text = match filter.expected_count {
                         Some(expected) => format!("{count}/{expected}"),
                         None => format!("{count}"),
                     };
-                    languages = languages.child(self.sidebar_row(
+                    let row = self.sidebar_row(
                         ("language", gi * 100 + fi),
                         true,
                         None,
@@ -2161,7 +2321,43 @@ impl Workspace {
                         count_text.into(),
                         SidebarFilter::Language(gi, fi),
                         cx,
-                    ));
+                    );
+                    if missing > 0 {
+                        // "+" generates the filter's missing glyphs.
+                        languages = languages.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(div().flex_1().child(row))
+                                .child(
+                                    div()
+                                        .id(("gen-missing", gi * 100 + fi))
+                                        .w(px(18.0))
+                                        .h(px(18.0))
+                                        .rounded_sm()
+                                        .border_1()
+                                        .border_color(t::cell_border())
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_sm()
+                                        .text_color(t::text_muted())
+                                        .cursor_pointer()
+                                        .child("+")
+                                        .on_click(cx.listener(
+                                            move |this, _, _, cx| {
+                                                this.command_generate_missing(
+                                                    gi, fi,
+                                                );
+                                                cx.notify();
+                                            },
+                                        )),
+                                ),
+                        );
+                    } else {
+                        languages = languages.child(row);
+                    }
                 }
             }
         }
@@ -2197,9 +2393,39 @@ impl Workspace {
             .child(
                 div()
                     .p_2()
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .border_b_1()
                     .border_color(t::panel_outline())
-                    .child(gpui_component::input::Input::new(&self.search)),
+                    .child(div().flex_1().child(
+                        gpui_component::input::Input::new(&self.search),
+                    ))
+                    .child(self.search_toggle(
+                        "search-mode",
+                        match self.search_mode {
+                            1 => "N",
+                            2 => "U",
+                            _ => "A",
+                        },
+                        self.search_mode != 0,
+                        |this| this.search_mode = (this.search_mode + 1) % 3,
+                        cx,
+                    ))
+                    .child(self.search_toggle(
+                        "search-regex",
+                        ".*",
+                        self.search_regex,
+                        |this| this.search_regex = !this.search_regex,
+                        cx,
+                    ))
+                    .child(self.search_toggle(
+                        "search-case",
+                        "Aa",
+                        self.search_case,
+                        |this| this.search_case = !this.search_case,
+                        cx,
+                    )),
             )
             .child(
                 div()
@@ -2563,7 +2789,10 @@ impl Workspace {
         let cells: Vec<_> = match self.font() {
             Some(font) => (0..font.glyphs.len())
                 .filter(|&i| {
-                    query.is_empty() || font.glyphs[i].name.to_lowercase().contains(&query)
+                    self.search_matches(
+                        font.glyphs[i].name.as_ref(),
+                        font.glyphs[i].codepoint,
+                    )
                 })
                 .map(|i| self.glyph_cell_sized(i, 44.0, true, cx).into_any_element())
                 .collect(),
@@ -2577,9 +2806,39 @@ impl Workspace {
             .child(
                 div()
                     .p_2()
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .border_b_1()
                     .border_color(t::panel_outline())
-                    .child(gpui_component::input::Input::new(&self.search)),
+                    .child(div().flex_1().child(
+                        gpui_component::input::Input::new(&self.search),
+                    ))
+                    .child(self.search_toggle(
+                        "search-mode",
+                        match self.search_mode {
+                            1 => "N",
+                            2 => "U",
+                            _ => "A",
+                        },
+                        self.search_mode != 0,
+                        |this| this.search_mode = (this.search_mode + 1) % 3,
+                        cx,
+                    ))
+                    .child(self.search_toggle(
+                        "search-regex",
+                        ".*",
+                        self.search_regex,
+                        |this| this.search_regex = !this.search_regex,
+                        cx,
+                    ))
+                    .child(self.search_toggle(
+                        "search-case",
+                        "Aa",
+                        self.search_case,
+                        |this| this.search_case = !this.search_case,
+                        cx,
+                    )),
             )
             .child(
                 div()
@@ -6575,6 +6834,9 @@ impl Workspace {
                     }
                 }
                 *self.last_save.lock().unwrap() = web_time::Instant::now();
+                self.last_save_label = Some(
+                    chrono::Local::now().format("%-I:%M %p").to_string().into(),
+                );
                 self.status_note = Some(if !failed.is_empty() {
                     format!("Save failed: {}", failed.join("; ")).into()
                 } else if saved.is_empty() {
@@ -7054,7 +7316,10 @@ impl Workspace {
                     if font.dirty {
                         "Not saved".into()
                     } else {
-                        "Saved".into()
+                        match &self.last_save_label {
+                            Some(at) => format!("Saved {at}").into(),
+                            None => "Saved".into(),
+                        }
                     },
                 ),
                 (None, Some(err)) => ("Load failed".into(), err.clone()),
@@ -7761,8 +8026,10 @@ impl Workspace {
                             self.sidebar_matches
                                 .as_ref()
                                 .is_none_or(|m| m.contains(entry.name.as_ref()))
-                                && (query.is_empty()
-                                    || entry.name.to_lowercase().contains(&query))
+                                && self.search_matches(
+                                    entry.name.as_ref(),
+                                    entry.codepoint,
+                                )
                         })
                         .count()
                 })
@@ -8463,11 +8730,10 @@ impl Render for Workspace {
                                 matches
                                     .as_ref()
                                     .is_none_or(|m| m.contains(entry.name.as_ref()))
-                                    && (query.is_empty()
-                                        || entry
-                                            .name
-                                            .to_lowercase()
-                                            .contains(&query))
+                                    && self.search_matches(
+                                        entry.name.as_ref(),
+                                        entry.codepoint,
+                                    )
                             })
                             .collect();
                         if !sort_unicode {
@@ -9096,6 +9362,10 @@ fn main() {
                         status_note: None,
                         search,
                         search_query: String::new(),
+                        search_mode: 0,
+                        last_save_label: None,
+                        search_regex: false,
+                        search_case: false,
                         context_menu: None,
                         coord_quadrant: Default::default(),
                         curve_comb: false,

@@ -114,15 +114,17 @@ All four are gpui_web/upstream issues; native is unaffected.
 
 ## Smaller UX tail (found in testing, keep adding here)
 
-- [ ] Search modes: name/unicode scope, regex, match-case (web
-      sidebar search dropdown)
+- [x] Search modes: scope (all/name/unicode), regex, and match-case
+      toggles beside the search box
 - [ ] Copy Selection footer in the sidebar (web CategorySidebar)
-- [ ] Header save state with timestamp + on-disk path (web TopBar)
+- [x] Header save state with timestamp (Saved 1:16 PM after a
+      save; the on-disk path was already shown)
 - [ ] Master switcher as glyph thumbnails (web MasterToolbar)
 - [ ] Multiple edit-session tabs (the strip supports one session;
       web's "+" spawns tabs)
-- [ ] Missing-glyph indicators in language filters (web shows what
-      a glyphset still needs; core already computes targets)
+- [x] Missing-glyph indicators + generate: target-bearing language
+      rows show a "+" that adds the missing glyphs (named and
+      encoded) to every master
 
 ## Out of scope for parity
 
