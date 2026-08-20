@@ -56,6 +56,7 @@ gpui::actions!(
         Redo,
         CopyContours,
         PasteContours,
+        CopySelectedGlyphs,
         RemoveOverlap,
         Decompose,
         FlipHorizontal,
@@ -117,6 +118,11 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Copy Contours", CopyContours),
                 MenuItem::action("Paste Contours", PasteContours),
+                MenuItem::separator(),
+                MenuItem::action(
+                    "Copy Selected Glyphs as Text",
+                    CopySelectedGlyphs,
+                ),
             ],
             disabled: false,
         },
@@ -1244,10 +1250,16 @@ struct PenState {
 /// An in-progress mouse gesture on the editor canvas.
 enum Drag {
     /// Moving the selected points: gesture start in design space and
-    /// each selected point's original position.
+    /// every point's position when the gesture began. Handles that
+    /// travel with a selected on-curve point need their start
+    /// positions too, so this covers the whole glyph rather than just
+    /// the selection.
     Points {
         start: (f64, f64),
-        originals: Vec<((usize, usize), (f64, f64))>,
+        originals: std::collections::HashMap<(usize, usize), (f64, f64)>,
+        /// Selected anchors travel with the points (web moves points
+        /// and anchors on one delta): index and start position each.
+        anchor: Vec<(usize, (f64, f64))>,
     },
     /// Manual kerning drag in the text buffer (engine session).
     TextKern,
@@ -1271,16 +1283,14 @@ enum Drag {
         start: (f64, f64),
         current: (f64, f64),
     },
-    /// Rubber-band selection rectangle, in design space.
+    /// Rubber-band selection rectangle, in design space. `base` is
+    /// what was selected when the drag began: the live selection is
+    /// always that plus whatever the box now encloses.
     Marquee {
         start: (f64, f64),
         current: (f64, f64),
-    },
-    /// Dragging an anchor.
-    Anchor {
-        index: usize,
-        start: (f64, f64),
-        orig: (f64, f64),
+        base: std::collections::HashSet<(usize, usize)>,
+        base_anchors: Vec<usize>,
     },
     /// Dragging out a rectangle/ellipse (shapes tool).
     Shape {
@@ -1336,7 +1346,10 @@ struct EditorState {
     /// Shapes tool draws ellipses instead of rectangles.
     shape_ellipse: bool,
     selected: std::collections::HashSet<(usize, usize)>,
-    selected_anchor: Option<usize>,
+    /// Selected anchors, in the order they were picked. A selection
+    /// may hold points and anchors at once (web keeps both in one
+    /// selection); the last one is the "primary" the panels read.
+    selected_anchors: Vec<usize>,
     /// Last cursor position in design space (for A = add anchor).
     cursor: (f64, f64),
     drag: Option<Drag>,
@@ -1349,6 +1362,11 @@ struct EditorState {
 }
 
 impl EditorState {
+    /// The anchor the side panels edit: the last one picked.
+    fn selected_anchor(&self) -> Option<usize> {
+        self.selected_anchors.last().copied()
+    }
+
     fn new() -> Self {
         Self {
             sort_offset: (0.0, 0.0),
@@ -1365,7 +1383,7 @@ impl EditorState {
             pen: None,
             shape_ellipse: false,
             selected: std::collections::HashSet::new(),
-            selected_anchor: None,
+            selected_anchors: Vec::new(),
             cursor: (0.0, 0.0),
             drag: None,
             undo: Vec::new(),
@@ -1494,8 +1512,16 @@ struct Workspace {
     expanded_categories: std::collections::HashSet<usize>,
     /// Grid sort: false = by name, true = by unicode (web default).
     sort_unicode: bool,
+    /// A run of arrow-key nudges is in progress: they share one undo
+    /// step until something else happens.
+    nudging: bool,
     /// Grid cell size in px, driven by the bottom bar's zoom slider.
+    /// This is the *target*: cells stretch from it to fill the row.
     grid_cell_size: f32,
+    /// Measured size of the glyph grid's scroll viewport. Columns and
+    /// row height are solved against it so rows fill the width and
+    /// divide the height evenly (no half row at the bottom edge).
+    grid_viewport: gpui::Size<gpui::Pixels>,
     cell_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
     mode: Mode,
     editor: EditorState,
@@ -1631,8 +1657,82 @@ struct MetricInputs {
     h: gpui::Entity<gpui_component::input::InputState>,
 }
 
+/// A flat slider: a thin, evenly colored track (the library's own
+/// styling tints the unfilled side with the bar color, which reads as
+/// a dark stripe on one side) and a ring thumb that fills solid while
+/// it is grabbed, instead of growing a translucent halo.
+fn flat_slider(
+    state: &gpui::Entity<gpui_component::slider::SliderState>,
+    cx: &gpui::App,
+) -> impl IntoElement + use<> {
+    use gpui::{InteractiveElement as _, StatefulInteractiveElement as _};
+    use gpui_base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack};
+
+    const TRACK: f32 = 3.0;
+    const THUMB: f32 = 12.0;
+    let pct = state.read(cx).percentage().end;
+    let thumb = SliderThumb::new(state)
+        .axis(gpui::Axis::Horizontal)
+        .absolute()
+        .top(px((TRACK - THUMB) / 2.0))
+        .left(gpui::relative(pct))
+        .ml(px(-THUMB / 2.0))
+        .w(px(THUMB))
+        .h(px(THUMB))
+        .flex_shrink_0()
+        .rounded_full()
+        .border_2()
+        .border_color(t::accent())
+        .bg(t::panel_bg())
+        .hover(|el| el.bg(t::accent()))
+        .active(|el| el.bg(t::accent()));
+    BaseSlider::new(state)
+        .axis(gpui::Axis::Horizontal)
+        .flex()
+        .items_center()
+        .w_full()
+        .child(
+            SliderTrack::new(state)
+                .axis(gpui::Axis::Horizontal)
+                .flex()
+                .items_center()
+                .h(px(THUMB))
+                .w_full()
+                .flex_shrink_0()
+                .child(
+                    SliderIndicator::new(state)
+                        .relative()
+                        .w_full()
+                        .h(px(TRACK))
+                        .rounded_full()
+                        .bg(t::cell_border())
+                        .child(
+                            div()
+                                .absolute()
+                                .h_full()
+                                .left_0()
+                                .w(gpui::relative(pct))
+                                .rounded_full()
+                                .bg(t::accent()),
+                        )
+                        .child(thumb),
+                ),
+        )
+}
+
 const CELL: f32 = 96.0;
-const HIT_RADIUS_PX: f64 = 8.0;
+/// Height of a header tab, and the side of the square icon buttons
+/// that sit beside tabs in the header and the status bar.
+const TAB_H: f32 = 24.0;
+/// Gap between grid cells, and the grid's inner padding.
+const GRID_GAP: f32 = 8.0;
+const GRID_PAD: f32 = 12.0;
+const GRID_PAD_Y: f32 = 8.0;
+const HIT_RADIUS_PX: f64 = 10.0;
+/// Points are easier to grab than segments: the web select tool gives
+/// them a wider radius (SELECT_POINT_HIT_DISTANCE) than the 10px it
+/// uses for segments, metric edges and components.
+const POINT_HIT_RADIUS_PX: f64 = 16.0;
 
 impl Workspace {
     fn font(&self) -> Option<&FontModel> {
@@ -1833,17 +1933,46 @@ impl Workspace {
         self.editor.tool = Tool::Select;
         self.editor.pen = None;
         self.editor.hyper_contour = None;
-        self.editor.selected_anchor = None;
+        self.editor.selected_anchors.clear();
     }
 
-    fn glyph_cell(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        self.glyph_cell_sized(index, self.grid_cell_size, false, cx)
+    /// Solve the grid's cell size against the measured viewport, the
+    /// way the web editor does: the zoom slider sets a *target* size,
+    /// then columns are chosen to fill the width exactly and the row
+    /// height divides the visible height evenly, so no row is left
+    /// sliced in half at the bottom edge.
+    fn grid_cell_metrics(&self) -> (f32, f32) {
+        let label_h = |w: f32| if w >= 90.0 { 32.0 } else { 14.0 };
+        let target = self.grid_cell_size.max(24.0);
+        let vw: f32 = self.grid_viewport.width.into();
+        let vh: f32 = self.grid_viewport.height.into();
+        if vw <= 0.0 || vh <= 0.0 {
+            // First frame, before the probe reports: fall back to the
+            // target size.
+            return (target, target + label_h(target));
+        }
+        let usable_w = (vw - GRID_PAD * 2.0).max(target);
+        let cols = (((usable_w + GRID_GAP) / (target + GRID_GAP)).floor()
+            as usize)
+            .max(1);
+        let cell_w =
+            ((usable_w - GRID_GAP * (cols - 1) as f32) / cols as f32).floor();
+
+        let target_row = cell_w + label_h(cell_w);
+        let usable_h = (vh - GRID_PAD_Y * 2.0).max(target_row);
+        let rows = (((usable_h + GRID_GAP) / (target_row + GRID_GAP)).round()
+            as usize)
+            .max(1);
+        let cell_h =
+            ((usable_h - GRID_GAP * (rows - 1) as f32) / rows as f32).floor();
+        (cell_w, cell_h)
     }
 
     fn glyph_cell_sized(
         &self,
         index: usize,
         cell: f32,
+        cell_h: f32,
         jump_on_click: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
@@ -1875,7 +2004,7 @@ impl Workspace {
         div()
             .id(index)
             .w(px(cell))
-            .h(px(cell + label_h))
+            .h(px(cell_h))
             .flex()
             .flex_col()
             .bg(if selected { t::cell_selected_bg() } else { t::cell_bg() })
@@ -2543,9 +2672,12 @@ impl Workspace {
         let active = self.sidebar_filter == filter;
         div()
             .id(id)
+            // Fixed row height, no vertical padding: Glyphs' sidebar
+            // packs its rows tight, and leading is what made ours look
+            // twice as tall as it needed to be.
+            .h(px(20.0))
             .px_2()
-            .py_0p5()
-            .when(indent, |el| el.ml_4())
+            .when(indent, |el| el.ml_3())
             .rounded_sm()
             .text_sm()
             .cursor_pointer()
@@ -2595,7 +2727,8 @@ impl Workspace {
         div()
             .id(id)
             .w(px(24.0))
-            .h(px(22.0))
+            // No fixed height: the row stretches these to the search
+            // input's height so the whole strip lines up.
             .rounded_sm()
             .border_1()
             .flex()
@@ -2621,7 +2754,7 @@ impl Workspace {
         let counts = self.sidebar_counts.as_ref();
 
         // Categories: expandable rows with the web's subfilters.
-        let mut categories = div().flex().flex_col().gap_1();
+        let mut categories = div().flex().flex_col();
         for (ci, (category, label)) in SIDEBAR_CATEGORIES.iter().enumerate() {
             let subs = sb::category_subfilters(label);
             let count = counts.map(|c| c.categories[ci]).unwrap_or(0);
@@ -2699,7 +2832,7 @@ impl Workspace {
 
         // Languages: script groups with per-set coverage, like the
         // web sidebar and Glyphs.
-        let mut languages = div().flex().flex_col().gap_1();
+        let mut languages = div().flex().flex_col();
         for (gi, group) in sb::language_groups().iter().enumerate() {
             let count = counts.map(|c| c.groups[gi]).unwrap_or(0);
             let expanded = self.expanded_scripts.contains(&gi);
@@ -2794,7 +2927,7 @@ impl Workspace {
         }
 
         // Filters: the Runebender builtins plus headline GF sets.
-        let mut filters = div().flex().flex_col().gap_1();
+        let mut filters = div().flex().flex_col();
         for (bi, builtin) in sb::builtin_filters().iter().enumerate() {
             let count = counts.map(|c| c.builtins[bi]).unwrap_or(0);
             let count_text = match builtin
@@ -2825,7 +2958,7 @@ impl Workspace {
                 div()
                     .p_2()
                     .flex()
-                    .items_center()
+                    .items_stretch()
                     .gap_1()
                     .border_b_1()
                     .border_color(t::panel_outline())
@@ -2870,40 +3003,6 @@ impl Workspace {
                     .child(self.section(cx, "Languages", languages))
                     .child(self.section(cx, "Filters", filters))
                     .children(self.axes_section(cx)),
-            )
-            .child(
-                div()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(t::panel_outline())
-                    .child(
-                        div()
-                            .id("copy-selection")
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(t::cell_border())
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_sm()
-                            .text_color(t::text())
-                            .cursor_pointer()
-                            .child(div().flex_1().child("Copy Selection"))
-                            .child(
-                                div()
-                                    .text_color(t::text_muted())
-                                    .child(format!(
-                                        "{}",
-                                        self.selection_names().len()
-                                    )),
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.command_copy_selection_text(cx);
-                                cx.notify();
-                            })),
-                    ),
             )
     }
 
@@ -3025,8 +3124,8 @@ impl Workspace {
                         // advance) into the panel with padding.
                         let em_h = (ascender - descender).max(1.0);
                         let em_w = advance.max(em_h * 0.3);
-                        let scale = ((w as f64 * 0.72) / em_w)
-                            .min((h as f64 * 0.82) / em_h);
+                        let scale = ((w as f64 * 0.94) / em_w)
+                            .min((h as f64 * 0.94) / em_h);
                         let origin_x =
                             (w as f64 - em_w * scale) / 2.0;
                         let baseline = (h as f64
@@ -3041,24 +3140,9 @@ impl Workspace {
                                 bounds.origin.y + px(p.y as f32),
                             )
                         };
-                        // Metric box like the editor's quiet frame.
-                        let mut frame = PathBuilder::stroke(px(1.0));
-                        let corners = [
-                            to_screen(0.0, ascender),
-                            to_screen(em_w, ascender),
-                            to_screen(em_w, descender),
-                            to_screen(0.0, descender),
-                        ];
-                        frame.move_to(corners[0]);
-                        for c in &corners[1..] {
-                            frame.line_to(*c);
-                        }
-                        frame.line_to(corners[0]);
-                        frame.move_to(to_screen(0.0, 0.0));
-                        frame.line_to(to_screen(em_w, 0.0));
-                        if let Ok(p) = frame.build() {
-                            window.paint_path(p, t::metric_quiet());
-                        }
+                        // No metric frame here: this tile is a shape
+                        // preview, and the box only ate the space the
+                        // outline could use.
                         if !components.elements().is_empty()
                             && let Some(p) = build_fill_path(
                                 &components,
@@ -3180,7 +3264,7 @@ impl Workspace {
                 .into_any_element()
             }
         };
-        div().flex_1().min_h(px(200.0)).p_2().child(body)
+        div().flex_1().min_h(px(200.0)).p_1().child(body)
     }
 
     fn mark_colors_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -3188,14 +3272,22 @@ impl Workspace {
             .selected
             .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))
             .and_then(|e| e.mark.clone());
-        let mut swatches = div().flex().flex_wrap().gap_2();
+        // One row, always: each swatch sits in an equal-width column,
+        // so the spacing between them and the margin at both ends stay
+        // the same at any panel width.
+        const SWATCH: f32 = 18.0;
+        let slot = |child: gpui::Stateful<gpui::Div>| {
+            div().flex_1().flex().justify_center().child(child)
+        };
+        let mut swatches = div().flex().items_center().w_full();
         for (index, (label, color)) in t::mark_palette().into_iter().enumerate() {
             let is_current = current.as_deref() == Some(label.as_str());
-            swatches = swatches.child(
+            swatches = swatches.child(slot(
                 div()
                     .id(("mark-swatch", index))
-                    .w(px(22.0))
-                    .h(px(22.0))
+                    .w(px(SWATCH))
+                    .h(px(SWATCH))
+                    .flex_shrink_0()
                     .rounded_full()
                     .bg(color)
                     .border_2()
@@ -3209,13 +3301,14 @@ impl Workspace {
                         this.set_selected_mark(Some(label.clone()));
                         cx.notify();
                     })),
-            );
+            ));
         }
-        swatches = swatches.child(
+        swatches = swatches.child(slot(
             div()
                 .id("mark-clear")
-                .w(px(22.0))
-                .h(px(22.0))
+                .w(px(SWATCH))
+                .h(px(SWATCH))
+                .flex_shrink_0()
                 .rounded_full()
                 .border_1()
                 .border_color(if current.is_none() {
@@ -3234,7 +3327,7 @@ impl Workspace {
                     this.set_selected_mark(None);
                     cx.notify();
                 })),
-        );
+        ));
         self.section(cx, "Colors", swatches)
     }
 
@@ -3269,7 +3362,10 @@ impl Workspace {
                         font.glyphs[i].codepoint,
                     )
                 })
-                .map(|i| self.glyph_cell_sized(i, 44.0, true, cx).into_any_element())
+                .map(|i| {
+                    self.glyph_cell_sized(i, 44.0, 58.0, true, cx)
+                        .into_any_element()
+                })
                 .collect(),
             None => Vec::new(),
         };
@@ -3282,7 +3378,7 @@ impl Workspace {
                 div()
                     .p_2()
                     .flex()
-                    .items_center()
+                    .items_stretch()
                     .gap_1()
                     .border_b_1()
                     .border_color(t::panel_outline())
@@ -3340,9 +3436,9 @@ impl Workspace {
         div()
             .flex()
             .flex_col()
-            .gap_2()
-            .px_3()
-            .py_2()
+            .gap_1()
+            .px_2()
+            .py_1p5()
             .border_b_1()
             .border_color(t::panel_outline())
             .child(
@@ -4424,8 +4520,44 @@ impl Workspace {
             .and_then(|p| p.interpolated_glyph(entry.name.as_ref()))
             .map(|(path, _)| Arc::new(path));
         let points = entry.points.clone();
+        // Where each closed contour starts and which way it runs, for
+        // the start arrow. Open contours (pen paths in progress) get
+        // none, like the web.
+        let start_markers: Vec<((f64, f64), (f64, f64), bool)> = font
+            .font
+            .get_glyph(entry.name.as_ref())
+            .map(|g| {
+                g.contours
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| {
+                        c.points
+                            .first()
+                            .is_none_or(|p| p.typ != norad::PointType::Move)
+                    })
+                    .filter_map(|(ci, _)| {
+                        let mut here = entry
+                            .points
+                            .iter()
+                            .filter(|p| p.contour == ci)
+                            .peekable();
+                        let all: Vec<&GlyphPoint> = here.by_ref().collect();
+                        let first = all.iter().position(|p| p.on_curve)?;
+                        let start = all[first];
+                        let next = all[(first + 1) % all.len()];
+                        Some((
+                            (start.x, start.y),
+                            (next.x, next.y),
+                            self.editor
+                                .selected
+                                .contains(&(start.contour, start.index)),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let anchors = entry.anchors.clone();
-        let selected_anchor = self.editor.selected_anchor;
+        let selected_anchors = self.editor.selected_anchors.clone();
         let advance = entry.advance;
         let ascender = font.ascender;
         let descender = font.descender;
@@ -4434,7 +4566,7 @@ impl Workspace {
         let zoom = self.editor.zoom();
         let selected_points = self.editor.selected.clone();
         let marquee = match &self.editor.drag {
-            Some(Drag::Marquee { start, current }) => Some((*start, *current)),
+            Some(Drag::Marquee { start, current, .. }) => Some((*start, *current)),
             _ => None,
         };
         let shape_preview = match &self.editor.drag {
@@ -4654,6 +4786,7 @@ impl Workspace {
                     if this.editor_mouse_drag(
                         event.position,
                         event.modifiers.shift,
+                        event.modifiers.alt,
                     ) {
                         cx.notify();
                     }
@@ -5301,6 +5434,12 @@ impl Workspace {
                                 color,
                             ));
                         };
+                        // Point markers follow the web's sizes, scaled
+                        // by zoom the same way (point_scale): smooth and
+                        // off-curve circles r4.5, corner squares half
+                        // 3.5, hyper circles r4.0, each a point bigger
+                        // when selected.
+                        let ps = point_scale as f32;
                         for p in points.iter() {
                             if preview_mode || text_mode {
                                 break;
@@ -5321,15 +5460,74 @@ impl Workspace {
                             } else {
                                 (t::point_corner_outer(), t::point_inner())
                             };
-                            if p.on_curve && !p.smooth {
-                                square(window, center, 4.5, ring);
-                                square(window, center, 2.5, inner);
-                            } else if p.on_curve {
-                                circle(window, center, 4.5, ring);
-                                circle(window, center, 2.5, inner);
+                            let outer = if p.hyper && p.on_curve {
+                                if is_selected { 5.0 } else { 4.0 }
+                            } else if p.on_curve && !p.smooth {
+                                if is_selected { 4.5 } else { 3.5 }
+                            } else if is_selected {
+                                5.5
                             } else {
-                                circle(window, center, 3.5, ring);
-                                circle(window, center, 1.8, inner);
+                                4.5
+                            } * ps;
+                            let inner_r = (outer * 0.55).max(1.0f32);
+                            if p.on_curve && !p.smooth && !p.hyper {
+                                square(window, center, outer, ring);
+                                square(window, center, inner_r, inner);
+                            } else {
+                                circle(window, center, outer, ring);
+                                circle(window, center, inner_r, inner);
+                            }
+                        }
+                        // Start-of-contour arrow: which point a closed
+                        // contour begins at, and which way it runs
+                        // (web draw_start_arrow).
+                        if !preview_mode && !text_mode {
+                            for start in start_markers.iter() {
+                                let (from, to, selected) = *start;
+                                let a = to_screen(from.0, from.1);
+                                let b = to_screen(to.0, to.1);
+                                let size =
+                                    (if selected { 6.5 } else { 5.5 }) * ps;
+                                let dir = (
+                                    f32::from(b.x - a.x),
+                                    f32::from(b.y - a.y),
+                                );
+                                let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt();
+                                if len < 0.001 {
+                                    continue;
+                                }
+                                let f = (dir.0 / len, dir.1 / len);
+                                let perp = (-f.1, f.0);
+                                let cx_ = f32::from(a.x) + perp.0 * 8.0 * ps;
+                                let cy_ = f32::from(a.y) + perp.1 * 8.0 * ps;
+                                let tip = (cx_ + f.0 * size, cy_ + f.1 * size);
+                                let base = (
+                                    cx_ - f.0 * size * 0.5,
+                                    cy_ - f.1 * size * 0.5,
+                                );
+                                let left = (
+                                    base.0 + perp.0 * size * 0.5,
+                                    base.1 + perp.1 * size * 0.5,
+                                );
+                                let right = (
+                                    base.0 - perp.0 * size * 0.5,
+                                    base.1 - perp.1 * size * 0.5,
+                                );
+                                let mut pb = PathBuilder::fill();
+                                pb.move_to(gpui::point(px(tip.0), px(tip.1)));
+                                pb.line_to(gpui::point(px(left.0), px(left.1)));
+                                pb.line_to(gpui::point(px(right.0), px(right.1)));
+                                pb.close();
+                                if let Ok(path) = pb.build() {
+                                    window.paint_path(
+                                        path,
+                                        if selected {
+                                            t::point_selected()
+                                        } else {
+                                            t::point_smooth_outer()
+                                        },
+                                    );
+                                }
                             }
                         }
                         // Anchors: diamonds (rotated squares drawn as
@@ -5348,7 +5546,7 @@ impl Workspace {
                             pb.line_to(gpui::point(c.x - r, c.y));
                             pb.close();
                             if let Ok(pth) = pb.build() {
-                                let color = if selected_anchor == Some(ai) {
+                                let color = if selected_anchors.contains(&ai) {
                                     t::accent()
                                 } else {
                                     t::anchor()
@@ -5963,7 +6161,7 @@ impl Workspace {
                     if let Some(font) = self.font_mut() {
                         font.delete_anchor(index, ai);
                     }
-                    self.editor.selected_anchor = None;
+                    self.editor.selected_anchors.clear();
                 }
             }
             _ => {}
@@ -6002,6 +6200,7 @@ impl Workspace {
 
     fn editor_mouse_down(&mut self, pos: Point<gpui::Pixels>, shift: bool, alt: bool, click_count: usize) {
         self.context_menu = None;
+        self.nudging = false;
 
         self.ensure_editor_fit();
         let Mode::Editor(index) = self.mode else {
@@ -6100,6 +6299,7 @@ impl Workspace {
         };
         let (dx, dy) = self.editor.window_to_design(pos);
         let tolerance = HIT_RADIUS_PX / self.editor.zoom();
+        let point_tolerance = POINT_HIT_RADIUS_PX / self.editor.zoom();
         // Copy the point data out so selection can mutate afterwards.
         let all_points: Vec<((usize, usize), (f64, f64))> = font.glyphs[index]
             .points
@@ -6115,28 +6315,15 @@ impl Workspace {
                 let dist = ((x - dx).powi(2) + (y - dy).powi(2)).sqrt();
                 (dist, i, (*x, *y))
             })
-            .filter(|(dist, _, _)| *dist <= tolerance)
+            .filter(|(dist, _, _)| *dist <= point_tolerance)
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((_, ai, orig)) = anchor_hit {
-            self.editor.selected_anchor = Some(ai);
-            self.editor.selected.clear();
-            self.push_undo_snapshot(index);
-            self.editor.drag = Some(Drag::Anchor {
-                index: ai,
-                start: (dx, dy),
-                orig,
-            });
-            return;
-        }
-        self.editor.selected_anchor = None;
-
         let hit = all_points
             .iter()
             .map(|(id, (x, y))| {
                 let dist = ((x - dx).powi(2) + (y - dy).powi(2)).sqrt();
                 (dist, *id)
             })
-            .filter(|(dist, _)| *dist <= tolerance)
+            .filter(|(dist, _)| *dist <= point_tolerance)
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, id)| id);
 
@@ -6152,18 +6339,56 @@ impl Workspace {
                     self.editor.selected.insert(id);
                 }
                 if self.editor.selected.contains(&id) {
-                    let originals: Vec<((usize, usize), (f64, f64))> = all_points
-                        .into_iter()
-                        .filter(|(id, _)| self.editor.selected.contains(id))
-                        .collect();
+                    let originals: std::collections::HashMap<
+                        (usize, usize),
+                        (f64, f64),
+                    > = all_points.iter().copied().collect();
+                    let anchor = self.selected_anchor_origin(index);
                     self.push_undo_snapshot(index);
                     self.editor.drag = Some(Drag::Points {
                         start: (dx, dy),
                         originals,
+                        anchor,
                     });
                 }
             }
             None => {
+                // Points outrank anchors, and an anchor may be dragged
+                // together with a point selection (web keeps points and
+                // anchors in one selection). Shift adds to what is
+                // there; a plain click on a fresh anchor starts over.
+                if let Some((_, ai, _)) = anchor_hit {
+                    self.editor.selected_component = None;
+                    let already = self.editor.selected_anchors.contains(&ai);
+                    if shift {
+                        if already {
+                            self.editor.selected_anchors.retain(|a| *a != ai);
+                            return;
+                        }
+                        self.editor.selected_anchors.push(ai);
+                    } else {
+                        if !already {
+                            // A plain click on an unselected anchor
+                            // starts over; clicking one of a group
+                            // drags the whole group.
+                            self.editor.selected.clear();
+                            self.editor.selected_anchors = vec![ai];
+                        }
+                    }
+                    let originals: std::collections::HashMap<
+                        (usize, usize),
+                        (f64, f64),
+                    > = all_points.iter().copied().collect();
+                    let anchor = self.selected_anchor_origin(index);
+                    self.push_undo_snapshot(index);
+                    self.editor.drag = Some(Drag::Points {
+                        start: (dx, dy),
+                        originals,
+                        anchor,
+                    });
+                    return;
+                }
+                self.editor.selected_anchors.clear();
                 // Sidebearing edge before segments: with a small or
                 // negative sidebearing the outline runs along the
                 // metric line, and a click on the line must not drag
@@ -6208,18 +6433,29 @@ impl Workspace {
                 if let Some((seg_hit, _)) = seg {
                     let ids = seg_hit.point_ids();
                     if shift {
+                        if ids.iter().all(|id| self.editor.selected.contains(id)) {
+                            // Shift-clicking a segment that is already
+                            // selected takes it back out, and starts no
+                            // drag (web returns Some(false) here).
+                            for id in &ids {
+                                self.editor.selected.remove(id);
+                            }
+                            return;
+                        }
                         self.editor.selected.extend(ids.iter().copied());
                     } else {
                         self.editor.selected = ids.iter().copied().collect();
                     }
-                    let originals: Vec<((usize, usize), (f64, f64))> = all_points
-                        .into_iter()
-                        .filter(|(id, _)| self.editor.selected.contains(id))
-                        .collect();
+                    let originals: std::collections::HashMap<
+                        (usize, usize),
+                        (f64, f64),
+                    > = all_points.iter().copied().collect();
+                    let anchor = self.selected_anchor_origin(index);
                     self.push_undo_snapshot(index);
                     self.editor.drag = Some(Drag::Points {
                         start: (dx, dy),
                         originals,
+                        anchor,
                     });
                     return;
                 }
@@ -6269,16 +6505,46 @@ impl Workspace {
                 self.editor.selected_component = None;
                 if !shift {
                     self.editor.selected.clear();
+                    self.editor.selected_anchors.clear();
                 }
+                // The selection the marquee started from: every drag
+                // step recomputes selection = base ∪ enclosed, so
+                // shrinking the box gives points back (web
+                // select_in_screen_rect).
+                let base = self.editor.selected.clone();
+                let base_anchors = self.editor.selected_anchors.clone();
                 self.editor.drag = Some(Drag::Marquee {
                     start: (dx, dy),
                     current: (dx, dy),
+                    base,
+                    base_anchors,
                 });
             }
         }
     }
 
-    fn editor_mouse_drag(&mut self, pos: Point<gpui::Pixels>, shift: bool) -> bool {
+    /// Every selected anchor's index and current position, for drags
+    /// that carry them along with the point selection.
+    fn selected_anchor_origin(&self, index: usize) -> Vec<(usize, (f64, f64))> {
+        let Some(font) = self.font() else {
+            return Vec::new();
+        };
+        self.editor
+            .selected_anchors
+            .iter()
+            .filter_map(|&ai| {
+                let (_, x, y) = font.glyphs[index].anchors.get(ai)?;
+                Some((ai, (*x, *y)))
+            })
+            .collect()
+    }
+
+    fn editor_mouse_drag(
+        &mut self,
+        pos: Point<gpui::Pixels>,
+        shift: bool,
+        alt: bool,
+    ) -> bool {
         let Mode::Editor(index) = self.mode else {
             return false;
         };
@@ -6288,39 +6554,37 @@ impl Workspace {
         let (dx, dy) = self.editor.window_to_design(pos);
         self.editor.cursor = (dx, dy);
         match &mut self.editor.drag {
-            Some(Drag::Anchor { index: ai, start, orig }) => {
-                let (ai, start, orig) = (*ai, *start, *orig);
-                let target = (
-                    (orig.0 + dx - start.0).round(),
-                    (orig.1 + dy - start.1).round(),
-                );
-                if let Some(font) = self.font_mut() {
-                    font.set_anchor(index, ai, target.0, target.1);
-                    return true;
-                }
-                false
-            }
-            Some(Drag::Points { start, originals }) => {
-                let (sx, sy) = *start;
-                let updates: Vec<((usize, usize), (f64, f64))> = originals
-                    .iter()
-                    .map(|(id, (ox, oy))| {
-                        (*id, ((ox + dx - sx).round(), (oy + dy - sy).round()))
-                    })
-                    .collect();
-                let single = if updates.len() == 1 {
-                    Some(updates[0].0)
-                } else {
-                    None
+            Some(Drag::Points { start, originals, anchor }) => {
+                // The whole gesture is measured from where it began, so
+                // grid snapping cannot accumulate drift, and core owns
+                // the rules: handles ride along with their on-curve
+                // point, smooth tangents stay aimed, points land on the
+                // design grid. Alt moves the selection alone.
+                let delta = (dx - start.0, dy - start.1);
+                let originals = originals.clone();
+                let anchor = anchor.clone();
+                let selected = self.editor.selected.clone();
+                let Some(font) = self.font_mut() else {
+                    return false;
                 };
-                if let Some(font) = self.font_mut() {
-                    font.set_points(index, &updates);
-                    if let Some((contour, point_index)) = single {
-                        font.constrain_smooth_neighbor(index, contour, point_index);
-                    }
-                    return true;
+                let mut changed = font
+                    .edit_glyph(index, |g| {
+                        runebender_core::point_ops::translate_points(
+                            g, &selected, &originals, delta, alt,
+                        )
+                    })
+                    .unwrap_or(false);
+                for (ai, (ox, oy)) in anchor {
+                    use runebender_core::point_ops::snap_coord;
+                    font.set_anchor(
+                        index,
+                        ai,
+                        snap_coord(ox + delta.0),
+                        snap_coord(oy + delta.1),
+                    );
+                    changed = true;
                 }
-                false
+                changed
             }
             Some(Drag::TextKern) => {
                 let bx = dx + self.editor.sort_offset.0;
@@ -6460,8 +6724,11 @@ impl Workspace {
                 };
                 true
             }
-            Some(Drag::Marquee { current, .. }) => {
+            Some(Drag::Marquee { start, current, base, base_anchors }) => {
                 *current = (dx, dy);
+                let (sx, sy) = *start;
+                let (base, base_anchors) = (base.clone(), base_anchors.clone());
+                self.select_in_rect(index, (sx, sy), (dx, dy), &base, &base_anchors);
                 true
             }
             None => false,
@@ -6540,6 +6807,41 @@ impl Workspace {
         changed
     }
 
+    /// Selection for a marquee: whatever it started from, plus every
+    /// point and anchor the box encloses. Recomputed on every drag
+    /// step, so pulling the box back in gives entities up again (web
+    /// `select_in_screen_rect`).
+    fn select_in_rect(
+        &mut self,
+        index: usize,
+        start: (f64, f64),
+        current: (f64, f64),
+        base: &std::collections::HashSet<(usize, usize)>,
+        base_anchors: &[usize],
+    ) {
+        let (x0, x1) = (start.0.min(current.0), start.0.max(current.0));
+        let (y0, y1) = (start.1.min(current.1), start.1.max(current.1));
+        let inside = |x: f64, y: f64| x >= x0 && x <= x1 && y >= y0 && y <= y1;
+        let Some(font) = self.font() else { return };
+        let entry = &font.glyphs[index];
+        let mut selected = base.clone();
+        selected.extend(
+            entry
+                .points
+                .iter()
+                .filter(|p| inside(p.x, p.y))
+                .map(|p| (p.contour, p.index)),
+        );
+        let mut anchors = base_anchors.to_vec();
+        for (i, (_, x, y)) in entry.anchors.iter().enumerate() {
+            if inside(*x, *y) && !anchors.contains(&i) {
+                anchors.push(i);
+            }
+        }
+        self.editor.selected = selected;
+        self.editor.selected_anchors = anchors;
+    }
+
     fn editor_mouse_up(&mut self) {
         if self.editor.tool == Tool::Pen {
             if let Some(pen) = self.editor.pen.as_mut() {
@@ -6605,19 +6907,23 @@ impl Workspace {
             }
             return;
         }
-        if let Some(Drag::Marquee { start, current }) = self.editor.drag.take() {
-            let (x0, x1) = (start.0.min(current.0), start.0.max(current.0));
-            let (y0, y1) = (start.1.min(current.1), start.1.max(current.1));
-            let inside: Vec<(usize, usize)> = match self.font() {
-                Some(font) => font.glyphs[index]
-                    .points
-                    .iter()
-                    .filter(|p| p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)
-                    .map(|p| (p.contour, p.index))
-                    .collect(),
-                None => Vec::new(),
-            };
-            self.editor.selected.extend(inside);
+        if matches!(self.editor.drag, Some(Drag::Points { .. })) {
+            // A released drag settles its handles on the design grid,
+            // re-aiming smooth tangents afterwards (web
+            // snap_selected_offcurves_to_grid on left_drag_ended).
+            let selected = self.editor.selected.clone();
+            if let Some(font) = self.font_mut() {
+                font.edit_glyph(index, |g| {
+                    runebender_core::point_ops::snap_selected_offcurves(g, &selected)
+                });
+            }
+            self.editor.drag = None;
+            return;
+        }
+        if let Some(Drag::Marquee { start, current, base, base_anchors }) =
+            self.editor.drag.take()
+        {
+            self.select_in_rect(index, start, current, &base, &base_anchors);
         }
         self.editor.drag = None;
     }
@@ -7118,7 +7424,7 @@ impl Workspace {
     /// Rename the selected anchor (Enter in the Selection panel).
     fn apply_anchor_name(&mut self, text: &str) {
         let Mode::Editor(index) = self.mode else { return };
-        let Some(ai) = self.editor.selected_anchor else { return };
+        let Some(ai) = self.editor.selected_anchor() else { return };
         let name = text.trim();
         if name.is_empty() {
             return;
@@ -7170,7 +7476,7 @@ impl Workspace {
                 );
             return Some(path.bounding_box());
         }
-        if let Some(ai) = self.editor.selected_anchor {
+        if let Some(ai) = self.editor.selected_anchor() {
             let (_, x, y) = entry.anchors.get(ai)?;
             return Some(kurbo::Rect::new(*x, *y, *x, *y));
         }
@@ -7249,7 +7555,7 @@ impl Workspace {
                 })
                 .unwrap_or(false);
         }
-        if let Some(ai) = self.editor.selected_anchor {
+        if let Some(ai) = self.editor.selected_anchor() {
             let target = self
                 .font()
                 .and_then(|f| {
@@ -7313,7 +7619,7 @@ impl Workspace {
                 })
                 .unwrap_or(false);
         }
-        if let Some(ai) = self.editor.selected_anchor {
+        if let Some(ai) = self.editor.selected_anchor() {
             let target = self.font().and_then(|f| {
                 f.glyphs[index].anchors.get(ai).map(|(_, x, y)| {
                     let p = transform * kurbo::Point::new(*x, *y);
@@ -7367,7 +7673,7 @@ impl Workspace {
         };
         let anchor_name = self
             .editor
-            .selected_anchor
+            .selected_anchor()
             .and_then(|ai| {
                 let Mode::Editor(index) = self.mode else { return None };
                 self.font()
@@ -7407,7 +7713,7 @@ impl Workspace {
         let _ = single;
         let has_selection = !self.editor.selected.is_empty()
             || self.editor.selected_component.is_some()
-            || self.editor.selected_anchor.is_some();
+            || !self.editor.selected_anchors.is_empty();
         if has_selection {
             use runebender_core::path::Quadrant;
             let field = |label: &'static str,
@@ -7485,7 +7791,7 @@ impl Workspace {
             );
         }
         // Selected anchor: editable name (web AnchorPanel).
-        if self.editor.selected_anchor.is_some() {
+        if !self.editor.selected_anchors.is_empty() {
             body = body.child(
                 div()
                     .flex()
@@ -7698,7 +8004,7 @@ impl Workspace {
                 self.editor.selected_component = Some(new_index);
             }
             new_index.is_some()
-        } else if let Some(ai) = self.editor.selected_anchor {
+        } else if let Some(ai) = self.editor.selected_anchor() {
             let new_index = self
                 .font_mut()
                 .and_then(|f| {
@@ -7708,7 +8014,7 @@ impl Workspace {
                 })
                 .flatten();
             if let Some(new_index) = new_index {
-                self.editor.selected_anchor = Some(new_index);
+                self.editor.selected_anchors = vec![new_index];
             }
             new_index.is_some()
         } else {
@@ -7795,10 +8101,24 @@ impl Workspace {
     /// Push the open glyph's contours onto the undo stack and clear
     /// the redo tail. Called at the start of every mutating gesture.
     fn push_undo_snapshot(&mut self, index: usize) {
+        // Any other edit ends a nudge burst, so the next arrow press
+        // opens a fresh undo group.
+        self.nudging = false;
         if let Some(snapshot) = self.font().and_then(|f| f.snapshot_contours(index)) {
             self.editor.undo.push(snapshot);
             self.editor.redo.clear();
         }
+    }
+
+    /// Snapshot for a nudge: a run of arrow presses is one undo step,
+    /// the way the web commits one group per burst
+    /// (`finishNudgeSelection` on key-up).
+    fn push_nudge_snapshot(&mut self, index: usize) {
+        if self.nudging {
+            return;
+        }
+        self.push_undo_snapshot(index);
+        self.nudging = true;
     }
 
     // ---- app commands (menu bar + keymap) ----
@@ -8136,26 +8456,68 @@ impl Workspace {
     }
 
     /// Nudge the selected points by (dx, dy) design units.
-    fn nudge_selection(&mut self, dx: f64, dy: f64) -> bool {
+    /// Arrow-key nudge, with the web's routing: a selected component
+    /// moves alone; with no points selected an anchor moves; otherwise
+    /// points move, carrying any selected anchors with them. Alt makes
+    /// the move independent — selected points travel without their
+    /// handles.
+    fn nudge_selection(&mut self, dx: f64, dy: f64, independent: bool) -> bool {
         let Mode::Editor(index) = self.mode else {
             return false;
         };
-        if self.editor.selected.is_empty() {
+        let selected = self.editor.selected.clone();
+        let anchor = self.editor.selected_anchor();
+        if let Some(ci) = self.editor.selected_component {
+            self.push_nudge_snapshot(index);
+            let changed = self
+                .font_mut()
+                .and_then(|f| {
+                    f.edit_glyph(index, |g| {
+                        runebender_core::glyph_ops::translate_component(
+                            g, ci, dx, dy,
+                        )
+                    })
+                })
+                .unwrap_or(false);
+            if !changed {
+                self.editor.undo.pop();
+                self.nudging = false;
+            }
+            return changed;
+        }
+        if selected.is_empty() && anchor.is_none() {
             return false;
         }
-        self.push_undo_snapshot(index);
-        let selected = self.editor.selected.clone();
-        let Some(font) = self.font_mut() else {
-            return false;
-        };
-        let updates: Vec<((usize, usize), (f64, f64))> = font.glyphs[index]
-            .points
-            .iter()
-            .filter(|p| selected.contains(&(p.contour, p.index)))
-            .map(|p| ((p.contour, p.index), (p.x + dx, p.y + dy)))
-            .collect();
-        font.set_points(index, &updates);
-        true
+        self.push_nudge_snapshot(index);
+        let mut changed = false;
+        if let Some(ai) = anchor
+            && let Some(font) = self.font_mut()
+            && let Some((x, y)) =
+                font.glyphs[index].anchors.get(ai).map(|(_, x, y)| (*x, *y))
+        {
+            font.set_anchor(index, ai, x + dx, y + dy);
+            changed = true;
+        }
+        if !selected.is_empty()
+            && let Some(font) = self.font_mut()
+        {
+            changed |= font
+                .edit_glyph(index, |g| {
+                    runebender_core::point_ops::translate_points(
+                        g,
+                        &selected,
+                        &std::collections::HashMap::new(),
+                        (dx, dy),
+                        independent,
+                    )
+                })
+                .unwrap_or(false);
+        }
+        if !changed {
+            self.editor.undo.pop();
+            self.nudging = false;
+        }
+        changed
     }
 
     fn editor_scroll(&mut self, event: &gpui::ScrollWheelEvent) {
@@ -8189,8 +8551,10 @@ impl Workspace {
         let tab = |id: gpui::ElementId, label: SharedString, active: bool| {
             div()
                 .id(id)
-                .px_3()
-                .py_0p5()
+                .h(px(TAB_H))
+                .px_2()
+                .flex()
+                .items_center()
                 .rounded_sm()
                 .text_sm()
                 .cursor_pointer()
@@ -8323,7 +8687,10 @@ impl Workspace {
                     )
             }))
             .child(
-                tab("tab-new".into(), "+".into(), false).on_click(cx.listener(
+                tab("tab-new".into(), "+".into(), false)
+                    .w(px(TAB_H))
+                    .justify_center()
+                    .on_click(cx.listener(
                     |this, _, _, cx| {
                         this.command_new_session();
                         cx.notify();
@@ -8337,13 +8704,14 @@ impl Workspace {
         let (title, status): (SharedString, SharedString) =
             match (self.font(), &self.load_error) {
                 (Some(font), _) => (
-                    format!(
-                        "{} · {} glyphs · {} upm",
-                        font.source_path.display(),
-                        font.glyphs.len(),
-                        font.units_per_em
-                    )
-                    .into(),
+                    // Just the file name, like Glyphs' title. The glyph
+                    // count lives in the status bar; upm belongs to font
+                    // info, not the chrome.
+                    font.source_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| font.source_path.display().to_string())
+                        .into(),
                     if font.dirty {
                         "Not saved".into()
                     } else {
@@ -8361,7 +8729,9 @@ impl Workspace {
             .flex()
             .items_center()
             .gap_3()
-            .px_3()
+            // Even margins: the strip sits the same distance from the
+            // window's sides as from its top.
+            .px_1p5()
             .py_1p5()
             .bg(t::panel_bg())
             .border_b_1()
@@ -8369,8 +8739,8 @@ impl Workspace {
             .child(
                 div()
                     .id("toggle-left")
-                    .w(px(26.0))
-                    .h(px(26.0))
+                    .w(px(TAB_H))
+                    .h(px(TAB_H))
                     .rounded_md()
                     .cursor_pointer()
                     .child(icon_svg("glyph-grid", if self.left_collapsed {
@@ -8490,9 +8860,7 @@ impl Workspace {
                             .child(axis.tag.clone()),
                     )
                     .child(
-                        div().flex_1().child(
-                            gpui_component::slider::Slider::new(slider),
-                        ),
+                        div().flex_1().child(flat_slider(slider, cx)),
                     ),
             );
         }
@@ -8705,7 +9073,7 @@ impl Workspace {
             self.mode = Mode::Editor(target);
             self.selected = Some(target);
             self.editor.selected.clear();
-            self.editor.selected_anchor = None;
+            self.editor.selected_anchors.clear();
             self.editor.selected_component = None;
             self.editor.drag = None;
             self.editor.undo.clear();
@@ -8746,7 +9114,7 @@ impl Workspace {
                 self.mode = Mode::Editor(glyph);
                 self.selected = Some(glyph);
                 self.editor.selected.clear();
-                self.editor.selected_anchor = None;
+                self.editor.selected_anchors.clear();
                 self.editor.drag = None;
                 self.editor.undo.clear();
                 self.editor.redo.clear();
@@ -9078,8 +9446,8 @@ impl Workspace {
             let bar_button = |id: &'static str, label: &'static str| {
                 div()
                     .id(id)
-                    .w(px(24.0))
-                    .h(px(20.0))
+                    .w(px(TAB_H))
+                    .h(px(TAB_H))
                     .rounded_sm()
                     .border_1()
                     .border_color(t::cell_border())
@@ -9094,9 +9462,9 @@ impl Workspace {
             return div()
                 .flex()
                 .items_center()
-                .gap_2()
-                .px_2()
-                .py_1()
+                .gap_1()
+                // Even margins, like the header strip.
+                .p_1p5()
                 .bg(t::panel_bg())
                 .border_t_1()
                 .border_color(t::cell_border())
@@ -9121,9 +9489,7 @@ impl Workspace {
                         .child(center),
                 )
                 .children(self.cell_slider.as_ref().map(|slider| {
-                    div()
-                        .w(px(140.0))
-                        .child(gpui_component::slider::Slider::new(slider))
+                    div().w(px(140.0)).child(flat_slider(slider, cx))
                 }));
         }
         let text: SharedString = if let Some(note) = &self.status_note {
@@ -9296,7 +9662,7 @@ impl Workspace {
                 Some(index) => {
                     self.mode = Mode::Editor(index);
                     self.editor.selected.clear();
-                    self.editor.selected_anchor = None;
+                    self.editor.selected_anchors.clear();
                     self.editor.drag = None;
                 }
                 None => self.mode = Mode::Grid,
@@ -9505,6 +9871,7 @@ impl Workspace {
         let shift = event.keystroke.modifiers.shift;
         let in_editor = matches!(self.mode, Mode::Editor(_));
         let ctrl = event.keystroke.modifiers.control;
+        let alt = event.keystroke.modifiers.alt;
         // Web nudge steps: 2 design units, 8 with shift, 32 with ctrl
         // (grid-sized moves).
         let step = if ctrl {
@@ -9669,14 +10036,20 @@ impl Workspace {
                 }
                 changed
             }
-            ("backspace" | "delete", false) if in_editor && self.editor.selected_anchor.is_some() => {
+            ("backspace" | "delete", false) if in_editor && !self.editor.selected_anchors.is_empty() => {
                 let Mode::Editor(index) = self.mode else {
                     return false;
                 };
-                let ai = self.editor.selected_anchor.take().unwrap();
+                let mut anchors =
+                    std::mem::take(&mut self.editor.selected_anchors);
+                anchors.sort_unstable();
                 self.push_undo_snapshot(index);
                 if let Some(font) = self.font_mut() {
-                    font.delete_anchor(index, ai);
+                    // Highest index first: deleting shifts the ones
+                    // after it.
+                    for ai in anchors.into_iter().rev() {
+                        font.delete_anchor(index, ai);
+                    }
                 }
                 true
             }
@@ -9711,10 +10084,10 @@ impl Workspace {
                         .is_some_and(|f| f.toggle_smooth(index, &selected))
                 }
             }
-            ("left", false) if in_editor => self.nudge_selection(-step, 0.0),
-            ("right", false) if in_editor => self.nudge_selection(step, 0.0),
-            ("up", false) if in_editor => self.nudge_selection(0.0, step),
-            ("down", false) if in_editor => self.nudge_selection(0.0, -step),
+            ("left", false) if in_editor => self.nudge_selection(-step, 0.0, alt),
+            ("right", false) if in_editor => self.nudge_selection(step, 0.0, alt),
+            ("up", false) if in_editor => self.nudge_selection(0.0, step, alt),
+            ("down", false) if in_editor => self.nudge_selection(0.0, -step, alt),
             ("0", _) if matches!(self.mode, Mode::Editor(_)) => {
                 self.editor.initialized = false;
                 self.ensure_editor_fit();
@@ -9763,6 +10136,7 @@ impl Render for Workspace {
                 let query = self.search_query.clone();
                 let matches = self.sidebar_matches.clone();
                 let sort_unicode = self.sort_unicode;
+                let (cell_w, cell_h) = self.grid_cell_metrics();
                 let grid: Vec<_> = match self.font() {
                     Some(font) => {
                         let mut indices: Vec<usize> = (0..font.glyphs.len())
@@ -9785,19 +10159,57 @@ impl Render for Workspace {
                         }
                         indices
                             .into_iter()
-                            .map(|i| self.glyph_cell(i, cx).into_any_element())
+                            .map(|i| {
+                                self.glyph_cell_sized(
+                                    i, cell_w, cell_h, false, cx,
+                                )
+                                .into_any_element()
+                            })
                             .collect()
                     }
                     None => Vec::new(),
                 };
+                // The grid solves its own layout against the viewport,
+                // so it needs the viewport measured. An inert canvas
+                // laid over the scroll area reports its bounds back.
+                let this = cx.entity().downgrade();
+                let probe = canvas(
+                    move |bounds: Bounds<gpui::Pixels>, _, app: &mut gpui::App| {
+                        this.update(app, |this, cx| {
+                            if this.grid_viewport != bounds.size {
+                                this.grid_viewport = bounds.size;
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full();
                 (
                     self.category_sidebar(cx).into_any_element(),
                     div()
-                        .id("glyph-grid")
                         .size_full()
                         .min_h(px(0.0))
-                        .overflow_y_scroll()
-                        .child(div().flex().flex_wrap().gap_2().p_3().children(grid))
+                        .relative()
+                        .child(probe)
+                        .child(
+                            div()
+                                .id("glyph-grid")
+                                .size_full()
+                                .min_h(px(0.0))
+                                .overflow_y_scroll()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .gap(px(GRID_GAP))
+                                        .px(px(GRID_PAD))
+                                        .py(px(GRID_PAD_Y))
+                                        .children(grid),
+                                ),
+                        )
                         .into_any_element(),
                 )
             }
@@ -9844,12 +10256,11 @@ impl Render for Workspace {
                             .size_range(px(140.0)..px(440.0))
                             .visible(!self.left_collapsed)
                             .child(
-                                div()
-                                    .size_full()
-                                    .bg(t::panel_bg())
-                                    .border_r_1()
-                                    .border_color(t::panel_outline())
-                                    .child(left),
+                                // No border here: the resize handle
+                                // already paints a 1px divider in the
+                                // same color, and the two together
+                                // read as a thick line.
+                                div().size_full().bg(t::panel_bg()).child(left),
                             ),
                     )
                     .child(resizable_panel().child(center))
@@ -9858,12 +10269,7 @@ impl Render for Workspace {
                             .size(px(230.0))
                             .size_range(px(170.0)..px(440.0))
                             .child(
-                                div()
-                                    .size_full()
-                                    .bg(t::panel_bg())
-                                    .border_l_1()
-                                    .border_color(t::panel_outline())
-                                    .child(right),
+                                div().size_full().bg(t::panel_bg()).child(right),
                             ),
                     ),
             )
@@ -9906,6 +10312,10 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &PasteContours, _, cx| {
                 this.command_paste_routed(cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &CopySelectedGlyphs, _, cx| {
+                this.command_copy_selection_text(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &RemoveOverlap, _, cx| {
@@ -10038,6 +10448,12 @@ impl Render for Workspace {
                 }
             }))
             .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, _, cx| {
+                if matches!(
+                    event.keystroke.key.as_str(),
+                    "left" | "right" | "up" | "down"
+                ) {
+                    this.nudging = false;
+                }
                 if event.keystroke.key.as_str() == "space"
                     && this.editor.tool == Tool::Preview
                 {
@@ -10404,7 +10820,9 @@ fn main() {
                         expanded_scripts: std::collections::HashSet::new(),
                         expanded_categories: std::collections::HashSet::new(),
                         sort_unicode: true,
+                        nudging: false,
                         grid_cell_size: CELL,
+                        grid_viewport: gpui::size(px(0.0), px(0.0)),
                         cell_slider: None,
                         mode: start_mode,
                         editor: EditorState::new(),

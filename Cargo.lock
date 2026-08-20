@@ -6136,6 +6136,7 @@ dependencies = [
  "chrono",
  "futures",
  "gpui",
+ "gpui-base",
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",

@@ -14,6 +14,10 @@ chrono = "0.4"
 gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed" }
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# The slider primitives (track / indicator / thumb) live in the base
+# crate; the styled facade above does not expose them, and we build
+# our own flat slider out of them.
+gpui-base = { git = "https://github.com/longbridge/gpui-component" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 kurbo = "0.13.1"
 norad = "0.18"
