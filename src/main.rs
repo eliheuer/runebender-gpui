@@ -2227,6 +2227,202 @@ impl Workspace {
 
     /// Colors panel: mark-color swatches for the selected glyph, like
     /// the web grid's bottom-right panel.
+    /// Right-panel live preview of the selected glyph: outline plus
+    /// control points, the way runebender-web fills the space between
+    /// the info sections and the colors.
+    fn glyph_preview_panel(&self) -> gpui::Div {
+        let data = self.selected.and_then(|index| {
+            let font = self.font()?;
+            let entry = &font.glyphs[index];
+            Some((
+                entry.contour_path.clone(),
+                entry.component_path.clone(),
+                entry.points.clone(),
+                entry.advance,
+                font.ascender,
+                font.descender,
+            ))
+        });
+        let body: gpui::AnyElement = match data {
+            None => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .text_color(t::text_muted())
+                .into_any_element(),
+            Some((outline, components, points, advance, ascender, descender)) => {
+                canvas(
+                    move |bounds, _, _| bounds,
+                    move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+                        let w: f32 = bounds.size.width.into();
+                        let h: f32 = bounds.size.height.into();
+                        if w < 40.0 || h < 40.0 {
+                            return;
+                        }
+                        // Fit the em box (with the glyph's actual
+                        // advance) into the panel with padding.
+                        let em_h = (ascender - descender).max(1.0);
+                        let em_w = advance.max(em_h * 0.3);
+                        let scale = ((w as f64 * 0.72) / em_w)
+                            .min((h as f64 * 0.82) / em_h);
+                        let origin_x =
+                            (w as f64 - em_w * scale) / 2.0;
+                        let baseline = (h as f64
+                            + (ascender + descender) * scale)
+                            / 2.0;
+                        let view = Affine::translate((origin_x, baseline))
+                            * Affine::scale_non_uniform(scale, -scale);
+                        let to_screen = |x: f64, y: f64| {
+                            let p = view * kurbo::Point::new(x, y);
+                            gpui::point(
+                                bounds.origin.x + px(p.x as f32),
+                                bounds.origin.y + px(p.y as f32),
+                            )
+                        };
+                        // Metric box like the editor's quiet frame.
+                        let mut frame = PathBuilder::stroke(px(1.0));
+                        let corners = [
+                            to_screen(0.0, ascender),
+                            to_screen(em_w, ascender),
+                            to_screen(em_w, descender),
+                            to_screen(0.0, descender),
+                        ];
+                        frame.move_to(corners[0]);
+                        for c in &corners[1..] {
+                            frame.line_to(*c);
+                        }
+                        frame.line_to(corners[0]);
+                        frame.move_to(to_screen(0.0, 0.0));
+                        frame.line_to(to_screen(em_w, 0.0));
+                        if let Ok(p) = frame.build() {
+                            window.paint_path(p, t::metric_quiet());
+                        }
+                        if !components.elements().is_empty()
+                            && let Some(p) = build_fill_path(
+                                &components,
+                                view,
+                                bounds.origin,
+                            )
+                        {
+                            window.paint_path(p, t::component_fill());
+                        }
+                        if let Some(p) = build_path(
+                            &outline,
+                            view,
+                            bounds.origin,
+                            PathBuilder::stroke(px(1.0)),
+                        ) {
+                            window.paint_path(p, t::path_stroke());
+                        }
+                        // Handle lines then points, editor-style but
+                        // small.
+                        let mut handles = PathBuilder::stroke(px(1.0));
+                        let mut any_handles = false;
+                        for p in points.iter() {
+                            if p.on_curve {
+                                continue;
+                            }
+                            let contour_pts: Vec<&GlyphPoint> = points
+                                .iter()
+                                .filter(|q| q.contour == p.contour)
+                                .collect();
+                            let n = contour_pts.len();
+                            let Some(pos) = contour_pts
+                                .iter()
+                                .position(|q| q.index == p.index)
+                            else {
+                                continue;
+                            };
+                            let prev = contour_pts[(pos + n - 1) % n];
+                            let next = contour_pts[(pos + 1) % n];
+                            let anchor = if prev.on_curve {
+                                prev
+                            } else if next.on_curve {
+                                next
+                            } else {
+                                continue;
+                            };
+                            handles.move_to(to_screen(p.x, p.y));
+                            handles.line_to(to_screen(anchor.x, anchor.y));
+                            any_handles = true;
+                        }
+                        if any_handles && let Ok(p) = handles.build() {
+                            window.paint_path(p, t::handle_line());
+                        }
+                        use kurbo::Shape as _;
+                        let mut ring =
+                            |center: Point<gpui::Pixels>,
+                             r: f32,
+                             color: gpui::Rgba,
+                             window: &mut Window| {
+                                let cx_: f32 = center.x.into();
+                                let cy_: f32 = center.y.into();
+                                let shape = kurbo::Circle::new(
+                                    (cx_ as f64, cy_ as f64),
+                                    r as f64,
+                                )
+                                .to_path(0.25);
+                                if let Some(p) = build_fill_path(
+                                    &shape,
+                                    Affine::IDENTITY,
+                                    gpui::point(px(0.0), px(0.0)),
+                                ) {
+                                    window.paint_path(p, t::point_inner());
+                                }
+                                if let Some(p) = build_path(
+                                    &shape,
+                                    Affine::IDENTITY,
+                                    gpui::point(px(0.0), px(0.0)),
+                                    PathBuilder::stroke(px(1.0)),
+                                ) {
+                                    window.paint_path(p, color);
+                                }
+                            };
+                        for p in points.iter() {
+                            let center = to_screen(p.x, p.y);
+                            if !p.on_curve {
+                                ring(
+                                    center,
+                                    2.0,
+                                    t::point_offcurve_outer(),
+                                    window,
+                                );
+                            } else if p.smooth {
+                                ring(
+                                    center,
+                                    3.0,
+                                    t::point_smooth_outer(),
+                                    window,
+                                );
+                            } else if p.hyper {
+                                ring(center, 3.0, t::point_hyper_outer(), window);
+                            } else {
+                                window.paint_quad(gpui::fill(
+                                    Bounds::from_corners(
+                                        gpui::point(
+                                            center.x - px(2.5),
+                                            center.y - px(2.5),
+                                        ),
+                                        gpui::point(
+                                            center.x + px(2.5),
+                                            center.y + px(2.5),
+                                        ),
+                                    ),
+                                    t::point_corner_outer(),
+                                ));
+                            }
+                        }
+                    },
+                )
+                .size_full()
+                .into_any_element()
+            }
+        };
+        div().flex_1().min_h(px(200.0)).p_2().child(body)
+    }
+
     fn mark_colors_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
         let current = self
             .selected
@@ -2750,7 +2946,7 @@ impl Workspace {
             })
             .collect();
         let body = div().flex().flex_col().children(rows);
-        self.section(cx, "Layers", body)
+        self.section(cx, "Masters", body)
     }
 
     /// Navigate section: the active master with previous/next
@@ -5199,11 +5395,6 @@ impl Workspace {
             .flex()
             .items_center()
             .gap_1()
-            .px_2()
-            .py_1()
-            .bg(t::panel_bg())
-            .border_b_1()
-            .border_color(t::cell_border())
             .child(tab("tab-font", "Font".into(), !in_editor).on_click(
                 cx.listener(|this, _, _, cx| {
                     if let Mode::Editor(index) = this.mode {
@@ -5291,6 +5482,7 @@ impl Workspace {
                 let el = el.child(div().flex_none().child(self.app_menu_bar.clone()));
                 el
             })
+            .child(self.tab_strip(cx))
             .child(
                 div()
                     .flex_1()
@@ -5311,44 +5503,6 @@ impl Workspace {
                 |el| el.child(self.direction_toolbar(cx)),
             )
             .when(in_editor, |el| el.child(self.header_tools(cx)))
-            .child(self.master_switcher(cx))
-    }
-
-    /// One button per master; the active one gets the accent border.
-    fn master_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let (names, active): (Vec<SharedString>, usize) = match &self.project {
-            Some(p) if p.masters.len() > 1 => (p.master_names.clone(), p.active),
-            _ => (Vec::new(), 0),
-        };
-        div().flex().gap_1().children(names.into_iter().enumerate().map(
-            move |(i, name)| {
-                let is_active = i == active;
-                let dirty = self
-                    .project
-                    .as_ref()
-                    .is_some_and(|p| p.masters[i].dirty);
-                let label: SharedString = if dirty {
-                    format!("{name} •").into()
-                } else {
-                    name
-                };
-                div()
-                    .id(("master", i))
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(if is_active { t::accent() } else { t::cell_border() })
-                    .text_color(if is_active { t::text() } else { t::text_muted() })
-                    .text_sm()
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.switch_master(i);
-                        cx.notify();
-                    }))
-                    .child(label)
-            },
-        ))
     }
 
     /// Create the axis sliders once a project with axes exists.
@@ -6748,7 +6902,13 @@ impl Render for Workspace {
             .when(!in_editor, |el| {
                 el.child(self.glyph_info_panel(cx))
                     .child(self.layers_section(cx))
-                    .child(self.mark_colors_panel(cx))
+                    .child(self.glyph_preview_panel())
+                    .child(
+                        div()
+                            .border_t_1()
+                            .border_color(t::panel_outline())
+                            .child(self.mark_colors_panel(cx)),
+                    )
             });
         let content = div()
             .flex_1()
@@ -6907,7 +7067,6 @@ impl Render for Workspace {
                 }
             }))
             .child(self.header(cx))
-            .child(self.tab_strip(cx))
             .child(content)
             .children(
                 matches!(self.mode, Mode::Editor(_))
