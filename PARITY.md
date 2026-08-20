@@ -28,7 +28,8 @@ browser build over WebGPU with workspace-server load/save.
 
 ## Editing gaps
 
-- [ ] Round selected corners (web `round_selected_corners`)
+- [x] Round selected corners (menu, context menu, Round button;
+      fillet size/handle ratio inferred from existing corners)
 - [x] Duplicate selection / duplicate-repeat (Cmd+D / Cmd+Shift+T,
       Transformations tiles, Glyph menu; contours, components, and
       anchors; repeat re-applies the last flip/rotate)
@@ -41,14 +42,15 @@ browser build over WebGPU with workspace-server load/save.
 - [ ] Numeric move/scale with reference point (web Transform panel:
       `moveSelectionReference`, `resizeSelectionReference`, and the
       9-point coordinate quadrant selector)
-- [ ] Right-click context menus: contour (set start point, reverse,
-      move contour order), anchor, component (web `contourContextAt`,
-      `anchorContextAt`)
+- [x] Right-click context menus: lock/unlock component, decompose
+      one/all, add component, set start point, reverse contour,
+      round corners, move contour up/down, add/delete anchor
 - [x] Component auto-alignment for composites — accents follow
       their base anchors live; anchor-locked components refuse
       drags with a Lock/Free toggle in the Selection panel
       (core `composites` module)
-- [ ] Add component to a glyph (web `addComponent`)
+- [x] Add component to a glyph (context menu, name typed inline;
+      lands anchor-locked so marks snap to their anchor)
 - [ ] Anchor panel: name + coords editing for the selected anchor
       (web `updateSelectedAnchor`, AnchorPanel.vue)
 - [ ] Measure-tool option toggles (web SelectPanel/measure options:

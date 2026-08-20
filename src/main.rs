@@ -69,6 +69,7 @@ gpui::actions!(
         DuplicateSelection,
         DuplicateRepeat,
         Rotate180,
+        RoundCorners,
         Harmonize,
         Balance,
         Optimize,
@@ -126,6 +127,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Rotate 180°", Rotate180),
                 MenuItem::action("Duplicate Selection", DuplicateSelection),
                 MenuItem::action("Duplicate + Repeat", DuplicateRepeat),
+                MenuItem::action("Round Corners", RoundCorners),
                 MenuItem::action("Reverse Contours", ReverseContours),
                 MenuItem::action("Set Start Point", SetStartPoint),
                 MenuItem::separator(),
@@ -1265,6 +1267,21 @@ enum Drag {
 
 /// Editor viewport and interaction state, on the shared
 /// `runebender_core` viewport (design Y-up ↔ screen Y-down).
+/// A right-click context menu over the editor canvas (web
+/// contourContextMenu).
+struct ContextMenu {
+    /// Position inside the canvas, in canvas-local pixels.
+    at: Point<gpui::Pixels>,
+    design: (f64, f64),
+    contour: Option<usize>,
+    contour_count: usize,
+    start_point: Option<(usize, usize)>,
+    anchor: Option<usize>,
+    component: Option<(usize, bool)>,
+    has_components: bool,
+    adding_component: bool,
+}
+
 struct EditorState {
     /// The active text-buffer sort's layout position (design units);
     /// (0,0) when the glyph is alone in the editor.
@@ -1459,6 +1476,8 @@ struct Workspace {
     search_query: String,
     metric_inputs: MetricInputs,
     glyph_inputs: GlyphInputs,
+    context_menu: Option<ContextMenu>,
+    component_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
     axis_sliders: Vec<(usize, gpui::Entity<gpui_component::slider::SliderState>)>,
@@ -2907,6 +2926,12 @@ impl Workspace {
                                 cx.notify();
                             },
                         )))
+                        .child(text_op("op-round", "Round").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.command_round_corners();
+                                cx.notify();
+                            },
+                        )))
                         .child(text_op("op-reverse", "Reverse").on_click(cx.listener(
                             |this, _, _, cx| {
                                 if let Mode::Editor(index) = this.mode {
@@ -3043,6 +3068,168 @@ impl Workspace {
                 )))
             });
         self.section(cx, "Navigate", body)
+    }
+
+    /// The context-menu overlay, absolutely positioned inside the
+    /// editor container.
+    fn context_menu_overlay(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        let menu = self.context_menu.as_ref()?;
+        let item = |id: (&'static str, usize),
+                    label: SharedString,
+                    action: &'static str,
+                    cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .px_3()
+                .py_1()
+                .text_sm()
+                .text_color(t::text())
+                .cursor_pointer()
+                .hover(|el| el.bg(t::cell_selected_bg()))
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.context_menu_action(action);
+                    cx.notify();
+                }))
+        };
+        let mut list = div().flex().flex_col().py_1();
+        // Component items first: when you right-click a component,
+        // that is what you meant, and the lock is the thing you reach
+        // for most while placing marks.
+        match menu.component {
+            Some((_, true)) => {
+                list = list.child(item(
+                    ("cm", 0),
+                    "Unlock from Anchor".into(),
+                    "unlock-component",
+                    cx,
+                ));
+            }
+            Some((_, false)) => {
+                list = list.child(item(
+                    ("cm", 0),
+                    "Lock to Anchor".into(),
+                    "lock-component",
+                    cx,
+                ));
+            }
+            None => {}
+        }
+        if menu.component.is_some() {
+            list = list.child(item(
+                ("cm", 1),
+                "Decompose Component".into(),
+                "decompose-component",
+                cx,
+            ));
+        } else if menu.has_components {
+            list = list.child(item(
+                ("cm", 1),
+                "Decompose Components".into(),
+                "decompose-all",
+                cx,
+            ));
+        }
+        if menu.adding_component {
+            list = list.child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .w(px(180.0))
+                    .child(gpui_component::input::Input::new(
+                        &self.component_name_input,
+                    )),
+            );
+        } else {
+            list = list.child(item(
+                ("cm", 2),
+                "Add Component…".into(),
+                "add-component",
+                cx,
+            ));
+        }
+        if menu.start_point.is_some() {
+            list = list.child(item(
+                ("cm", 3),
+                "Set Start Point".into(),
+                "set-start",
+                cx,
+            ));
+        }
+        if menu.contour.is_some() {
+            list = list.child(item(
+                ("cm", 4),
+                "Reverse Contour".into(),
+                "reverse",
+                cx,
+            ));
+        }
+        if !self.editor.selected.is_empty() {
+            list = list.child(item(
+                ("cm", 5),
+                "Round Corners".into(),
+                "round-corners",
+                cx,
+            ));
+        }
+        if let Some(ci) = menu.contour {
+            if ci > 0 {
+                list = list.child(item(
+                    ("cm", 6),
+                    format!("Move Contour Up ({ci} → {})", ci - 1).into(),
+                    "move-up",
+                    cx,
+                ));
+            }
+            if ci + 1 < menu.contour_count {
+                list = list.child(item(
+                    ("cm", 7),
+                    format!("Move Contour Down ({ci} → {})", ci + 1).into(),
+                    "move-down",
+                    cx,
+                ));
+            }
+        }
+        list = list.child(item(
+            ("cm", 8),
+            "Add Anchor Here".into(),
+            "add-anchor",
+            cx,
+        ));
+        if menu.anchor.is_some() {
+            list = list.child(item(
+                ("cm", 9),
+                "Delete Anchor".into(),
+                "delete-anchor",
+                cx,
+            ));
+        }
+        Some(
+            div()
+                .id("context-menu")
+                .absolute()
+                .left(menu.at.x)
+                .top(menu.at.y)
+                // Clicks inside the menu must not reach the canvas:
+                // its mouse-down would dismiss the menu before the
+                // item's click fires (and start a marquee besides).
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_, _, _, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
+                .bg(t::panel_bg())
+                .border_1()
+                .border_color(t::panel_outline())
+                .rounded_md()
+                .shadow_md()
+                .min_w(px(180.0))
+                .child(list),
+        )
     }
 
     fn editor_view(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -3212,6 +3399,7 @@ impl Workspace {
         div()
             .flex_1()
             .relative()
+            .children(self.context_menu_overlay(cx))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
@@ -3240,6 +3428,13 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(move |this, _: &gpui::MouseUpEvent, _, cx| {
                     this.editor_mouse_up();
+                    cx.notify();
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    this.editor_context_menu(event.position);
                     cx.notify();
                 }),
             )
@@ -4001,7 +4196,252 @@ impl Workspace {
         self.editor.fit(advance, asc, desc);
     }
 
+    /// Right-click on the canvas: build the web-style context menu
+    /// for whatever is under the cursor.
+    fn editor_context_menu(&mut self, pos: Point<gpui::Pixels>) {
+        let Mode::Editor(index) = self.mode else { return };
+        let Some(font) = self.font() else { return };
+        let (dx, dy) = self.editor.window_to_design(pos);
+        let tolerance = 16.0 / self.editor.zoom().max(1e-6);
+        let entry = &font.glyphs[index];
+        let anchor = entry
+            .anchors
+            .iter()
+            .enumerate()
+            .map(|(i, (_, x, y))| {
+                (((x - dx).powi(2) + (y - dy).powi(2)).sqrt(), i)
+            })
+            .filter(|(dist, _)| *dist <= tolerance)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, i)| i);
+        let norad_glyph = font.font.get_glyph(entry.name.as_ref());
+        let component = if anchor.is_none() {
+            norad_glyph
+                .and_then(|g| {
+                    runebender_core::glyph_ops::component_at(
+                        &font.font,
+                        g,
+                        kurbo::Point::new(dx, dy),
+                    )
+                    .map(|ci| {
+                        let aligned = !runebender_core::composites::component_alignment_disabled(
+                            &g.components[ci],
+                        );
+                        (ci, aligned)
+                    })
+                })
+        } else {
+            None
+        };
+        // The nearest on-curve point (for Set Start Point) and its
+        // contour; a segment hit supplies the contour otherwise.
+        let start_point = entry
+            .points
+            .iter()
+            .filter(|p| p.on_curve)
+            .map(|p| {
+                (
+                    ((p.x - dx).powi(2) + (p.y - dy).powi(2)).sqrt(),
+                    (p.contour, p.index),
+                )
+            })
+            .filter(|(dist, _)| *dist <= tolerance)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, id)| id);
+        let contour = start_point.map(|(ci, _)| ci).or_else(|| {
+            norad_glyph
+                .and_then(|g| {
+                    runebender_core::segment_ops::nearest_segment_with_t(
+                        g,
+                        kurbo::Point::new(dx, dy),
+                        tolerance,
+                    )
+                })
+                .map(|(hit, _)| hit.contour)
+        });
+        let contour_count = norad_glyph.map(|g| g.contours.len()).unwrap_or(0);
+        let has_components = !entry.component_names.is_empty();
+        if let Some((ci, _)) = component {
+            self.editor.selected_component = Some(ci);
+            self.editor.selected.clear();
+        }
+        let bounds = *self.editor.bounds.lock().unwrap();
+        self.context_menu = Some(ContextMenu {
+            at: gpui::point(pos.x - bounds.origin.x, pos.y - bounds.origin.y),
+            design: (dx, dy),
+            contour,
+            contour_count,
+            start_point,
+            anchor,
+            component,
+            has_components,
+            adding_component: false,
+        });
+    }
+
+    /// Run one context-menu action and close the menu.
+    fn context_menu_action(&mut self, action: &'static str) {
+        let Some(menu) = self.context_menu.take() else { return };
+        let Mode::Editor(index) = self.mode else { return };
+        match action {
+            "lock-component" | "unlock-component" => {
+                if let Some((ci, _)) = menu.component {
+                    self.toggle_component_alignment(index, ci);
+                }
+            }
+            "decompose-component" => {
+                if let Some((ci, _)) = menu.component {
+                    self.push_undo_snapshot(index);
+                    let ok = self
+                        .font_mut()
+                        .and_then(|f| {
+                            let font_clone = f.font.clone();
+                            f.edit_glyph(index, |g| {
+                                runebender_core::glyph_ops::decompose_single_component(
+                                    &font_clone, g, ci,
+                                )
+                            })
+                        })
+                        .unwrap_or(false);
+                    if !ok {
+                        self.editor.undo.pop();
+                    }
+                    self.editor.selected_component = None;
+                }
+            }
+            "decompose-all" => {
+                self.push_undo_snapshot(index);
+                let ok = self
+                    .font_mut()
+                    .is_some_and(|f| f.decompose(index));
+                if !ok {
+                    self.editor.undo.pop();
+                }
+                self.editor.selected_component = None;
+            }
+            "add-component" => {
+                // Reopen in input mode; commit happens on Enter in
+                // the name field.
+                self.context_menu = Some(ContextMenu {
+                    adding_component: true,
+                    ..menu
+                });
+            }
+            "set-start" => {
+                if let Some((ci, pi)) = menu.start_point {
+                    self.push_undo_snapshot(index);
+                    let ok = self
+                        .font_mut()
+                        .and_then(|f| {
+                            f.edit_glyph(index, |g| {
+                                runebender_core::glyph_ops::set_contour_start(
+                                    g, ci, pi,
+                                )
+                            })
+                        })
+                        .unwrap_or(false);
+                    if !ok {
+                        self.editor.undo.pop();
+                    }
+                }
+            }
+            "reverse" => {
+                if let Some(ci) = menu.contour {
+                    self.push_undo_snapshot(index);
+                    let target: std::collections::HashSet<(usize, usize)> =
+                        [(ci, 0)].into();
+                    let ok = self
+                        .font_mut()
+                        .and_then(|f| {
+                            f.edit_glyph(index, |g| {
+                                runebender_core::glyph_ops::reverse_contours(
+                                    g, &target,
+                                )
+                            })
+                        })
+                        .unwrap_or(false);
+                    if !ok {
+                        self.editor.undo.pop();
+                    }
+                }
+            }
+            "round-corners" => self.command_round_corners(),
+            "move-up" | "move-down" => {
+                if let Some(ci) = menu.contour {
+                    self.push_undo_snapshot(index);
+                    let up = action == "move-up";
+                    let ok = self
+                        .font_mut()
+                        .and_then(|f| {
+                            f.edit_glyph(index, |g| {
+                                runebender_core::glyph_ops::move_contour(
+                                    g, ci, up,
+                                )
+                            })
+                        })
+                        .unwrap_or(false);
+                    if !ok {
+                        self.editor.undo.pop();
+                    } else {
+                        self.editor.selected.clear();
+                    }
+                }
+            }
+            "add-anchor" => {
+                self.push_undo_snapshot(index);
+                if let Some(font) = self.font_mut() {
+                    font.add_anchor(
+                        index,
+                        menu.design.0.round(),
+                        menu.design.1.round(),
+                    );
+                }
+            }
+            "delete-anchor" => {
+                if let Some(ai) = menu.anchor {
+                    self.push_undo_snapshot(index);
+                    if let Some(font) = self.font_mut() {
+                        font.delete_anchor(index, ai);
+                    }
+                    self.editor.selected_anchor = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Commit the Add Component name field.
+    fn commit_add_component(&mut self, base: &str) {
+        self.context_menu = None;
+        let Mode::Editor(index) = self.mode else { return };
+        let base = base.trim().to_string();
+        if base.is_empty() {
+            return;
+        }
+        self.push_undo_snapshot(index);
+        let ok = self
+            .font_mut()
+            .and_then(|f| {
+                let font_clone = f.font.clone();
+                f.edit_glyph(index, |g| {
+                    runebender_core::glyph_ops::add_component(
+                        &font_clone,
+                        g,
+                        &base,
+                    )
+                })
+            })
+            .unwrap_or(false);
+        if !ok {
+            self.editor.undo.pop();
+            self.status_note = Some(format!("No glyph named {base}").into());
+        } else {
+            self.status_note = Some(format!("Added component {base}").into());
+        }
+    }
+
     fn editor_mouse_down(&mut self, pos: Point<gpui::Pixels>, shift: bool, alt: bool, click_count: usize) {
+        self.context_menu = None;
 
         self.ensure_editor_fit();
         let Mode::Editor(index) = self.mode else {
@@ -5259,6 +5699,30 @@ impl Workspace {
                 }
             })
         });
+    }
+
+    /// Round the selected corners into fillets sized like the
+    /// glyph's existing rounding.
+    fn command_round_corners(&mut self) {
+        let Mode::Editor(index) = self.mode else { return };
+        self.push_undo_snapshot(index);
+        let selected = self.editor.selected.clone();
+        let new_selection = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    runebender_core::glyph_ops::round_selected_corners(
+                        g, &selected,
+                    )
+                })
+            })
+            .flatten();
+        match new_selection {
+            Some(selection) => self.editor.selected = selection,
+            None => {
+                self.editor.undo.pop();
+            }
+        }
     }
 
     /// Duplicate the selection: contours holding selected points, or
@@ -7041,7 +7505,9 @@ impl Workspace {
         };
         match (key, cmd) {
             ("escape", _) if in_editor => {
-                if self.editor.pen.is_some() || self.editor.hyper_contour.is_some() {
+                if self.context_menu.is_some() {
+                    self.context_menu = None;
+                } else if self.editor.pen.is_some() || self.editor.hyper_contour.is_some() {
                     self.pen_finish();
                 } else {
                     let Mode::Editor(index) = self.mode else {
@@ -7474,6 +7940,10 @@ impl Render for Workspace {
                 this.command_duplicate_repeat();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &RoundCorners, _, cx| {
+                this.command_round_corners();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &Rotate180, _, cx| {
                 this.apply_transform(Affine::rotate(std::f64::consts::PI));
                 cx.notify();
@@ -7756,6 +8226,30 @@ fn main() {
                             }
                         })
                     };
+                    let component_name_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("glyph name")
+                    });
+                    let sub_comp = cx.subscribe_in(&component_name_input, window, {
+                        let state = component_name_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              window,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text = state.read(cx).value().to_string();
+                                this.commit_add_component(&text);
+                                state.update(cx, |st, cx| {
+                                    st.set_value(String::new(), window, cx);
+                                });
+                                cx.notify();
+                            }
+                        }
+                    });
                     let sub_gn = glyph_sub(cx, window, &name_input, 0);
                     let sub_gu = glyph_sub(cx, window, &unicode_input, 1);
                     let sub_gl = glyph_sub(cx, window, &group_l_input, 2);
@@ -7799,6 +8293,8 @@ fn main() {
                         status_note: None,
                         search,
                         search_query: String::new(),
+                        context_menu: None,
+                        component_name_input: component_name_input.clone(),
                         glyph_inputs: GlyphInputs {
                             name: name_input,
                             unicode: unicode_input,
@@ -7820,7 +8316,7 @@ fn main() {
                         last_save: Arc::new(Mutex::new(web_time::Instant::now())),
                         _subscriptions: vec![
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
-                            sub_gn, sub_gu, sub_gl, sub_gr,
+                            sub_gn, sub_gu, sub_gl, sub_gr, sub_comp,
                         ],
                     };
                     workspace.rebuild_text_models();
