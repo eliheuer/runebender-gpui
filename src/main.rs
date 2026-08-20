@@ -4101,6 +4101,45 @@ impl Workspace {
         }
     }
 
+    /// Tab / shift-Tab: step the point selection through the glyph's
+    /// points in contour order (web cycle_selected_point). Bound as an
+    /// action so gpui's default tab-stop traversal never runs.
+    fn command_cycle_point(&mut self, back: bool) -> bool {
+        let Mode::Editor(index) = self.mode else {
+            return false;
+        };
+        let ids: Vec<(usize, usize)> = self
+            .font()
+            .map(|f| {
+                f.glyphs[index]
+                    .points
+                    .iter()
+                    .map(|p| (p.contour, p.index))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if ids.is_empty() {
+            return false;
+        }
+        let positions: Vec<usize> = ids
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| self.editor.selected.contains(id))
+            .map(|(i, _)| i)
+            .collect();
+        let target = if positions.is_empty() {
+            if back { ids.len() - 1 } else { 0 }
+        } else if back {
+            let first = positions[0];
+            if first == 0 { ids.len() - 1 } else { first - 1 }
+        } else {
+            (positions[positions.len() - 1] + 1) % ids.len()
+        };
+        self.editor.selected_component = None;
+        self.editor.selected = [ids[target]].into();
+        true
+    }
+
     /// Reverse the selected contours (all when none selected), undo.
     fn command_reverse(&mut self) {
         let Mode::Editor(index) = self.mode else {
@@ -5578,43 +5617,6 @@ impl Workspace {
                 }
                 remaining.is_some()
             }
-            ("tab", false) if in_editor => {
-                // Web cycle_selected_point: walk the glyph's points in
-                // order; shift goes backwards.
-                let Mode::Editor(index) = self.mode else {
-                    return false;
-                };
-                let ids: Vec<(usize, usize)> = self
-                    .font()
-                    .map(|f| {
-                        f.glyphs[index]
-                            .points
-                            .iter()
-                            .map(|p| (p.contour, p.index))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                if ids.is_empty() {
-                    return false;
-                }
-                let positions: Vec<usize> = ids
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, id)| self.editor.selected.contains(id))
-                    .map(|(i, _)| i)
-                    .collect();
-                let target = if positions.is_empty() {
-                    if shift { ids.len() - 1 } else { 0 }
-                } else if shift {
-                    let first = positions[0];
-                    if first == 0 { ids.len() - 1 } else { first - 1 }
-                } else {
-                    (positions[positions.len() - 1] + 1) % ids.len()
-                };
-                self.editor.selected_component = None;
-                self.editor.selected = [ids[target]].into();
-                true
-            }
             ("backspace" | "delete", false)
                 if in_editor && self.editor.selected_component.is_some() =>
             {
@@ -5820,6 +5822,7 @@ impl Render for Workspace {
             .flex_col()
             .size_full()
             .bg(t::window_bg())
+            .key_context("Workspace")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|this, _: &OpenFont, _, cx| {
                 this.open_dialog(cx);
@@ -6186,6 +6189,77 @@ fn main() {
                     }
                     workspace
                 });
+                // Handle shortcuts before any binding runs. Two
+                // reasons: Tab must cycle point selection (the web
+                // behavior) instead of gpui-component Root's tab-stop
+                // traversal, and on wasm ALL action dispatch panics
+                // today — gpui-component force-enables gpui's
+                // "profiler" feature, whose action timing calls
+                // std::time::Instant::now (unsupported on wasm). So
+                // the web build routes every bound shortcut through
+                // this interceptor instead of actions.
+                let shortcut_target = workspace.clone();
+                cx.intercept_keystrokes(move |event, _window, cx| {
+                    let ks = &event.keystroke;
+                    let cmd = ks.modifiers.platform;
+                    let shift = ks.modifiers.shift;
+                    if ks.modifiers.control || ks.modifiers.alt {
+                        return;
+                    }
+                    if ks.key == "tab" && !cmd {
+                        cx.stop_propagation();
+                        shortcut_target.update(cx, |this, cx| {
+                            if this.command_cycle_point(shift) {
+                                cx.notify();
+                            }
+                        });
+                        return;
+                    }
+                    if !cfg!(target_family = "wasm") || !cmd {
+                        return;
+                    }
+                    let handled = shortcut_target.update(cx, |this, cx| {
+                        match (ks.key.as_str(), shift) {
+                            ("s", false) => this.command_save(cx),
+                            ("z", false) => {
+                                this.undo();
+                                this.rebuild_text_models();
+                            }
+                            ("z", true) => {
+                                this.redo();
+                                this.rebuild_text_models();
+                            }
+                            ("c", false) => this.command_copy(),
+                            ("v", false) => this.command_paste(),
+                            ("o", true) => this.command_remove_overlap(),
+                            ("d", true) => this.command_decompose(),
+                            ("h", true) => {
+                                this.apply_transform(Affine::scale_non_uniform(
+                                    -1.0, 1.0,
+                                ));
+                            }
+                            ("v", true) => {
+                                this.apply_transform(Affine::scale_non_uniform(
+                                    1.0, -1.0,
+                                ));
+                            }
+                            ("r", true) => this.command_reverse(),
+                            ("0", false) => {
+                                if matches!(this.mode, Mode::Editor(_)) {
+                                    this.editor.initialized = false;
+                                    this.ensure_editor_fit();
+                                }
+                            }
+                            _ => return false,
+                        }
+                        cx.notify();
+                        true
+                    });
+                    if handled {
+                        cx.stop_propagation();
+                    }
+                })
+                .detach();
                 cx.new(|cx| gpui_component::Root::new(workspace, window, cx))
             },
         )
