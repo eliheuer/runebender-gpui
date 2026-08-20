@@ -1604,6 +1604,7 @@ impl Workspace {
                     .child(gpui_component::input::Input::new(&self.search)),
             )
             .child(self.section(cx, "Categories", list))
+            .children(self.axes_section(cx))
     }
 
     /// Right tile: details of the selected glyph, like
@@ -4724,34 +4725,36 @@ impl Workspace {
     }
 
     /// Axis slider row (designspaces only).
-    fn axes_bar(&self) -> impl IntoElement + use<> {
-        let Some(project) = self.project.as_ref() else {
-            return div().into_any_element();
-        };
+    /// Axes section for a sidebar: one labeled slider per designspace
+    /// axis (the web/Glyphs place these in a pane, not a full-width
+    /// strip).
+    fn axes_section(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let project = self.project.as_ref()?;
         if self.axis_sliders.is_empty() {
-            return div().into_any_element();
+            return None;
         }
-        let mut row = div()
-            .flex()
-            .items_center()
-            .gap_4()
-            .px_4()
-            .py_1()
-            .bg(t::panel_bg())
-            .border_t_1()
-            .border_color(t::cell_border());
+        let mut rows = div().flex().flex_col().gap_2();
         for (axis_index, slider) in &self.axis_sliders {
             let axis = &project.axes[*axis_index];
-            row = row.child(
+            rows = rows.child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().text_sm().text_color(t::text_muted()).child(axis.tag.clone()))
-                    .child(div().w(px(160.0)).child(gpui_component::slider::Slider::new(slider))),
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(t::text_muted())
+                            .child(axis.tag.clone()),
+                    )
+                    .child(
+                        div().flex_1().child(
+                            gpui_component::slider::Slider::new(slider),
+                        ),
+                    ),
             );
         }
-        row.into_any_element()
+        Some(self.section(cx, "Axes", rows))
     }
 
     /// Bottom bar in editor mode: Width / LSB / RSB fields.
@@ -6070,6 +6073,7 @@ impl Render for Workspace {
                     .child(self.selection_section(cx))
                     .child(self.transform_section(cx))
                     .child(self.layers_section(cx))
+                    .children(self.axes_section(cx))
                     .child(self.mark_colors_panel(cx))
             })
             .when(!in_editor, |el| {
@@ -6235,7 +6239,6 @@ impl Render for Workspace {
             }))
             .child(self.header(cx))
             .child(content)
-            .child(self.axes_bar())
             .child(self.preview_strip(cx))
             .child(self.status_bar())
     }
