@@ -39,9 +39,12 @@ browser build over WebGPU with workspace-server load/save.
       is the selection modifier there)
 - [ ] Convert hyperbezier contour to cubic (web
       `convertHyperToCubic`)
-- [ ] Numeric move/scale with reference point (web Transform panel:
-      `moveSelectionReference`, `resizeSelectionReference`, and the
-      9-point coordinate quadrant selector)
+- [x] Numeric move/scale with reference point: the Selection panel
+      grew the 9-point quadrant picker with X/Y (move so the
+      reference lands there) and W/H (scale about the reference),
+      working on points, the selected component, or anchor.
+      Committing is native-only until the browser input bug is
+      fixed.
 - [x] Right-click context menus: lock/unlock component, decompose
       one/all, add component, set start point, reverse contour,
       round corners, move contour up/down, add/delete anchor

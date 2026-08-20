@@ -1477,6 +1477,9 @@ struct Workspace {
     metric_inputs: MetricInputs,
     glyph_inputs: GlyphInputs,
     context_menu: Option<ContextMenu>,
+    /// The Selection panel's 9-point reference for numeric move and
+    /// scale (web coordinate quadrant).
+    coord_quadrant: runebender_core::path::Quadrant,
     component_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
@@ -1509,9 +1512,11 @@ struct MetricInputs {
     width: gpui::Entity<gpui_component::input::InputState>,
     lsb: gpui::Entity<gpui_component::input::InputState>,
     rsb: gpui::Entity<gpui_component::input::InputState>,
-    /// Selected point coordinates (Selection section).
+    /// Selection reference coordinates and size (Selection section).
     x: gpui::Entity<gpui_component::input::InputState>,
     y: gpui::Entity<gpui_component::input::InputState>,
+    w: gpui::Entity<gpui_component::input::InputState>,
+    h: gpui::Entity<gpui_component::input::InputState>,
 }
 
 const CELL: f32 = 96.0;
@@ -5549,24 +5554,210 @@ impl Workspace {
 
     /// Set one coordinate of the single selected point (Selection
     /// section X/Y inputs), with an undo snapshot.
-    fn apply_coord(&mut self, is_x: bool, value: f64) {
-        self.status_note = Some(format!("apply_coord {is_x} {value}").into());
-        let Mode::Editor(index) = self.mode else {
-            return;
-        };
-        let Some(point) = self.single_selected_point() else {
-            self.status_note = Some("apply_coord: no single point".into());
-            return;
-        };
-        let (x, y) = if is_x { (value, point.y) } else { (point.x, value) };
-        self.push_undo_snapshot(index);
-        let id = (point.contour, point.index);
-        if let Some(font) = self.font_mut() {
-            font.edit_glyph(index, |g| {
-                runebender_core::glyph_ops::set_points(g, &[(id, (x, y))]);
-                runebender_core::glyph_ops::constrain_smooth_neighbor(g, id.0, id.1);
-            });
+    /// Bounds of whatever is selected: points, else the component,
+    /// else the anchor.
+    fn selection_bounds(&self) -> Option<kurbo::Rect> {
+        let Mode::Editor(index) = self.mode else { return None };
+        let font = self.font()?;
+        let entry = &font.glyphs[index];
+        if !self.editor.selected.is_empty() {
+            let mut bounds: Option<kurbo::Rect> = None;
+            for p in entry.points.iter() {
+                if self.editor.selected.contains(&(p.contour, p.index)) {
+                    let r = kurbo::Rect::new(p.x, p.y, p.x, p.y);
+                    bounds = Some(match bounds {
+                        Some(b) => b.union(r),
+                        None => r,
+                    });
+                }
+            }
+            return bounds;
         }
+        if let Some(ci) = self.editor.selected_component {
+            use kurbo::Shape as _;
+            let glyph = font.font.get_glyph(entry.name.as_ref())?;
+            let component = glyph.components.get(ci)?;
+            let base = font.font.get_glyph(component.base.as_str())?;
+            let transform = runebender_core::glyph_paths::component_affine(
+                &component.transform,
+            );
+            let path = transform
+                * &runebender_core::glyph_paths::glyph_to_bezpath(
+                    base, &font.font,
+                );
+            return Some(path.bounding_box());
+        }
+        if let Some(ai) = self.editor.selected_anchor {
+            let (_, x, y) = entry.anchors.get(ai)?;
+            return Some(kurbo::Rect::new(*x, *y, *x, *y));
+        }
+        None
+    }
+
+    /// Move whatever is selected so the quadrant reference lands on
+    /// `value` along one axis (web move_selection_reference).
+    fn apply_coord(&mut self, is_x: bool, value: f64) {
+        let Mode::Editor(index) = self.mode else { return };
+        if !value.is_finite() {
+            return;
+        }
+        let Some(bounds) = self.selection_bounds() else { return };
+        let reference = self.coord_quadrant.point_in_dspace_rect(bounds);
+        let delta = if is_x {
+            kurbo::Vec2::new(value - reference.x, 0.0)
+        } else {
+            kurbo::Vec2::new(0.0, value - reference.y)
+        };
+        if delta.hypot() < 1e-9 {
+            return;
+        }
+        self.push_undo_snapshot(index);
+        let changed = self.translate_selected(index, delta);
+        if !changed {
+            self.editor.undo.pop();
+        }
+    }
+
+    /// Scale whatever is selected about the quadrant reference so its
+    /// bounds reach `value` along one axis (web
+    /// resize_selection_reference).
+    fn apply_size(&mut self, is_width: bool, value: f64) {
+        let Mode::Editor(index) = self.mode else { return };
+        if !value.is_finite() || value <= 0.0 {
+            return;
+        }
+        let Some(bounds) = self.selection_bounds() else { return };
+        let current = if is_width {
+            bounds.width()
+        } else {
+            bounds.height()
+        };
+        if current.abs() < 1e-9 {
+            return;
+        }
+        let reference = self.coord_quadrant.point_in_dspace_rect(bounds);
+        let scale = value / current;
+        if (scale - 1.0).abs() < 1e-9 {
+            return;
+        }
+        let (sx, sy) = if is_width { (scale, 1.0) } else { (1.0, scale) };
+        let transform = Affine::translate(-reference.to_vec2())
+            .then_scale_non_uniform(sx, sy)
+            .then_translate(reference.to_vec2());
+        self.editor.last_transform = Some(transform);
+        self.push_undo_snapshot(index);
+        let changed = self.transform_selected(index, transform);
+        if !changed {
+            self.editor.undo.pop();
+        }
+    }
+
+    /// Translate the active selection (points, component, or anchor).
+    fn translate_selected(&mut self, index: usize, delta: kurbo::Vec2) -> bool {
+        if let Some(ci) = self.editor.selected_component {
+            return self
+                .font_mut()
+                .and_then(|f| {
+                    f.edit_glyph(index, |g| {
+                        runebender_core::glyph_ops::translate_component(
+                            g, ci, delta.x, delta.y,
+                        )
+                    })
+                })
+                .unwrap_or(false);
+        }
+        if let Some(ai) = self.editor.selected_anchor {
+            let target = self
+                .font()
+                .and_then(|f| {
+                    f.glyphs[index]
+                        .anchors
+                        .get(ai)
+                        .map(|(_, x, y)| (x + delta.x, y + delta.y))
+                });
+            if let Some((x, y)) = target {
+                if let Some(font) = self.font_mut() {
+                    font.set_anchor(index, ai, x.round(), y.round());
+                    return true;
+                }
+            }
+            return false;
+        }
+        let selected = self.editor.selected.clone();
+        if selected.is_empty() {
+            return false;
+        }
+        self.font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    runebender_core::glyph_ops::transform_selection(
+                        g,
+                        &selected,
+                        Affine::translate(delta),
+                    )
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    /// Transform the active selection (points, component, or anchor).
+    fn transform_selected(&mut self, index: usize, transform: Affine) -> bool {
+        if let Some(ci) = self.editor.selected_component {
+            // Bake the scale into the component transform.
+            return self
+                .font_mut()
+                .and_then(|f| {
+                    f.edit_glyph(index, |g| {
+                        let Some(component) = g.components.get_mut(ci) else {
+                            return false;
+                        };
+                        let current =
+                            runebender_core::glyph_paths::component_affine(
+                                &component.transform,
+                            );
+                        let combined = transform * current;
+                        let c = combined.as_coeffs();
+                        component.transform = norad::AffineTransform {
+                            x_scale: c[0],
+                            xy_scale: c[1],
+                            yx_scale: c[2],
+                            y_scale: c[3],
+                            x_offset: c[4],
+                            y_offset: c[5],
+                        };
+                        true
+                    })
+                })
+                .unwrap_or(false);
+        }
+        if let Some(ai) = self.editor.selected_anchor {
+            let target = self.font().and_then(|f| {
+                f.glyphs[index].anchors.get(ai).map(|(_, x, y)| {
+                    let p = transform * kurbo::Point::new(*x, *y);
+                    (p.x, p.y)
+                })
+            });
+            if let Some((x, y)) = target {
+                if let Some(font) = self.font_mut() {
+                    font.set_anchor(index, ai, x.round(), y.round());
+                    return true;
+                }
+            }
+            return false;
+        }
+        let selected = self.editor.selected.clone();
+        if selected.is_empty() {
+            return false;
+        }
+        self.font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    runebender_core::glyph_ops::transform_selection(
+                        g, &selected, transform,
+                    )
+                })
+            })
+            .unwrap_or(false)
     }
 
     /// Keep the Selection X/Y inputs showing the selected point.
@@ -5578,13 +5769,24 @@ impl Workspace {
         {
             return;
         }
-        let (x, y) = match self.single_selected_point() {
-            Some(p) => (format!("{:.0}", p.x), format!("{:.0}", p.y)),
-            None => (String::new(), String::new()),
+        let (x, y, w, h) = match self.selection_bounds() {
+            Some(bounds) => {
+                let reference =
+                    self.coord_quadrant.point_in_dspace_rect(bounds);
+                (
+                    format!("{:.0}", reference.x),
+                    format!("{:.0}", reference.y),
+                    format!("{:.0}", bounds.width()),
+                    format!("{:.0}", bounds.height()),
+                )
+            }
+            None => Default::default(),
         };
         for (entity, value) in [
             (self.metric_inputs.x.clone(), x),
             (self.metric_inputs.y.clone(), y),
+            (self.metric_inputs.w.clone(), w),
+            (self.metric_inputs.h.clone(), h),
         ] {
             entity.update(cx, |st, cx| {
                 if st.value() != value.as_str() {
@@ -5608,7 +5810,12 @@ impl Workspace {
                     n => format!("{n} points"),
                 }),
         );
-        if single.is_some() {
+        let _ = single;
+        let has_selection = !self.editor.selected.is_empty()
+            || self.editor.selected_component.is_some()
+            || self.editor.selected_anchor.is_some();
+        if has_selection {
+            use runebender_core::path::Quadrant;
             let field = |label: &'static str,
                          input: &gpui::Entity<gpui_component::input::InputState>| {
                 div()
@@ -5618,9 +5825,70 @@ impl Workspace {
                     .child(div().w(px(14.0)).text_sm().text_color(t::text_muted()).child(label))
                     .child(div().flex_1().child(gpui_component::input::Input::new(input)))
             };
-            body = body
-                .child(field("X", &self.metric_inputs.x))
-                .child(field("Y", &self.metric_inputs.y));
+            // The 9-point reference picker (web coordinate quadrant):
+            // numeric X/Y and W/H act about the chosen corner.
+            const QUADRANTS: [[Quadrant; 3]; 3] = [
+                [Quadrant::TopLeft, Quadrant::Top, Quadrant::TopRight],
+                [Quadrant::Left, Quadrant::Center, Quadrant::Right],
+                [
+                    Quadrant::BottomLeft,
+                    Quadrant::Bottom,
+                    Quadrant::BottomRight,
+                ],
+            ];
+            let mut picker = div().flex().flex_col().gap_0p5();
+            for (ri, row_quads) in QUADRANTS.iter().enumerate() {
+                let mut row_el = div().flex().gap_0p5();
+                for (qi, quadrant) in row_quads.iter().enumerate() {
+                    let quadrant = *quadrant;
+                    let active = self.coord_quadrant == quadrant;
+                    row_el = row_el.child(
+                        div()
+                            .id(("quadrant", ri * 3 + qi))
+                            .w(px(10.0))
+                            .h(px(10.0))
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .border_1()
+                            .when(active, |el| {
+                                el.bg(t::accent()).border_color(t::accent())
+                            })
+                            .when(!active, |el| {
+                                el.border_color(t::cell_border())
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.coord_quadrant = quadrant;
+                                cx.notify();
+                            })),
+                    );
+                }
+                picker = picker.child(row_el);
+            }
+            body = body.child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .items_center()
+                    .child(picker)
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(field("X", &self.metric_inputs.x))
+                            .child(field("Y", &self.metric_inputs.y)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(field("W", &self.metric_inputs.w))
+                            .child(field("H", &self.metric_inputs.h)),
+                    ),
+            );
         }
         // Selected component: name plus the anchor lock, the Glyphs
         // contract — locked follows its anchor, free is draggable.
@@ -8131,6 +8399,8 @@ fn main() {
                     let rsb_input = metric(cx, window);
                     let x_input = metric(cx, window);
                     let y_input = metric(cx, window);
+                    let w_input = metric(cx, window);
+                    let h_input = metric(cx, window);
                     let metric_sub = |cx: &mut Context<Workspace>,
                                       window: &mut Window,
                                       state: &gpui::Entity<gpui_component::input::InputState>,
@@ -8189,6 +8459,36 @@ fn main() {
                     };
                     let sub_x = coord_sub(cx, window, &x_input, true);
                     let sub_y = coord_sub(cx, window, &y_input, false);
+                    let size_sub = |cx: &mut Context<Workspace>,
+                                    window: &mut Window,
+                                    state: &gpui::Entity<
+                        gpui_component::input::InputState,
+                    >,
+                                    is_width: bool| {
+                        let state = state.clone();
+                        cx.subscribe_in(&state, window, {
+                            let state = state.clone();
+                            move |this: &mut Workspace,
+                                  _,
+                                  ev: &gpui_component::input::InputEvent,
+                                  window,
+                                  cx| {
+                                if matches!(
+                                    ev,
+                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                ) {
+                                    let text = state.read(cx).value().to_string();
+                                    if let Ok(v) = text.trim().parse::<f64>() {
+                                        this.apply_size(is_width, v);
+                                    }
+                                    this.refresh_coord_inputs(true, window, cx);
+                                    cx.notify();
+                                }
+                            }
+                        })
+                    };
+                    let sub_sw = size_sub(cx, window, &w_input, true);
+                    let sub_sh = size_sub(cx, window, &h_input, false);
                     let name_input = metric(cx, window);
                     let unicode_input = metric(cx, window);
                     let group_l_input = metric(cx, window);
@@ -8294,6 +8594,7 @@ fn main() {
                         search,
                         search_query: String::new(),
                         context_menu: None,
+                        coord_quadrant: Default::default(),
                         component_name_input: component_name_input.clone(),
                         glyph_inputs: GlyphInputs {
                             name: name_input,
@@ -8307,6 +8608,8 @@ fn main() {
                             rsb: rsb_input,
                             x: x_input,
                             y: y_input,
+                            w: w_input,
+                            h: h_input,
                         },
                         axis_sliders: Vec::new(),
                         clipboard: Vec::new(),
@@ -8317,6 +8620,7 @@ fn main() {
                         _subscriptions: vec![
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_comp,
+                            sub_sw, sub_sh,
                         ],
                     };
                     workspace.rebuild_text_models();
