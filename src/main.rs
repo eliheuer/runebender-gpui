@@ -2063,6 +2063,60 @@ fn invert_icon(color: gpui::Rgba) -> impl IntoElement {
     .h(px(16.0))
 }
 
+/// Paint many subpaths as few draws without overflowing gpui's
+/// tessellator, which indexes vertices with a `u16`: merging a whole
+/// screen of glyph outlines into one path exceeds 65,535 vertices,
+/// `build` fails, and nothing is drawn at all. Batches are flushed
+/// every `CHUNK` subpaths, and a batch that still fails is halved
+/// until it builds.
+fn paint_batched(
+    window: &mut Window,
+    origin: Point<gpui::Pixels>,
+    color: gpui::Rgba,
+    subpaths: &[BezPath],
+    stroke: Option<f32>,
+) {
+    const CHUNK: usize = 12;
+    fn paint_chunk(
+        window: &mut Window,
+        origin: Point<gpui::Pixels>,
+        color: gpui::Rgba,
+        chunk: &[BezPath],
+        stroke: Option<f32>,
+    ) {
+        if chunk.is_empty() {
+            return;
+        }
+        let mut merged = BezPath::new();
+        for path in chunk {
+            merged.extend(path.iter());
+        }
+        let built = match stroke {
+            Some(width) => build_path(
+                &merged,
+                Affine::IDENTITY,
+                origin,
+                PathBuilder::stroke(px(width)),
+            ),
+            None => build_fill_path(&merged, Affine::IDENTITY, origin),
+        };
+        match built {
+            Some(path) => window.paint_path(path, color),
+            // Too much geometry for one path: split and retry, down to
+            // a single subpath.
+            None if chunk.len() > 1 => {
+                let mid = chunk.len() / 2;
+                paint_chunk(window, origin, color, &chunk[..mid], stroke);
+                paint_chunk(window, origin, color, &chunk[mid..], stroke);
+            }
+            None => {}
+        }
+    }
+    for chunk in subpaths.chunks(CHUNK) {
+        paint_chunk(window, origin, color, chunk, stroke);
+    }
+}
+
 /// One cell placed by the packer: which glyph, and the rectangle it
 /// occupies inside the grid's viewport.
 #[derive(Clone, Copy)]
@@ -3250,8 +3304,10 @@ impl Workspace {
         let upm = font.units_per_em;
         // (colour, path) per ink colour, so the whole grid is a handful
         // of draws however many cells are on screen.
-        let mut batches: std::collections::BTreeMap<u32, (gpui::Rgba, BezPath)> =
-            std::collections::BTreeMap::new();
+        let mut batches: std::collections::BTreeMap<
+            u32,
+            (gpui::Rgba, Vec<BezPath>),
+        > = std::collections::BTreeMap::new();
         for cell in placed {
             let Some(entry) = font.glyphs.get(cell.glyph) else {
                 continue;
@@ -3287,9 +3343,9 @@ impl Workspace {
             ]);
             batches
                 .entry(key)
-                .or_insert_with(|| (color, BezPath::new()))
+                .or_insert_with(|| (color, Vec::new()))
                 .1
-                .extend((place * entry.path.as_ref().clone()).into_iter());
+                .push(place * entry.path.as_ref().clone());
         }
         if batches.is_empty() {
             return None;
@@ -3298,12 +3354,8 @@ impl Workspace {
             canvas(
                 move |bounds, _, _| bounds,
                 move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                    for (color, path) in batches.values() {
-                        if let Some(p) =
-                            build_fill_path(path, Affine::IDENTITY, bounds.origin)
-                        {
-                            window.paint_path(p, *color);
-                        }
+                    for (color, paths) in batches.values() {
+                        paint_batched(window, bounds.origin, *color, paths, None);
                     }
                 },
             )
@@ -6593,14 +6645,14 @@ impl Workspace {
                                     (c.a * 255.0) as u8,
                                 ])
                             };
-                            let mut halo_batch = BezPath::new();
+                            let mut halo_batch: Vec<BezPath> = Vec::new();
                             let mut fill_batch: std::collections::BTreeMap<
                                 u32,
-                                (gpui::Rgba, BezPath),
+                                (gpui::Rgba, Vec<BezPath>),
                             > = std::collections::BTreeMap::new();
                             let mut ring_batch: std::collections::BTreeMap<
                                 u32,
-                                (gpui::Rgba, BezPath),
+                                (gpui::Rgba, Vec<BezPath>),
                             > = std::collections::BTreeMap::new();
                             #[allow(clippy::type_complexity)]
                             let mut chord_batch: std::collections::BTreeMap<
@@ -6636,12 +6688,12 @@ impl Workspace {
                                     4.5
                                 } * ps;
                                 let path = shape(center, r, is_square);
-                                halo_batch.extend(path.iter());
+                                halo_batch.push(path.clone());
                                 fill_batch
                                     .entry(color_key(inner))
-                                    .or_insert_with(|| (inner, BezPath::new()))
+                                    .or_insert_with(|| (inner, Vec::new()))
                                     .1
-                                    .extend(path.iter());
+                                    .push(path.clone());
                                 // The point is a window onto the design
                                 // grid: the gridlines that cross it are
                                 // redrawn inside, tinted with the
@@ -6741,27 +6793,22 @@ impl Workspace {
                                 }
                                 ring_batch
                                     .entry(color_key(ring))
-                                    .or_insert_with(|| (ring, BezPath::new()))
+                                    .or_insert_with(|| (ring, Vec::new()))
                                     .1
-                                    .extend(path.iter());
+                                    .push(path);
                             }
                             // Three path draws for every point on the
                             // glyph, plus the gridlines, collapse into
                             // one per colour.
-                            if let Some(p) = build_path(
-                                &halo_batch,
-                                Affine::IDENTITY,
+                            paint_batched(
+                                window,
                                 zero,
-                                PathBuilder::stroke(px(halo_w)),
-                            ) {
-                                window.paint_path(p, t::halo());
-                            }
-                            for (color, path) in fill_batch.values() {
-                                if let Some(p) =
-                                    build_fill_path(path, Affine::IDENTITY, zero)
-                                {
-                                    window.paint_path(p, *color);
-                                }
+                                t::halo(),
+                                &halo_batch,
+                                Some(halo_w),
+                            );
+                            for (color, paths) in fill_batch.values() {
+                                paint_batched(window, zero, *color, paths, None);
                             }
                             for (color, path) in chord_batch.values() {
                                 for (width, path) in path {
@@ -6775,15 +6822,14 @@ impl Workspace {
                                     }
                                 }
                             }
-                            for (color, path) in ring_batch.values() {
-                                if let Some(p) = build_path(
-                                    path,
-                                    Affine::IDENTITY,
+                            for (color, paths) in ring_batch.values() {
+                                paint_batched(
+                                    window,
                                     zero,
-                                    PathBuilder::stroke(px(ring_w)),
-                                ) {
-                                    window.paint_path(p, *color);
-                                }
+                                    *color,
+                                    paths,
+                                    Some(ring_w),
+                                );
                             }
                             // Start-of-contour arrow: which point a closed
                             // contour begins at, and which way it runs
@@ -6845,14 +6891,14 @@ impl Workspace {
                             // off the smooth-point radius and widened a
                             // little so a rotated square reads as the
                             // same size (web ANCHOR_DIAMOND_SCALE).
-                            let mut anchor_halo = BezPath::new();
+                            let mut anchor_halo: Vec<BezPath> = Vec::new();
                             let mut anchor_fill: std::collections::BTreeMap<
                                 u32,
-                                (gpui::Rgba, BezPath),
+                                (gpui::Rgba, Vec<BezPath>),
                             > = std::collections::BTreeMap::new();
                             let mut anchor_ring: std::collections::BTreeMap<
                                 u32,
-                                (gpui::Rgba, BezPath),
+                                (gpui::Rgba, Vec<BezPath>),
                             > = std::collections::BTreeMap::new();
                             for (ai, (_, ax, ay)) in anchors.iter().enumerate() {
                                 if preview_mode || text_mode {
@@ -6877,42 +6923,36 @@ impl Workspace {
                                 } else {
                                     (t::anchor(), t::point_inner())
                                 };
-                                anchor_halo.extend(diamond.iter());
+                                anchor_halo.push(diamond.clone());
                                 anchor_fill
                                     .entry(color_key(inner))
-                                    .or_insert_with(|| (inner, BezPath::new()))
+                                    .or_insert_with(|| (inner, Vec::new()))
                                     .1
-                                    .extend(diamond.iter());
+                                    .push(diamond.clone());
                                 anchor_ring
                                     .entry(color_key(ring))
-                                    .or_insert_with(|| (ring, BezPath::new()))
+                                    .or_insert_with(|| (ring, Vec::new()))
                                     .1
-                                    .extend(diamond.iter());
+                                    .push(diamond);
                             }
-                            if let Some(p) = build_path(
-                                &anchor_halo,
-                                Affine::IDENTITY,
+                            paint_batched(
+                                window,
                                 zero,
-                                PathBuilder::stroke(px(halo_w)),
-                            ) {
-                                window.paint_path(p, t::halo());
+                                t::halo(),
+                                &anchor_halo,
+                                Some(halo_w),
+                            );
+                            for (color, paths) in anchor_fill.values() {
+                                paint_batched(window, zero, *color, paths, None);
                             }
-                            for (color, path) in anchor_fill.values() {
-                                if let Some(p) =
-                                    build_fill_path(path, Affine::IDENTITY, zero)
-                                {
-                                    window.paint_path(p, *color);
-                                }
-                            }
-                            for (color, path) in anchor_ring.values() {
-                                if let Some(p) = build_path(
-                                    path,
-                                    Affine::IDENTITY,
+                            for (color, paths) in anchor_ring.values() {
+                                paint_batched(
+                                    window,
                                     zero,
-                                    PathBuilder::stroke(px(ring_w)),
-                                ) {
-                                    window.paint_path(p, *color);
-                                }
+                                    *color,
+                                    paths,
+                                    Some(ring_w),
+                                );
                             }
 
                             // Shapes-tool live preview.
