@@ -2131,6 +2131,12 @@ struct PlacedCell {
 /// Lay the packed rows out exactly as the wrapping flex will: the
 /// block is centred, cells run left to right with one gap between,
 /// and rows stack by the cell height.
+///
+/// `viewport` has to be the box the cells are actually being laid out
+/// in, measured this frame — not the probe's stored size. The probe
+/// lags the layout by a frame (longer, if the browser coalesces the
+/// redraw), and a viewport a column narrower than the real one puts
+/// every outline a column away from its cell.
 fn place_cells(
     packed: &[Vec<(usize, usize)>],
     fit: GridFit,
@@ -3293,29 +3299,34 @@ impl Workspace {
     /// One canvas for every glyph in a grid, batched by colour. The
     /// cells themselves are plain divs: gpui breaks its render pass at
     /// each run of paths, so a canvas per cell cost a pass per cell.
+    ///
+    /// `rows` is the packed rows that are on screen. Where each cell
+    /// lands is worked out in the paint closure, against the bounds
+    /// the overlay was actually given, so the outlines follow the
+    /// cells through a resize instead of trailing the probe.
     fn glyph_overlay(
         &self,
-        placed: Vec<PlacedCell>,
-        label_h: f32,
+        rows: Vec<Vec<(usize, usize)>>,
+        fit: GridFit,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
         let _ = cx;
         let font = self.font()?;
         let upm = font.units_per_em;
-        // (colour, path) per ink colour, so the whole grid is a handful
-        // of draws however many cells are on screen.
-        let mut batches: std::collections::BTreeMap<
-            u32,
-            (gpui::Rgba, Vec<BezPath>),
-        > = std::collections::BTreeMap::new();
-        for cell in placed {
-            let Some(entry) = font.glyphs.get(cell.glyph) else {
+        // Everything the paint closure needs about a glyph, pulled out
+        // here because it cannot borrow the font.
+        let mut ink: std::collections::HashMap<
+            usize,
+            (Arc<BezPath>, kurbo::Rect, f64, gpui::Rgba),
+        > = std::collections::HashMap::new();
+        for &(glyph, _) in rows.iter().flatten() {
+            let Some(entry) = font.glyphs.get(glyph) else {
                 continue;
             };
             if entry.path.elements().is_empty() {
                 continue;
             }
-            let selected = self.selected == Some(cell.glyph)
+            let selected = self.selected == Some(glyph)
                 || self.multi_selected.contains(entry.name.as_ref());
             let color = if selected {
                 t::cell_selected_ring()
@@ -3326,40 +3337,67 @@ impl Workspace {
                     .and_then(t::mark_color)
                     .unwrap_or_else(t::glyph_fill)
             };
-            let transform = cell_glyph_transform(
-                entry.ink,
-                false,
-                entry.advance,
-                upm,
-                cell.w as f64,
-                (cell.h - label_h) as f64,
+            ink.insert(
+                glyph,
+                (entry.path.clone(), entry.ink, entry.advance, color),
             );
-            let place = Affine::translate((cell.x as f64, cell.y as f64)) * transform;
-            let key = u32::from_be_bytes([
-                (color.r * 255.0) as u8,
-                (color.g * 255.0) as u8,
-                (color.b * 255.0) as u8,
-                (color.a * 255.0) as u8,
-            ]);
-            batches
-                .entry(key)
-                .or_insert_with(|| (color, Vec::new()))
-                .1
-                .push(place * entry.path.as_ref().clone());
         }
-        if batches.is_empty() {
+        if ink.is_empty() {
             return None;
         }
         Some(
             canvas(
                 move |bounds, _, _| bounds,
                 move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+                    // One path per ink colour, so the whole grid is a
+                    // handful of draws however many cells are on screen.
+                    let mut batches: std::collections::BTreeMap<
+                        u32,
+                        (gpui::Rgba, Vec<BezPath>),
+                    > = std::collections::BTreeMap::new();
+                    for cell in place_cells(&rows, fit, bounds.size, 0) {
+                        let Some((path, bbox, advance, color)) = ink.get(&cell.glyph)
+                        else {
+                            continue;
+                        };
+                        // The cell sizes its own label block from its
+                        // own width, so a cell spanning two columns
+                        // gets a taller one: ask the same question.
+                        let label_h = cell_label_metrics(cell.w).height;
+                        let transform = cell_glyph_transform(
+                            *bbox,
+                            false,
+                            *advance,
+                            upm,
+                            cell.w as f64,
+                            (cell.h - label_h) as f64,
+                        );
+                        let place =
+                            Affine::translate((cell.x as f64, cell.y as f64)) * transform;
+                        let key = u32::from_be_bytes([
+                            (color.r * 255.0) as u8,
+                            (color.g * 255.0) as u8,
+                            (color.b * 255.0) as u8,
+                            (color.a * 255.0) as u8,
+                        ]);
+                        batches
+                            .entry(key)
+                            .or_insert_with(|| (*color, Vec::new()))
+                            .1
+                            .push(place * path.as_ref().clone());
+                    }
                     for (color, paths) in batches.values() {
                         paint_batched(window, bounds.origin, *color, paths, None);
                     }
                 },
             )
+            // An absolute element with no inset lands at its static
+            // position, which for the last child of a column is below
+            // everything before it: without this the whole grid was
+            // painted a viewport lower and clipped away.
             .absolute()
+            .top_0()
+            .left_0()
             .size_full(),
         )
     }
@@ -4278,7 +4316,7 @@ impl Workspace {
         let mut rows_total = 0usize;
         let mut shown = 0usize;
         let matched = self.glyph_order();
-        let mut placed: Vec<PlacedCell> = Vec::new();
+        let mut visible_rows: Vec<Vec<(usize, usize)>> = Vec::new();
         let cells: Vec<_> = match self.font() {
             Some(font) => {
                 shown = matched.len();
@@ -4300,8 +4338,12 @@ impl Workspace {
                 rows_total = packed.len();
                 let start =
                     self.sidebar_scroll_row.min(rows_total.saturating_sub(1));
-                placed =
-                    place_cells(&packed, fit, self.sidebar_viewport, start);
+                visible_rows = packed
+                    .iter()
+                    .skip(start)
+                    .take(fit.rows)
+                    .cloned()
+                    .collect();
                 packed
                     .into_iter()
                     .skip(start)
@@ -4476,6 +4518,8 @@ impl Workspace {
                             |_, _, _, _| {},
                         )
                         .absolute()
+                        .top_0()
+                        .left_0()
                         .size_full()
                     })
                     .child(
@@ -4483,6 +4527,9 @@ impl Workspace {
                             .id("editor-sidebar-grid")
                             .size_full()
                             .min_h(px(0.0))
+                            // The outline overlay is absolute: this is
+                            // the box it pins to.
+                            .relative()
                             .overflow_hidden()
                             .child(
                                 div()
@@ -4499,11 +4546,7 @@ impl Workspace {
                                             .children(cells),
                                     ),
                             )
-                            .children(self.glyph_overlay(
-                                placed,
-                                cell_label_metrics(fit.cell_w).height,
-                                cx,
-                            ))
+                            .children(self.glyph_overlay(visible_rows, fit, cx))
                             .on_scroll_wheel(cx.listener(
                                 move |this, ev: &gpui::ScrollWheelEvent, _, cx| {
                                     let dy = match ev.delta {
@@ -12229,7 +12272,7 @@ impl Render for Workspace {
                 let (cell_w, cell_h) = (fit.cell_w, fit.cell_h);
                 let mut rows_total = 0usize;
                 let indices = self.glyph_order();
-                let mut placed: Vec<PlacedCell> = Vec::new();
+                let mut visible_rows: Vec<Vec<(usize, usize)>> = Vec::new();
                 let grid: Vec<_> = match self.font() {
                     Some(font) => {
                         // A wide advance or a long name takes more
@@ -12258,7 +12301,12 @@ impl Render for Workspace {
                         // drawn at either edge.
                         let start =
                             self.grid_scroll_row.min(rows_total.saturating_sub(1));
-                        placed = place_cells(&packed, fit, self.grid_viewport, start);
+                        visible_rows = packed
+                            .iter()
+                            .skip(start)
+                            .take(fit.rows)
+                            .cloned()
+                            .collect();
                         packed
                             .into_iter()
                             .skip(start)
@@ -12291,6 +12339,8 @@ impl Render for Workspace {
                     |_, _, _, _| {},
                 )
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full();
                 (
                     self.category_sidebar(cx).into_any_element(),
@@ -12328,11 +12378,7 @@ impl Render for Workspace {
                                                 .children(grid),
                                         ),
                                 )
-                                .children(self.glyph_overlay(
-                                    placed,
-                                    cell_label_metrics(cell_w).height,
-                                    cx,
-                                ))
+                                .children(self.glyph_overlay(visible_rows, fit, cx))
                                 .on_scroll_wheel(cx.listener(
                                     move |this, ev: &gpui::ScrollWheelEvent, _, cx| {
                                         let dy = match ev.delta {
