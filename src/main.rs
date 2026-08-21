@@ -271,6 +271,9 @@ struct GlyphEntry {
     component_names: Arc<Vec<SharedString>>,
     /// Mark label ("red", "green", …) from the glyph lib, if any.
     mark: Option<SharedString>,
+    /// The outline's bounding box, kept so the grid does not walk every
+    /// path element again on every frame.
+    ink: kurbo::Rect,
 }
 
 struct FontModel {
@@ -294,6 +297,9 @@ struct FontModel {
     x_height: Option<f64>,
     cap_height: Option<f64>,
     glyphs: Vec<GlyphEntry>,
+    /// Bumped when the glyph list itself changes (added, removed,
+    /// renamed), so caches keyed on the list can tell.
+    revision: u64,
     dirty: bool,
 }
 
@@ -395,6 +401,9 @@ impl FontModel {
     fn refresh_from_font(&mut self) {
         let font = std::mem::replace(&mut self.font, norad::Font::new());
         let mut fresh = Self::from_font(font, self.source_path.clone());
+        // The glyph list has been rebuilt: anything cached against it
+        // (the grid's order, for one) has to notice.
+        fresh.revision = self.revision.wrapping_add(1);
         fresh.dirty = self.dirty;
         fresh.kerning_dirty = self.kerning_dirty;
         fresh.modified_glyphs = std::mem::take(&mut self.modified_glyphs);
@@ -450,10 +459,16 @@ impl FontModel {
         let mut glyphs: Vec<GlyphEntry> = font
             .default_layer()
             .iter()
-            .map(|glyph| GlyphEntry {
+            .map(|glyph| {
+                let path = Arc::new(glyph_path::glyph_to_bezpath(glyph, &font));
+                GlyphEntry {
                 name: glyph.name().to_string().into(),
                 codepoint: glyph.codepoints.iter().next(),
-                path: Arc::new(glyph_path::glyph_to_bezpath(glyph, &font)),
+                ink: {
+                    use kurbo::Shape as _;
+                    path.bounding_box()
+                },
+                path: path.clone(),
                 contour_path: Arc::new(glyph_path::contours_to_bezpath(glyph)),
                 component_path: Arc::new(glyph_path::components_to_bezpath(glyph, &font)),
                 points: Arc::new(extract_points(glyph)),
@@ -463,6 +478,7 @@ impl FontModel {
                     glyph.components.iter().map(|c| c.base.to_string().into()).collect(),
                 ),
                 mark: t::mark_label(glyph).map(SharedString::from),
+                }
             })
             .collect();
         // Unicode order, unencoded glyphs after, each group by name.
@@ -492,6 +508,7 @@ impl FontModel {
             x_height,
             cap_height,
             glyphs,
+            revision: 0,
             dirty: false,
         }
     }
@@ -510,7 +527,12 @@ impl FontModel {
         );
         let points = Arc::new(extract_points(glyph));
         let anchors = Arc::new(extract_anchors(glyph));
+        let ink = {
+            use kurbo::Shape as _;
+            path.bounding_box()
+        };
         let entry = &mut self.glyphs[glyph_index];
+        entry.ink = ink;
         entry.path = path;
         entry.contour_path = contour_path;
         entry.component_path = component_path;
@@ -1632,6 +1654,15 @@ struct Workspace {
     grid_viewport: gpui::Size<gpui::Pixels>,
     /// The same, for the editor sidebar's mini glyph grid.
     sidebar_viewport: gpui::Size<gpui::Pixels>,
+    /// The glyphs the filters and the search leave, in display order.
+    /// Rebuilt when the inputs change rather than on every frame: it
+    /// filters and sorts the whole font, which is far too much work to
+    /// repeat for a mouse move.
+    glyph_order: Option<Arc<Vec<usize>>>,
+    /// What `glyph_order` was built from.
+    order_key: Option<OrderKey>,
+    /// The search pattern, compiled once instead of per glyph.
+    search_re: Option<regex::Regex>,
     /// First visible row of each grid. Scrolling moves whole rows.
     grid_scroll_row: usize,
     sidebar_scroll_row: usize,
@@ -2071,6 +2102,23 @@ fn cell_label_metrics(cell_w: f32) -> CellLabels {
     }
 }
 
+/// Everything that decides which glyphs show and in what order. When
+/// this is unchanged, the order is too.
+#[derive(Clone, PartialEq)]
+struct OrderKey {
+    query: String,
+    mode: u8,
+    regex: bool,
+    case: bool,
+    sort_unicode: bool,
+    filter: SidebarFilter,
+    /// Structural changes to the font (a glyph added, removed or
+    /// renamed) bump this.
+    revision: u64,
+    /// Masters can differ in what they contain.
+    master: usize,
+}
+
 /// The label block's type size, line height and total height.
 #[derive(Clone, Copy)]
 struct CellLabels {
@@ -2488,6 +2536,7 @@ impl Workspace {
                 || self.multi_selected.contains(name.as_ref())
         };
         let outline = entry.path.clone();
+        let ink = entry.ink;
         let advance = entry.advance;
         let upm = font.units_per_em;
         let labels = cell_label_metrics(cell);
@@ -2544,7 +2593,6 @@ impl Workspace {
                     canvas(
                         move |bounds, _, _| bounds,
                         move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                            use kurbo::Shape as _;
                             let h = f32::from(bounds.size.height) as f64;
                             let w = f32::from(bounds.size.width) as f64;
                             // The web's grid thumbnail box
@@ -2557,7 +2605,6 @@ impl Workspace {
                             // it rather than clipping a descender.
                             const EM_FILL: f64 = 0.65;
                             const BASELINE_FROM_TOP: f64 = 0.8;
-                            let ink = outline.bounding_box();
                             let (ink_x0, ink_w) = if outline.elements().is_empty()
                                 || ink.width() <= 0.0
                             {
@@ -3073,35 +3120,116 @@ impl Workspace {
         if query.is_empty() {
             return true;
         }
-        let unicode_hex = codepoint
-            .map(|c| format!("{:04X}", c as u32))
-            .unwrap_or_default();
-        let chars = codepoint.map(String::from).unwrap_or_default();
-        let haystacks: Vec<&str> = match self.search_mode {
-            1 => vec![name],
-            2 => vec![unicode_hex.as_str(), chars.as_str()],
-            _ => vec![name, unicode_hex.as_str(), chars.as_str()],
+        // Only build the codepoint haystacks the mode actually reads.
+        let hex;
+        let chars;
+        let haystacks: [&str; 3] = match self.search_mode {
+            1 => [name, "", ""],
+            2 => {
+                hex = codepoint
+                    .map(|c| format!("{:04X}", c as u32))
+                    .unwrap_or_default();
+                chars = codepoint.map(String::from).unwrap_or_default();
+                ["", hex.as_str(), chars.as_str()]
+            }
+            _ => {
+                hex = codepoint
+                    .map(|c| format!("{:04X}", c as u32))
+                    .unwrap_or_default();
+                chars = codepoint.map(String::from).unwrap_or_default();
+                [name, hex.as_str(), chars.as_str()]
+            }
+        };
+        let any = |f: &dyn Fn(&str) -> bool| {
+            haystacks.iter().any(|h| !h.is_empty() && f(h))
         };
         if self.search_regex {
-            let pattern = if self.search_case {
-                query.to_string()
-            } else {
-                format!("(?i){query}")
-            };
-            return match regex::Regex::new(&pattern) {
-                Ok(re) => haystacks.iter().any(|h| re.is_match(h)),
+            // Compiled once when the query changed, not per glyph: a
+            // font-wide filter used to build 862 regexes a frame.
+            return match &self.search_re {
+                Some(re) => any(&|h| re.is_match(h)),
                 // A half-typed pattern matches everything, like the web.
-                Err(_) => true,
+                None => true,
             };
         }
         if self.search_case {
-            haystacks.iter().any(|h| h.contains(query))
+            any(&|h| h.contains(query))
         } else {
             let needle = query.to_lowercase();
-            haystacks
-                .iter()
-                .any(|h| h.to_lowercase().contains(&needle))
+            any(&|h| h.to_lowercase().contains(&needle))
         }
+    }
+
+    /// The glyphs to show, filtered and sorted, from cache when the
+    /// inputs have not moved.
+    fn visible_glyphs(&mut self) -> Arc<Vec<usize>> {
+        let key = OrderKey {
+            query: self.search_query.clone(),
+            mode: self.search_mode,
+            regex: self.search_regex,
+            case: self.search_case,
+            sort_unicode: self.sort_unicode,
+            filter: self.sidebar_filter.clone(),
+            revision: self.font().map(|f| f.revision).unwrap_or(0),
+            master: self.project.as_ref().map(|p| p.active).unwrap_or(0),
+        };
+        if self.order_key.as_ref() == Some(&key)
+            && let Some(order) = &self.glyph_order
+        {
+            return order.clone();
+        }
+        let matches = self.sidebar_matches.clone();
+        let order: Vec<usize> = match self.font() {
+            Some(font) => {
+                let mut indices: Vec<usize> = (0..font.glyphs.len())
+                    .filter(|&i| {
+                        let entry = &font.glyphs[i];
+                        matches
+                            .as_ref()
+                            .is_none_or(|m| m.contains(entry.name.as_ref()))
+                            && self.search_matches(
+                                entry.name.as_ref(),
+                                entry.codepoint,
+                            )
+                    })
+                    .collect();
+                if !self.sort_unicode {
+                    // Font order is already unicode order, so the Name
+                    // toggle sorts alphabetically.
+                    indices.sort_by(|a, b| {
+                        font.glyphs[*a].name.cmp(&font.glyphs[*b].name)
+                    });
+                }
+                indices
+            }
+            None => Vec::new(),
+        };
+        let order = Arc::new(order);
+        self.glyph_order = Some(order.clone());
+        self.order_key = Some(key);
+        order
+    }
+
+    /// The cached order, for the panels that only hold `&self`.
+    /// `render` refreshes it once a frame before any of them run.
+    fn glyph_order(&self) -> Arc<Vec<usize>> {
+        self.glyph_order.clone().unwrap_or_default()
+    }
+
+    /// Recompile the search pattern. Called when the query or the
+    /// case flag changes.
+    fn rebuild_search_regex(&mut self) {
+        self.search_re = None;
+        let query = self.search_query.trim();
+        if !self.search_regex || query.is_empty() {
+            return;
+        }
+        let pattern = if self.search_case {
+            query.to_string()
+        } else {
+            format!("(?i){query}")
+        };
+        self.search_re = regex::Regex::new(&pattern).ok();
     }
 
     /// Add every glyph a target-bearing language filter still misses
@@ -3531,14 +3659,20 @@ impl Workspace {
                         "search-regex",
                         ".*",
                         self.search_regex,
-                        |this| this.search_regex = !this.search_regex,
+                        |this| {
+                            this.search_regex = !this.search_regex;
+                            this.rebuild_search_regex();
+                        },
                         cx,
                     ))
                     .child(self.search_toggle(
                         "search-case",
                         "Aa",
                         self.search_case,
-                        |this| this.search_case = !this.search_case,
+                        |this| {
+                            this.search_case = !this.search_case;
+                            this.rebuild_search_regex();
+                        },
                         cx,
                     )),
             )
@@ -3989,16 +4123,9 @@ impl Workspace {
         let fit = self.sidebar_cell_metrics();
         let mut rows_total = 0usize;
         let mut shown = 0usize;
+        let matched = self.glyph_order();
         let cells: Vec<_> = match self.font() {
             Some(font) => {
-                let matched: Vec<usize> = (0..font.glyphs.len())
-                    .filter(|&i| {
-                        self.search_matches(
-                            font.glyphs[i].name.as_ref(),
-                            font.glyphs[i].codepoint,
-                        )
-                    })
-                    .collect();
                 shown = matched.len();
                 let upm = font.units_per_em;
                 let spans: Vec<(usize, usize)> = matched
@@ -4150,14 +4277,20 @@ impl Workspace {
                         "search-regex",
                         ".*",
                         self.search_regex,
-                        |this| this.search_regex = !this.search_regex,
+                        |this| {
+                            this.search_regex = !this.search_regex;
+                            this.rebuild_search_regex();
+                        },
                         cx,
                     ))
                     .child(self.search_toggle(
                         "search-case",
                         "Aa",
                         self.search_case,
-                        |this| this.search_case = !this.search_case,
+                        |this| {
+                            this.search_case = !this.search_case;
+                            this.rebuild_search_regex();
+                        },
                         cx,
                     )),
             )
@@ -11819,6 +11952,9 @@ impl Render for Workspace {
         if self.sidebar_counts.is_none() && self.project.is_some() {
             self.rebuild_sidebar_cache();
         }
+        // One filter-and-sort pass per frame at most, and none at all
+        // when nothing that decides the order has changed.
+        self.visible_glyphs();
         self.refresh_metric_inputs(false, window, cx);
         if matches!(self.mode, Mode::Editor(_)) {
             self.refresh_coord_inputs(false, window, cx);
@@ -11877,31 +12013,12 @@ impl Render for Workspace {
             ),
             _ => {
                 let _query = self.search_query.clone();
-                let matches = self.sidebar_matches.clone();
-                let sort_unicode = self.sort_unicode;
                 let fit = self.grid_cell_metrics();
                 let (cell_w, cell_h) = (fit.cell_w, fit.cell_h);
                 let mut rows_total = 0usize;
+                let indices = self.glyph_order();
                 let grid: Vec<_> = match self.font() {
                     Some(font) => {
-                        let mut indices: Vec<usize> = (0..font.glyphs.len())
-                            .filter(|&i| {
-                                let entry = &font.glyphs[i];
-                                matches
-                                    .as_ref()
-                                    .is_none_or(|m| m.contains(entry.name.as_ref()))
-                                    && self.search_matches(
-                                        entry.name.as_ref(),
-                                        entry.codepoint,
-                                    )
-                            })
-                            .collect();
-                        if !sort_unicode {
-                            // Font order is already unicode order, so
-                            // the Name toggle sorts alphabetically.
-                            indices
-                                .sort_by_key(|&i| font.glyphs[i].name.clone());
-                        }
                         // A wide advance or a long name takes more
                         // than one column, and the last cell on a row
                         // grows into whatever is left, so every row
@@ -12656,6 +12773,7 @@ fn main() {
                             if matches!(ev, gpui_component::input::InputEvent::Change) {
                                 this.search_query =
                                     search.read(cx).value().to_string().to_lowercase();
+                                this.rebuild_search_regex();
                                 // Fewer matches: start both grids at
                                 // the top rather than past the end.
                                 this.grid_scroll_row = 0;
@@ -12686,6 +12804,9 @@ fn main() {
                         grid_cell_size: CELL,
                         grid_viewport: gpui::size(px(0.0), px(0.0)),
                         sidebar_viewport: gpui::size(px(0.0), px(0.0)),
+                        glyph_order: None,
+                        order_key: None,
+                        search_re: None,
                         grid_scroll_row: 0,
                         sidebar_scroll_row: 0,
                         sidebar_tab: 0,
