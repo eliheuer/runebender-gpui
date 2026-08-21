@@ -2063,6 +2063,92 @@ fn invert_icon(color: gpui::Rgba) -> impl IntoElement {
     .h(px(16.0))
 }
 
+/// One cell placed by the packer: which glyph, and the rectangle it
+/// occupies inside the grid's viewport.
+#[derive(Clone, Copy)]
+struct PlacedCell {
+    glyph: usize,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+/// Lay the packed rows out exactly as the wrapping flex will: the
+/// block is centred, cells run left to right with one gap between,
+/// and rows stack by the cell height.
+fn place_cells(
+    packed: &[Vec<(usize, usize)>],
+    fit: GridFit,
+    viewport: gpui::Size<gpui::Pixels>,
+    start_row: usize,
+) -> Vec<PlacedCell> {
+    let rows: Vec<&Vec<(usize, usize)>> =
+        packed.iter().skip(start_row).take(fit.rows).collect();
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let content_w = fit.content_w();
+    let block_h =
+        fit.cell_h * rows.len() as f32 + GRID_GAP * (rows.len() - 1) as f32;
+    let vw: f32 = viewport.width.into();
+    let vh: f32 = viewport.height.into();
+    let x0 = ((vw - content_w) / 2.0).max(0.0);
+    let y0 = ((vh - block_h) / 2.0).max(0.0);
+    let mut out = Vec::new();
+    for (r, row) in rows.iter().enumerate() {
+        let mut x = x0;
+        let y = y0 + r as f32 * (fit.cell_h + GRID_GAP);
+        for &(glyph, span) in row.iter() {
+            let w = fit.cell_w * span as f32 + GRID_GAP * (span - 1) as f32;
+            out.push(PlacedCell {
+                glyph,
+                x,
+                y,
+                w,
+                h: fit.cell_h,
+            });
+            x += w + GRID_GAP;
+        }
+    }
+    out
+}
+
+/// Where a glyph's outline sits inside a cell, as an affine from
+/// design space to the cell's local pixels. Ported from the web's
+/// grid thumbnail box (`glyph_svg.rs`): one vertical scale for every
+/// glyph so a period stays a dot and an M stays tall, each centred on
+/// its own ink, and the em window grows rather than cropping ink that
+/// runs past it.
+fn cell_glyph_transform(
+    ink: kurbo::Rect,
+    empty: bool,
+    advance: f64,
+    upm: f64,
+    w: f64,
+    h: f64,
+) -> Affine {
+    const EM_FILL: f64 = 0.65;
+    const BASELINE_FROM_TOP: f64 = 0.8;
+    let (ink_x0, ink_w) = if empty || ink.width() <= 0.0 {
+        (0.0, advance.max(1.0))
+    } else {
+        (ink.x0, ink.width())
+    };
+    let em_height = upm.max(1.0) / EM_FILL;
+    let em_top = -BASELINE_FROM_TOP * em_height;
+    let (top, bottom) = if empty {
+        (em_top, em_top + em_height)
+    } else {
+        (em_top.min(-ink.y1), (em_top + em_height).max(-ink.y0))
+    };
+    let box_h = (bottom - top).max(1.0);
+    let scale = (w / ink_w).min(h / box_h);
+    let x_offset = (w - ink_w * scale) / 2.0 - ink_x0 * scale;
+    let baseline = (h - box_h * scale) / 2.0 - top * scale;
+    Affine::translate((x_offset, baseline)) * Affine::scale_non_uniform(scale, -scale)
+}
+
 /// A cell's label block: whether it shows at all, its type size, and
 /// the height it takes. Mirrors the web's cell-labels box — 8px sides
 /// and bottom, a 2px gap, both lines the same size.
@@ -2535,10 +2621,6 @@ impl Workspace {
             self.selected == Some(index)
                 || self.multi_selected.contains(name.as_ref())
         };
-        let outline = entry.path.clone();
-        let ink = entry.ink;
-        let advance = entry.advance;
-        let upm = font.units_per_em;
         let labels = cell_label_metrics(cell);
         let (show_labels, label_px, label_h) =
             (labels.show, labels.size, labels.height);
@@ -2550,6 +2632,7 @@ impl Workspace {
 
 
         let mark = entry.mark.as_deref().and_then(t::mark_color);
+        let _ = font;
         div()
             .id(index)
             .w(px(cell))
@@ -2588,68 +2671,11 @@ impl Workspace {
                 }
                 cx.notify();
             }))
-            .child(
-                div().flex_1().child(
-                    canvas(
-                        move |bounds, _, _| bounds,
-                        move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                            let h = f32::from(bounds.size.height) as f64;
-                            let w = f32::from(bounds.size.width) as f64;
-                            // The web's grid thumbnail box
-                            // (glyph_svg.rs): one vertical scale for
-                            // every glyph in the grid, so a period
-                            // stays a dot and an M stays tall, with the
-                            // baseline the same distance down each
-                            // cell. The em window is a minimum, not a
-                            // crop: it grows to hold ink that runs past
-                            // it rather than clipping a descender.
-                            const EM_FILL: f64 = 0.65;
-                            const BASELINE_FROM_TOP: f64 = 0.8;
-                            let (ink_x0, ink_w) = if outline.elements().is_empty()
-                                || ink.width() <= 0.0
-                            {
-                                // Blank glyph: centre its advance.
-                                (0.0, advance.max(1.0))
-                            } else {
-                                (ink.x0, ink.width())
-                            };
-                            let em_height = upm.max(1.0) / EM_FILL;
-                            let em_top = -BASELINE_FROM_TOP * em_height;
-                            let (top, bottom) = if outline.elements().is_empty() {
-                                (em_top, em_top + em_height)
-                            } else {
-                                (
-                                    em_top.min(-ink.y1),
-                                    (em_top + em_height).max(-ink.y0),
-                                )
-                            };
-                            let box_h = (bottom - top).max(1.0);
-                            // "meet": the box fits inside the cell,
-                            // centred on both axes.
-                            let scale = (w / ink_w).min(h / box_h);
-                            let x_offset = (w - ink_w * scale) / 2.0 - ink_x0 * scale;
-                            let baseline =
-                                (h - box_h * scale) / 2.0 - top * scale;
-                            let transform = Affine::translate((x_offset, baseline))
-                                * Affine::scale_non_uniform(scale, -scale);
-                            if let Some(path) = build_fill_path(&outline, transform, bounds.origin)
-                            {
-                                window.paint_path(
-                                    path,
-                                    if selected {
-                                        t::cell_selected_ring()
-                                    } else {
-                                        mark.unwrap_or_else(t::glyph_fill)
-                                    },
-                                );
-                            }
-                        },
-                    )
-                    // A canvas has no intrinsic size; without this it
-                    // lays out at 0x0 and paints nothing.
-                    .size_full(),
-                ),
-            )
+            // The outline itself is painted by one canvas over the
+            // whole grid, not per cell: gpui ends its render pass at
+            // every run of paths, so a canvas per cell meant a pass
+            // switch per cell.
+            .child(div().flex_1())
             .when(show_labels, |el| el.child(
                 // Same inset left, right and bottom, a little air above,
                 // and the two lines close together (the web's
@@ -3208,6 +3234,82 @@ impl Workspace {
         self.glyph_order = Some(order.clone());
         self.order_key = Some(key);
         order
+    }
+
+    /// One canvas for every glyph in a grid, batched by colour. The
+    /// cells themselves are plain divs: gpui breaks its render pass at
+    /// each run of paths, so a canvas per cell cost a pass per cell.
+    fn glyph_overlay(
+        &self,
+        placed: Vec<PlacedCell>,
+        label_h: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let _ = cx;
+        let font = self.font()?;
+        let upm = font.units_per_em;
+        // (colour, path) per ink colour, so the whole grid is a handful
+        // of draws however many cells are on screen.
+        let mut batches: std::collections::BTreeMap<u32, (gpui::Rgba, BezPath)> =
+            std::collections::BTreeMap::new();
+        for cell in placed {
+            let Some(entry) = font.glyphs.get(cell.glyph) else {
+                continue;
+            };
+            if entry.path.elements().is_empty() {
+                continue;
+            }
+            let selected = self.selected == Some(cell.glyph)
+                || self.multi_selected.contains(entry.name.as_ref());
+            let color = if selected {
+                t::cell_selected_ring()
+            } else {
+                entry
+                    .mark
+                    .as_deref()
+                    .and_then(t::mark_color)
+                    .unwrap_or_else(t::glyph_fill)
+            };
+            let transform = cell_glyph_transform(
+                entry.ink,
+                false,
+                entry.advance,
+                upm,
+                cell.w as f64,
+                (cell.h - label_h) as f64,
+            );
+            let place = Affine::translate((cell.x as f64, cell.y as f64)) * transform;
+            let key = u32::from_be_bytes([
+                (color.r * 255.0) as u8,
+                (color.g * 255.0) as u8,
+                (color.b * 255.0) as u8,
+                (color.a * 255.0) as u8,
+            ]);
+            batches
+                .entry(key)
+                .or_insert_with(|| (color, BezPath::new()))
+                .1
+                .extend((place * entry.path.as_ref().clone()).into_iter());
+        }
+        if batches.is_empty() {
+            return None;
+        }
+        Some(
+            canvas(
+                move |bounds, _, _| bounds,
+                move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+                    for (color, path) in batches.values() {
+                        if let Some(p) =
+                            build_fill_path(path, Affine::IDENTITY, bounds.origin)
+                        {
+                            window.paint_path(p, *color);
+                        }
+                    }
+                },
+            )
+            .absolute()
+            .size_full(),
+        )
     }
 
     /// The cached order, for the panels that only hold `&self`.
@@ -4124,6 +4226,7 @@ impl Workspace {
         let mut rows_total = 0usize;
         let mut shown = 0usize;
         let matched = self.glyph_order();
+        let mut placed: Vec<PlacedCell> = Vec::new();
         let cells: Vec<_> = match self.font() {
             Some(font) => {
                 shown = matched.len();
@@ -4145,6 +4248,8 @@ impl Workspace {
                 rows_total = packed.len();
                 let start =
                     self.sidebar_scroll_row.min(rows_total.saturating_sub(1));
+                placed =
+                    place_cells(&packed, fit, self.sidebar_viewport, start);
                 packed
                     .into_iter()
                     .skip(start)
@@ -4342,6 +4447,11 @@ impl Workspace {
                                             .children(cells),
                                     ),
                             )
+                            .children(self.glyph_overlay(
+                                placed,
+                                cell_label_metrics(fit.cell_w).height,
+                                cx,
+                            ))
                             .on_scroll_wheel(cx.listener(
                                 move |this, ev: &gpui::ScrollWheelEvent, _, cx| {
                                     let dy = match ev.delta {
@@ -12079,6 +12189,7 @@ impl Render for Workspace {
                 let (cell_w, cell_h) = (fit.cell_w, fit.cell_h);
                 let mut rows_total = 0usize;
                 let indices = self.glyph_order();
+                let mut placed: Vec<PlacedCell> = Vec::new();
                 let grid: Vec<_> = match self.font() {
                     Some(font) => {
                         // A wide advance or a long name takes more
@@ -12107,6 +12218,7 @@ impl Render for Workspace {
                         // drawn at either edge.
                         let start =
                             self.grid_scroll_row.min(rows_total.saturating_sub(1));
+                        placed = place_cells(&packed, fit, self.grid_viewport, start);
                         packed
                             .into_iter()
                             .skip(start)
@@ -12176,6 +12288,11 @@ impl Render for Workspace {
                                                 .children(grid),
                                         ),
                                 )
+                                .children(self.glyph_overlay(
+                                    placed,
+                                    cell_label_metrics(cell_w).height,
+                                    cx,
+                                ))
                                 .on_scroll_wheel(cx.listener(
                                     move |this, ev: &gpui::ScrollWheelEvent, _, cx| {
                                         let dy = match ev.delta {
