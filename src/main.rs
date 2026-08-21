@@ -237,11 +237,9 @@ struct FontModel {
     /// Kerning changed since load/save.
     kerning_dirty: bool,
     /// codepoint → index into `glyphs`, for the text preview.
-    codepoint_map: std::collections::HashMap<char, usize>,
     /// glyph name → index into `glyphs` (text buffer sorts carry
     /// names, including unencoded ligature glyphs from shaping).
     name_map: std::collections::HashMap<String, usize>,
-    family_name: SharedString,
     source_path: PathBuf,
     units_per_em: f64,
     ascender: f64,
@@ -403,7 +401,6 @@ impl FontModel {
         let descender = info.descender.unwrap_or(-(units_per_em * 0.2));
         let x_height = info.x_height;
         let cap_height = info.cap_height;
-        let family_name = info.family_name.clone().unwrap_or_else(|| "Untitled".into());
 
         let mut glyphs: Vec<GlyphEntry> = font
             .default_layer()
@@ -431,11 +428,6 @@ impl FontModel {
             (None, None) => a.name.cmp(&b.name),
         });
 
-        let codepoint_map = glyphs
-            .iter()
-            .enumerate()
-            .filter_map(|(i, g)| g.codepoint.map(|c| (c, i)))
-            .collect();
         let name_map = glyphs
             .iter()
             .enumerate()
@@ -447,9 +439,7 @@ impl FontModel {
             modified_glyphs: std::collections::HashSet::new(),
             glif_paths: std::collections::HashMap::new(),
             kerning_dirty: false,
-            codepoint_map,
             name_map,
-            family_name: family_name.into(),
             source_path,
             units_per_em,
             ascender,
@@ -653,23 +643,10 @@ impl FontModel {
     }
 
     /// Keep the sibling handle collinear through a smooth point.
-    fn constrain_smooth_neighbor(&mut self, glyph_index: usize, contour: usize, index: usize) {
-        self.edit_glyph(glyph_index, |g| {
-            ops::constrain_smooth_neighbor(g, contour, index)
-        });
-    }
 
     /// Kerning between two glyphs with UFO group fallback.
-    fn kern_value(&self, left: &str, right: &str) -> f64 {
-        ops::kern_value(&self.font, left, right)
-    }
 
     /// Set an exception-level (glyph-to-glyph) kern pair.
-    fn set_kern_pair(&mut self, left: &str, right: &str, value: f64) {
-        ops::set_kern_pair(&mut self.font, left, right, value);
-        self.dirty = true;
-        self.kerning_dirty = true;
-    }
 
     /// Replace a glyph's components with their resolved contours.
     fn decompose(&mut self, glyph_index: usize) -> bool {
@@ -1211,7 +1188,9 @@ fn icon_svg(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
             };
             let w: f32 = bounds.size.width.into();
             let h: f32 = bounds.size.height.into();
-            let pad = 5.0_f64;
+            // Proportional inset: a fixed one shrank the mark inside
+            // bigger tiles and crowded it in small ones.
+            let pad = (w.min(h) as f64) * 0.12;
             let vb = icon.view_box;
             let scale = ((w as f64 - pad * 2.0) / vb.width())
                 .min((h as f64 - pad * 2.0) / vb.height());
@@ -1581,6 +1560,9 @@ struct Workspace {
     /// First visible row of each grid. Scrolling moves whole rows.
     grid_scroll_row: usize,
     sidebar_scroll_row: usize,
+    /// Which editor-sidebar tab is up: 0 glyphs, 1 shapes, 2 axes,
+    /// 3 chat.
+    sidebar_tab: u8,
     /// Target cell size for the editor sidebar's mini grid.
     sidebar_cell_size: f32,
     sidebar_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
@@ -1669,6 +1651,9 @@ struct MeasureOpts {
     spans: bool,
     /// Draw + label left/right side bearings.
     sidebearings: bool,
+    /// Label every curve segment with the size of its own bounding
+    /// box, so a glyph's curves can be compared at a glance.
+    sizes: bool,
     /// Spell lengths as sums of powers of two (`96 = 64+32`).
     popcount: bool,
 }
@@ -1681,6 +1666,7 @@ impl Default for MeasureOpts {
             segments: false,
             spans: false,
             sidebearings: false,
+            sizes: false,
             popcount: true,
         }
     }
@@ -1688,7 +1674,12 @@ impl Default for MeasureOpts {
 
 impl MeasureOpts {
     fn any(&self) -> bool {
-        self.colorize || self.handles || self.segments || self.spans || self.sidebearings
+        self.colorize
+            || self.handles
+            || self.segments
+            || self.spans
+            || self.sidebearings
+            || self.sizes
     }
 
     fn label(&self, value: i64) -> String {
@@ -1927,6 +1918,9 @@ const MINI_CELL: f32 = 44.0;
 /// Height of every bottom bar, so the ones in neighbouring columns
 /// line up across the divider.
 const BOTTOM_BAR_H: f32 = 28.0;
+/// Square buttons in a bottom bar, sized so the space above, below and
+/// beside them is the same.
+const BAR_BUTTON: f32 = 20.0;
 /// Wheel zoom response and limits, matching the web editor.
 const ZOOM_PER_PIXEL: f64 = 0.0015;
 const ZOOM_MIN: f64 = 1e-3;
@@ -3317,19 +3311,28 @@ impl Workspace {
                     .flex_col()
                     .child(self.section(cx, "Categories", categories))
                     .child(self.section(cx, "Languages", languages))
-                    .child(self.section(cx, "Filters", filters))
-                    .children(self.axes_section(cx)),
+                    .child(self.section(cx, "Filters", filters)),
             )
+            // Mark colours sit at the foot of the sidebar, beside the
+            // glyphs they apply to, the way the web places them.
+            .child(self.mark_colors_panel(cx))
     }
 
     /// Right tile: details of the selected glyph, like
     /// runebender-web's GlyphInfoSidebar.
     fn glyph_info_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
+        // Read-only facts read as one line each, label left and value
+        // right. A stack of big accent-green headings for one-word
+        // values was most of what made this panel shout.
         let row = |header: &'static str, value: SharedString| {
             div()
+                .h(px(18.0))
                 .flex()
-                .flex_col()
-                .child(div().text_sm().text_color(t::info_header()).child(header))
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .text_xs()
+                .child(div().text_color(t::text_muted()).child(header))
                 .child(div().text_sm().text_color(t::text()).child(value))
         };
         let mut panel = div().flex().flex_col().gap_2();
@@ -3362,8 +3365,8 @@ impl Workspace {
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .child(div().text_sm().text_color(t::info_header()).child(header))
+                .gap_0p5()
+                .child(div().text_xs().text_color(t::text_muted()).child(header))
                 .child(gpui_component::input::Input::new(input))
         };
         let pair_row = |header: &'static str,
@@ -3372,8 +3375,8 @@ impl Workspace {
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .child(div().text_sm().text_color(t::info_header()).child(header))
+                .gap_0p5()
+                .child(div().text_xs().text_color(t::text_muted()).child(header))
                 .child(
                     div()
                         .flex()
@@ -3395,11 +3398,11 @@ impl Workspace {
                 .flex_1()
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap_0p5()
                 .child(
                     div()
-                        .text_sm()
-                        .text_color(t::info_header())
+                        .text_xs()
+                        .text_color(t::text_muted())
                         .child(label_text),
                 )
                 .child(gpui_component::input::Input::new(input))
@@ -3472,15 +3475,28 @@ impl Workspace {
                         }
                         // Fit the em box (with the glyph's actual
                         // advance) into the panel with padding.
-                        let em_h = (ascender - descender).max(1.0);
-                        let em_w = advance.max(em_h * 0.3);
-                        let scale = ((w as f64 * 0.94) / em_w)
-                            .min((h as f64 * 0.94) / em_h);
-                        let origin_x =
-                            (w as f64 - em_w * scale) / 2.0;
-                        let baseline = (h as f64
-                            + (ascender + descender) * scale)
-                            / 2.0;
+                        use kurbo::Shape as _;
+                        let ink = {
+                            let mut b = outline.bounding_box();
+                            if !components.elements().is_empty() {
+                                b = b.union(components.bounding_box());
+                            }
+                            b
+                        };
+                        let (ink_w, ink_h, ink_cx, ink_cy) =
+                            if ink.width() > 0.0 && ink.height() > 0.0 {
+                                (ink.width(), ink.height(), ink.center().x, ink.center().y)
+                            } else {
+                                // A blank glyph still needs a box: use
+                                // its advance and the em.
+                                let em_h = (ascender - descender).max(1.0);
+                                let em_w = advance.max(em_h * 0.3);
+                                (em_w, em_h, em_w / 2.0, (ascender + descender) / 2.0)
+                            };
+                        let scale = ((w as f64 * 0.88) / ink_w)
+                            .min((h as f64 * 0.88) / ink_h);
+                        let origin_x = w as f64 / 2.0 - ink_cx * scale;
+                        let baseline = h as f64 / 2.0 + ink_cy * scale;
                         let view = Affine::translate((origin_x, baseline))
                             * Affine::scale_non_uniform(scale, -scale);
                         let to_screen = |x: f64, y: f64| {
@@ -3545,8 +3561,7 @@ impl Workspace {
                         if any_handles && let Ok(p) = handles.build() {
                             window.paint_path(p, t::handle_line());
                         }
-                        use kurbo::Shape as _;
-                        let mut ring =
+                        let ring =
                             |center: Point<gpui::Pixels>,
                              r: f32,
                              color: gpui::Rgba,
@@ -3625,11 +3640,13 @@ impl Workspace {
         // One row, always: each swatch sits in an equal-width column,
         // so the spacing between them and the margin at both ends stay
         // the same at any panel width.
-        const SWATCH: f32 = 18.0;
-        let slot = |child: gpui::Stateful<gpui::Div>| {
-            div().flex_1().flex().justify_center().child(child)
-        };
-        let mut swatches = div().flex().items_center().w_full();
+        const SWATCH: f32 = 14.0;
+        // (bar height - swatch) / 2, so the ring of space around the
+        // row is the same on every side.
+        const INSET: f32 = (BOTTOM_BAR_H - SWATCH) / 2.0;
+        let slot = |child: gpui::Stateful<gpui::Div>| child;
+        let mut swatches =
+            div().flex().items_center().justify_between().w_full();
         for (index, (label, color)) in t::mark_palette().into_iter().enumerate() {
             let is_current = current.as_deref() == Some(label.as_str());
             swatches = swatches.child(slot(
@@ -3678,7 +3695,17 @@ impl Workspace {
                     cx.notify();
                 })),
         ));
-        self.section(cx, "Colors", swatches)
+        // No header, no collapse: it is one row of swatches that is
+        // always up. It carries its own top rule since it is the last
+        // thing in the sidebar.
+        div()
+            .h(px(BOTTOM_BAR_H))
+            .flex()
+            .items_center()
+            .border_t_1()
+            .border_color(t::panel_outline())
+            .px(px(INSET))
+            .child(swatches)
     }
 
     /// Set or clear the mark color on every selected glyph.
@@ -3703,7 +3730,7 @@ impl Workspace {
     /// Editor sidebar: search + scrollable mini glyph grid, so glyph
     /// switching doesn't require leaving the editor.
     fn editor_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let query = self.search_query.clone();
+        let _query = self.search_query.clone();
         let fit = self.sidebar_cell_metrics();
         let mut rows_total = 0usize;
         let mut shown = 0usize;
@@ -3737,11 +3764,97 @@ impl Workspace {
             }
             None => Vec::new(),
         };
+        // The sidebar's own tabs, like the web's editor sidebar: the
+        // glyph list, and the designspace axes.
+        let has_axes = !self.axis_sliders.is_empty();
+        let tab = |id: &'static str, label: &'static str, which: u8, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .h(px(20.0))
+                .px_2()
+                .flex()
+                .items_center()
+                .rounded_sm()
+                .text_xs()
+                .cursor_pointer()
+                .when(self.sidebar_tab == which, |el| {
+                    el.border_1().border_color(t::accent()).text_color(t::accent())
+                })
+                .when(self.sidebar_tab != which, |el| {
+                    el.border_1()
+                        .border_color(t::cell_border())
+                        .text_color(t::text_muted())
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.sidebar_tab = which;
+                    cx.notify();
+                }))
+        };
+        // An axis-less font has no Axes tab, so a stale selection
+        // falls back to the glyph list.
+        let tab_now = if !has_axes && self.sidebar_tab == 2 {
+            0
+        } else {
+            self.sidebar_tab
+        };
+        let on_glyphs = tab_now == 0;
         div()
             .size_full()
             .flex()
             .flex_col()
             .min_h(px(0.0))
+            .child(
+                div()
+                    .px_2()
+                    .pt_2()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(tab("sidebar-tab-glyphs", "Glyphs", 0, cx))
+                    .child(tab("sidebar-tab-shapes", "Shapes", 1, cx))
+                    .when(has_axes, |el| {
+                        el.child(tab("sidebar-tab-axes", "Axes", 2, cx))
+                    })
+                    .child(tab("sidebar-tab-chat", "Chat", 3, cx)),
+            )
+            .when(tab_now == 1, |el| {
+                el.child(
+                    div()
+                        .id("sidebar-shapes")
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .overflow_y_scroll()
+                        .child(self.sidebar_shapes(cx)),
+                )
+            })
+            .when(tab_now == 2, |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .p_2()
+                        .children(self.axes_section(cx)),
+                )
+            })
+            .when(tab_now == 3, |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .p_2()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(t::text_muted())
+                        .child("Chat")
+                        .child(
+                            "A place for an assistant that can see the                              glyph. Not wired up yet.",
+                        ),
+                )
+            })
+            .when(on_glyphs, |el| el
             .child(
                 div()
                     .p_2()
@@ -3870,7 +3983,117 @@ impl Workspace {
                     .children(self.sidebar_slider.as_ref().map(|slider| {
                         div().w(px(96.0)).child(flat_slider(slider, cx))
                     })),
-            )
+            ))
+            // Colours stay put whichever tab is up.
+            .child(self.mark_colors_panel(cx))
+    }
+
+    /// The Shapes tab: one row per contour and per component in the
+    /// open glyph, like the web's sidebar. A row selects what it names.
+    fn sidebar_shapes(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let mut list = div().flex().flex_col().gap_1().p_2();
+        let (Mode::Editor(index), Some(font)) = (&self.mode, self.font()) else {
+            return list.child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("No glyph open."),
+            );
+        };
+        let index = *index;
+        let entry = &font.glyphs[index];
+        let Some(glyph) = font.font.get_glyph(entry.name.as_ref()) else {
+            return list;
+        };
+        let row = |id: (&'static str, usize),
+                   mark: &'static str,
+                   label: SharedString,
+                   detail: SharedString,
+                   active: bool| {
+            div()
+                .id(id)
+                .h(px(20.0))
+                .px_1()
+                .flex()
+                .items_center()
+                .gap_2()
+                .rounded_sm()
+                .text_xs()
+                .cursor_pointer()
+                .when(active, |el| {
+                    el.bg(t::cell_selected_bg()).text_color(t::text())
+                })
+                .when(!active, |el| el.text_color(t::text_muted()))
+                .child(div().w(px(10.0)).child(mark))
+                .child(div().flex_1().child(label))
+                .child(div().text_color(t::text_muted()).child(detail))
+        };
+
+        let counts: Vec<usize> =
+            glyph.contours.iter().map(|c| c.points.len()).collect();
+        for (ci, points) in counts.iter().copied().enumerate() {
+            let selected = self
+                .editor
+                .selected
+                .iter()
+                .any(|(contour, _)| *contour == ci);
+            list = list.child(
+                row(
+                    ("shape-contour", ci),
+                    "◌",
+                    format!("contour {}", ci + 1).into(),
+                    format!("{points} nodes").into(),
+                    selected,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let Mode::Editor(index) = this.mode else { return };
+                    this.editor.selected_component = None;
+                    this.editor.selected = this
+                        .font()
+                        .map(|f| {
+                            f.glyphs[index]
+                                .points
+                                .iter()
+                                .filter(|p| p.contour == ci)
+                                .map(|p| (p.contour, p.index))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    cx.notify();
+                })),
+            );
+        }
+        let bases: Vec<String> = glyph
+            .components
+            .iter()
+            .map(|c| c.base.to_string())
+            .collect();
+        for (i, base) in bases.into_iter().enumerate() {
+            let selected = self.editor.selected_component == Some(i);
+            list = list.child(
+                row(
+                    ("shape-component", i),
+                    "◇",
+                    base.into(),
+                    "component".into(),
+                    selected,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.editor.selected.clear();
+                    this.editor.selected_component = Some(i);
+                    cx.notify();
+                })),
+            );
+        }
+        if counts.is_empty() && glyph.components.is_empty() {
+            list = list.child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("No shapes in this glyph yet."),
+            );
+        }
+        list
     }
 
     /// The glyph editor: metrics lines, stroked outline over a dim
@@ -4398,10 +4621,10 @@ impl Workspace {
 
     /// Measure-tool HUD layer toggles (web SelectPanel): only shown
     /// while the Measure tool is active.
+    /// Measure overlays. These are view options, not a tool mode: the
+    /// web keeps them in the sidebar and honours them whatever tool is
+    /// up, so a length stays on screen while you edit.
     fn measure_section(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        if self.editor.tool != Tool::Measure {
-            return None;
-        }
         let toggle = |id: &'static str,
                       label: &'static str,
                       active: bool,
@@ -4451,6 +4674,9 @@ impl Workspace {
                 cx,
                 |o| o.sidebearings = !o.sidebearings,
             ))
+            .child(toggle("ms-sizes", "segment sizes", o.sizes, cx, |o| {
+                o.sizes = !o.sizes
+            }))
             .child(toggle("ms-popcount", "popcount sums", o.popcount, cx, |o| {
                 o.popcount = !o.popcount
             }))
@@ -4462,6 +4688,7 @@ impl Workspace {
                 o.segments = true;
                 o.spans = true;
                 o.sidebearings = true;
+                o.sizes = true;
             }))
             .child(toggle("ms-none", "all off", false, cx, |o| {
                 o.colorize = false;
@@ -4469,6 +4696,7 @@ impl Workspace {
                 o.segments = false;
                 o.spans = false;
                 o.sidebearings = false;
+                o.sizes = false;
             }));
         Some(self.section(cx, "Measure", body))
     }
@@ -5108,11 +5336,27 @@ impl Workspace {
         // paint closure maps them to the screen and draws dimension
         // lines + labels.
         let measure_opts = self.measure_opts;
+        // Every segment's own bounding box, for the size labels.
+        let segment_boxes: Vec<kurbo::Rect> = if self.measure_opts.sizes {
+            use kurbo::Shape as _;
+            font.font
+                .get_glyph(entry.name.as_ref())
+                .map(|g| {
+                    runebender_core::segment_ops::segments(g)
+                        .into_iter()
+                        .map(|hit| hit.seg.bounding_box())
+                        .filter(|b| b.width() >= 1.0 || b.height() >= 1.0)
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let measure_hud: Option<(
             Vec<runebender_core::measure::ColoredStroke>,
             Vec<runebender_core::measure::Measurement>,
             Option<runebender_core::measure::SideBearings>,
-        )> = if self.editor.tool == Tool::Measure && measure_opts.any() {
+        )> = if measure_opts.any() && self.editor.tool != Tool::Preview {
             font.font.get_glyph(entry.name.as_ref()).map(|g| {
                 use runebender_core::measure;
                 use runebender_core::model::workspace::Contour as WContour;
@@ -5332,7 +5576,7 @@ impl Workspace {
                                 let c1 = inv * kurbo::Point::new(bw as f64, bh as f64);
                                 let (min_x, max_x) = (c0.x.min(c1.x), c0.x.max(c1.x));
                                 let (min_y, max_y) = (c0.y.min(c1.y), c0.y.max(c1.y));
-                                let mut level = |spacing: f64,
+                                let level = |spacing: f64,
                                                  skip_every: u64,
                                                  width_px: f32,
                                                  color: gpui::Rgba,
@@ -5452,7 +5696,7 @@ impl Workspace {
                                 ((sort_top - sort_bottom).max(1.0) * zoom_now).max(1.0);
                             let mark = (sort_h_px * 0.05).clamp(1.5, 24.0);
                             let marks_visible = mark >= 3.0;
-                            let mut line = |a: Point<gpui::Pixels>,
+                            let line = |a: Point<gpui::Pixels>,
                                             b: Point<gpui::Pixels>,
                                             color: gpui::Rgba,
                                             window: &mut Window| {
@@ -5604,7 +5848,7 @@ impl Workspace {
                                 let mut any_handles = false;
                                 let mut current = kurbo::Point::ZERO;
                                 let mut start = kurbo::Point::ZERO;
-                                let mut hline2 = |a: kurbo::Point,
+                                let hline2 = |a: kurbo::Point,
                                                   b: kurbo::Point,
                                                   pb: &mut PathBuilder,
                                                   any: &mut bool| {
@@ -6355,7 +6599,7 @@ impl Workspace {
                                     let line_h = px(15.0);
                                     let label_font = window.text_style().font();
                                     let mut placed: Vec<kurbo::Rect> = Vec::new();
-                                    let mut draw_label =
+                                    let draw_label =
                                         |window: &mut gpui::Window,
                                          cx: &mut gpui::App,
                                          a: kurbo::Point,
@@ -6363,8 +6607,10 @@ impl Workspace {
                                          text: String,
                                          color: gpui::Rgba,
                                          placed: &mut Vec<kurbo::Rect>| {
+                                            let label_text =
+                                                gpui::SharedString::from(text);
                                             let run = gpui::TextRun {
-                                                len: text.len(),
+                                                len: label_text.len(),
                                                 font: label_font.clone(),
                                                 color: color.into(),
                                                 background_color: None,
@@ -6372,7 +6618,7 @@ impl Workspace {
                                                 strikethrough: None,
                                             };
                                             let line = window.text_system().shape_line(
-                                                gpui::SharedString::from(text),
+                                                label_text.clone(),
                                                 label_px,
                                                 std::slice::from_ref(&run),
                                                 None,
@@ -6443,24 +6689,56 @@ impl Workspace {
                                                 chosen.x + w,
                                                 chosen.y + h,
                                             ));
-                                            let halo = kurbo::Rect::new(
-                                                chosen.x - 3.0,
-                                                chosen.y - 1.0,
-                                                chosen.x + w + 3.0,
-                                                chosen.y + h + 1.0,
-                                            );
-                                            let mut halo_color = t::measure_halo();
+                                            // A casing around the
+                                            // numerals, not a filled
+                                            // box: the web strokes each
+                                            // glyph in the halo colour
+                                            // before filling it. gpui
+                                            // has no stroked text, so
+                                            // the line is painted eight
+                                            // times around the centre
+                                            // instead, which reads the
+                                            // same and keeps the canvas
+                                            // visible behind the label.
+                                            let mut halo_color = t::halo();
                                             halo_color.a *= t32;
-                                            window.paint_quad(gpui::fill(
-                                                Bounds::new(
-                                                    gp(halo.origin()),
-                                                    gpui::size(
-                                                        px(halo.width() as f32),
-                                                        px(halo.height() as f32),
-                                                    ),
-                                                ),
-                                                halo_color,
-                                            ));
+                                            let halo_run = gpui::TextRun {
+                                                len: run.len,
+                                                font: label_font.clone(),
+                                                color: halo_color.into(),
+                                                background_color: None,
+                                                underline: None,
+                                                strikethrough: None,
+                                            };
+                                            let halo_line =
+                                                window.text_system().shape_line(
+                                                    label_text.clone(),
+                                                    label_px,
+                                                    std::slice::from_ref(&halo_run),
+                                                    None,
+                                                );
+                                            for (ox, oy) in [
+                                                (-1.0, 0.0),
+                                                (1.0, 0.0),
+                                                (0.0, -1.0),
+                                                (0.0, 1.0),
+                                                (-1.0, -1.0),
+                                                (1.0, -1.0),
+                                                (-1.0, 1.0),
+                                                (1.0, 1.0),
+                                            ] {
+                                                let _ = halo_line.paint(
+                                                    gp(kurbo::Point::new(
+                                                        chosen.x + ox,
+                                                        chosen.y + oy,
+                                                    )),
+                                                    line_h,
+                                                    gpui::TextAlign::Left,
+                                                    None,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
                                             let _ = line.paint(
                                                 gp(chosen),
                                                 line_h,
@@ -6525,6 +6803,62 @@ impl Workspace {
                                             b,
                                             measure_opts.label(m.length),
                                             color,
+                                            &mut placed,
+                                        );
+                                    }
+                                    // Segment sizes: each curve's own
+                                    // box, labelled at its centre, so
+                                    // the whole glyph can be read at
+                                    // once instead of one selection at
+                                    // a time.
+                                    for b in segment_boxes.iter() {
+                                        let c0 = transform
+                                            * kurbo::Point::new(b.x0, b.y0);
+                                        let c1 = transform
+                                            * kurbo::Point::new(b.x1, b.y1);
+                                        let rect = kurbo::Rect::from_points(c0, c1);
+                                        let mut frame = PathBuilder::stroke(px(1.0));
+                                        let corners = [
+                                            (rect.x0, rect.y0),
+                                            (rect.x1, rect.y0),
+                                            (rect.x1, rect.y1),
+                                            (rect.x0, rect.y1),
+                                        ];
+                                        frame.move_to(gp(kurbo::Point::new(
+                                            corners[0].0,
+                                            corners[0].1,
+                                        )));
+                                        for (x, y) in corners.iter().skip(1) {
+                                            frame.line_to(gp(kurbo::Point::new(*x, *y)));
+                                        }
+                                        frame.line_to(gp(kurbo::Point::new(
+                                            corners[0].0,
+                                            corners[0].1,
+                                        )));
+                                        let color = fade(t::metric_quiet(), 1.0);
+                                        if let Ok(p) = frame.build() {
+                                            window.paint_path(p, color);
+                                        }
+                                        let text = format!(
+                                            "{:.0}×{:.0}",
+                                            b.width(),
+                                            b.height()
+                                        );
+                                        let mid_left = kurbo::Point::new(
+                                            rect.x0,
+                                            rect.center().y,
+                                        );
+                                        let mid_right = kurbo::Point::new(
+                                            rect.x1,
+                                            rect.center().y,
+                                        );
+                                        draw_label(
+                                            window,
+                                            cx,
+                                            mid_left,
+                                            mid_right,
+                                            text,
+                                            fade(t::text(), 1.0),
                                             &mut placed,
                                         );
                                     }
@@ -8286,6 +8620,43 @@ impl Workspace {
 
     /// Bounds of whatever is selected: points, else the component,
     /// else the anchor.
+    /// The true bounding box of the selected segments: the curve's own
+    /// extrema, not the box around its control points. A cubic's
+    /// handles usually sit outside the ink, so the point box overstates
+    /// how tall or wide a curve actually is — this is the number you
+    /// want when matching one curve's size against another.
+    ///
+    /// `None` unless the selection covers whole segments.
+    fn selected_segment_bounds(&self) -> Option<(usize, kurbo::Rect)> {
+        use kurbo::Shape as _;
+        let Mode::Editor(index) = self.mode else {
+            return None;
+        };
+        if self.editor.selected.is_empty() {
+            return None;
+        }
+        let font = self.font()?;
+        let glyph = font.font.get_glyph(font.glyphs[index].name.as_ref())?;
+        let mut bounds: Option<kurbo::Rect> = None;
+        let mut count = 0usize;
+        for hit in runebender_core::segment_ops::segments(glyph) {
+            if !hit
+                .point_ids()
+                .iter()
+                .all(|id| self.editor.selected.contains(id))
+            {
+                continue;
+            }
+            count += 1;
+            let b = hit.seg.bounding_box();
+            bounds = Some(match bounds {
+                Some(acc) => acc.union(b),
+                None => b,
+            });
+        }
+        bounds.map(|b| (count, b))
+    }
+
     fn selection_bounds(&self) -> Option<kurbo::Rect> {
         let Mode::Editor(index) = self.mode else { return None };
         let font = self.font()?;
@@ -8552,6 +8923,31 @@ impl Workspace {
                 }),
         );
         let _ = single;
+        // A whole segment selected: report the curve's real size, which
+        // is what you compare when matching one curve to another.
+        if let Some((segments, r)) = self.selected_segment_bounds() {
+            let label = if segments == 1 {
+                "Segment".to_string()
+            } else {
+                format!("{segments} segments")
+            };
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .text_sm()
+                    .child(
+                        div().text_color(t::text_muted()).child(label),
+                    )
+                    .child(
+                        div().text_color(t::text()).child(SharedString::from(
+                            format!("{:.0} × {:.0}", r.width(), r.height()),
+                        )),
+                    ),
+            );
+        }
         let has_selection = !self.editor.selected.is_empty()
             || self.editor.selected_component.is_some()
             || !self.editor.selected_anchors.is_empty();
@@ -10499,7 +10895,7 @@ impl Workspace {
         // right.
         if !matches!(self.mode, Mode::Editor(_)) && self.project.is_some() {
             let total = self.font().map(|f| f.glyphs.len()).unwrap_or(0);
-            let query = self.search_query.clone();
+            let _query = self.search_query.clone();
             let shown = self
                 .font()
                 .map(|f| {
@@ -10528,8 +10924,8 @@ impl Workspace {
             let bar_button = |id: &'static str, label: &'static str| {
                 div()
                     .id(id)
-                    .w(px(TAB_H))
-                    .h(px(TAB_H))
+                    .w(px(BAR_BUTTON))
+                    .h(px(BAR_BUTTON))
                     .rounded_sm()
                     .border_1()
                     .border_color(t::cell_border())
@@ -10546,7 +10942,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap_1()
-                .px_1p5()
+                .px(px((BOTTOM_BAR_H - BAR_BUTTON) / 2.0))
                 .bg(t::panel_bg())
                 .border_t_1()
                 .border_color(t::cell_border())
@@ -11254,7 +11650,7 @@ impl Render for Workspace {
                     .into_any_element(),
             ),
             _ => {
-                let query = self.search_query.clone();
+                let _query = self.search_query.clone();
                 let matches = self.sidebar_matches.clone();
                 let sort_unicode = self.sort_unicode;
                 let fit = self.grid_cell_metrics();
@@ -11400,18 +11796,11 @@ impl Render for Workspace {
                     .child(self.background_section(cx))
                     .child(self.layers_section(cx))
                     .children(self.axes_section(cx))
-                    .child(self.mark_colors_panel(cx))
             })
             .when(!in_editor, |el| {
                 el.child(self.glyph_info_panel(cx))
                     .child(self.layers_section(cx))
                     .child(self.glyph_preview_panel())
-                    .child(
-                        div()
-                            .border_t_1()
-                            .border_color(t::panel_outline())
-                            .child(self.mark_colors_panel(cx)),
-                    )
             });
         let content = div()
             .flex_1()
@@ -12010,6 +12399,7 @@ fn main() {
                         sidebar_viewport: gpui::size(px(0.0), px(0.0)),
                         grid_scroll_row: 0,
                         sidebar_scroll_row: 0,
+                        sidebar_tab: 0,
                         sidebar_cell_size: MINI_CELL,
                         sidebar_slider: None,
                         cell_slider: None,
@@ -12465,7 +12855,9 @@ mod tests {
         // Drag the incoming handle downward; the outgoing must rotate
         // to stay collinear through (100,100).
         model.set_points(index, &[((c, incoming), (60.0, 80.0))]);
-        model.constrain_smooth_neighbor(index, c, incoming);
+        model.edit_glyph(index, |g| {
+            ops::constrain_smooth_neighbor(g, c, incoming)
+        });
         let pts = &model.glyphs[index].points;
         let out_pt = pts.iter().find(|p| p.contour == c && p.index == outgoing).unwrap();
         // Collinearity: cross product of (anchor-incoming) and
@@ -12509,12 +12901,11 @@ mod tests {
         // Group fallback resolves (VirtuaGrotesk has kern groups); the
         // exact value doesn't matter, just that lookup doesn't panic
         // and exceptions override.
-        let base = model.kern_value("A", "V");
-        model.set_kern_pair("A", "V", base - 14.0);
-        assert_eq!(model.kern_value("A", "V"), base - 14.0);
-        assert!(model.dirty);
+        let base = ops::kern_value(&model.font, "A", "V");
+        ops::set_kern_pair(&mut model.font, "A", "V", base - 14.0);
+        assert_eq!(ops::kern_value(&model.font, "A", "V"), base - 14.0);
         // Unrelated pair unaffected by the exception.
-        let _ = model.kern_value("o", "o");
+        let _ = ops::kern_value(&model.font, "o", "o");
     }
 
     #[test]

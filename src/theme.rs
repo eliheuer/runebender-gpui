@@ -122,9 +122,6 @@ pub fn text_muted() -> Rgba {
 pub fn status_yellow() -> Rgba {
     c(theme().role("warning"))
 }
-pub fn info_header() -> Rgba {
-    accent()
-}
 
 // ---- glyph rendering ----
 
@@ -227,7 +224,11 @@ pub fn install_component_theme(cx: &mut gpui::App) {
     config.colors.background = Some(hex(t.surface("app")));
     config.colors.foreground = Some(hex(t.text("primary")));
     config.colors.border = Some(hex(t.surface("outline")));
-    config.colors.input = Some(hex(t.surface("outline")));
+    // Inputs take both their border and their fill from this one
+    // token in dark mode (the fill is it, mixed 30% toward
+    // transparent), so the outline surface made a field that sat too
+    // bright against the panel. The divider surface is a step darker.
+    config.colors.input = Some(hex(t.surface("divider")));
     config.colors.primary = Some(hex(t.role("accent")));
     config.colors.primary_foreground = Some(hex(t.surface("app")));
     config.colors.accent = Some(hex(t.surface("buttonHover")));
@@ -370,10 +371,6 @@ pub fn point_selected_ring() -> Rgba {
     c(theme().role("selection"))
 }
 
-/// Dark halo behind measurement labels so they read over any outline.
-pub fn measure_halo() -> Rgba {
-    Rgba { r: 0.047, g: 0.047, b: 0.047, a: 0.85 }
-}
 
 // ---- anchors ----
 
