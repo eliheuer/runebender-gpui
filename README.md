@@ -51,6 +51,30 @@ crates.io) because the editor shell uses
 [gpui-component](https://github.com/longbridge/gpui-component),
 which tracks Zed main.
 
+## The browser build
+
+An experimental wasm build runs at <https://runebender.org/gpui/>.
+It needs a different toolchain from the native one:
+
+```sh
+RUSTUP_TOOLCHAIN=nightly-2026-08-01 \
+CARGO_UNSTABLE_BUILD_STD="std,panic_abort" \
+trunk build --release --public-url /gpui/
+```
+
+Two constraints decide that line. `gpui_web` needs wasm atomics and
+shared memory (see `.cargo/config.toml`), and the prebuilt
+`wasm32-unknown-unknown` std has neither, so std must be rebuilt:
+that is `-Z build-std`, which is nightly only. The nightly must also
+be newer than the pinned stable, because gpui uses library features
+stable already has. Install `rust-src` and the wasm target for
+whichever nightly you use.
+
+To deploy, copy `dist/` into runebender-dot-org's `public/gpui/`,
+keeping `coi-serviceworker.min.js` and adding its script tag to the
+top of `<head>` — GitHub Pages cannot send the COOP/COEP headers
+that shared memory requires, so the worker sets them client-side.
+
 ## Status
 
 Close to feature parity with the previous web editor.
