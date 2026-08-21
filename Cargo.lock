@@ -6141,6 +6141,7 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "image",
  "include_dir",
  "js-sys",
  "kurbo 0.13.1",
@@ -6151,6 +6152,7 @@ dependencies = [
  "runebender-core",
  "serde",
  "serde_json",
+ "tiny-skia",
  "web-sys",
  "web-time",
 ]

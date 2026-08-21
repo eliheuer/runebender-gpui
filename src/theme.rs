@@ -243,6 +243,10 @@ pub fn install_component_theme(cx: &mut gpui::App) {
     config.colors.caret = Some(hex(t.text("primary")));
 
     config.colors.ring = Some(hex(t.role("accent")));
+    // The divider being dragged lights up: the resizable handles take
+    // their idle colour from `border` and their active one from
+    // `drag_border`.
+    config.colors.drag_border = Some(hex(t.role("accent")));
 
     // A light palette needs the library in light mode, or widgets that
     // branch on the mode (not just on the colours) come out wrong.
@@ -354,6 +358,18 @@ pub fn popcount_tier(pc: u32) -> Rgba {
     }
 }
 
+/// The dark casing drawn under points and labels so they keep an edge
+/// over an outline or the curvature comb (web HALO).
+pub fn halo() -> Rgba {
+    c(theme().role("halo"))
+}
+
+/// The ring around a selected point (web `pointSelectedOuter`, which
+/// the app feeds from the selection colour).
+pub fn point_selected_ring() -> Rgba {
+    c(theme().role("selection"))
+}
+
 /// Dark halo behind measurement labels so they read over any outline.
 pub fn measure_halo() -> Rgba {
     Rgba { r: 0.047, g: 0.047, b: 0.047, a: 0.85 }
@@ -361,6 +377,11 @@ pub fn measure_halo() -> Rgba {
 
 // ---- anchors ----
 
+/// Anchors are pink, so they read as their own kind of thing beside
+/// on-curve and off-curve points (web ANCHOR_MARK_PINK).
 pub fn anchor() -> Rgba {
-    c(theme().role("danger"))
+    theme()
+        .mark("pink")
+        .map(c)
+        .unwrap_or_else(|| c(theme().role("danger")))
 }

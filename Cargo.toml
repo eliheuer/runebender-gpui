@@ -20,6 +20,12 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 gpui-base = { git = "https://github.com/longbridge/gpui-component" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
 kurbo = "0.13.1"
+# CPU path rasterizer, for the preview's blur: gpui blurs box shadows
+# and nothing else, so a real blurred image has to be rendered here.
+tiny-skia = "0.11"
+# Same version gpui and img2bez already pull, so `image::Frame` is the
+# type gpui's RenderImage wants.
+image = { version = "0.25", default-features = false }
 norad = "0.18"
 notify = "8"
 futures = "0.3"

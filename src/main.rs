@@ -5,6 +5,7 @@
 //! started as a point of comparison against
 //! [runebender-xilem](https://github.com/eliheuer/runebender-xilem).
 
+mod blur;
 mod glyph_path;
 mod theme;
 #[cfg(target_family = "wasm")]
@@ -245,6 +246,10 @@ struct FontModel {
     units_per_em: f64,
     ascender: f64,
     descender: f64,
+    /// Optional guides: drawn only when fontinfo defines them, like
+    /// the web's metric guides.
+    x_height: Option<f64>,
+    cap_height: Option<f64>,
     glyphs: Vec<GlyphEntry>,
     dirty: bool,
 }
@@ -396,6 +401,8 @@ impl FontModel {
         let units_per_em = info.units_per_em.map(|v| v.as_f64()).unwrap_or(1000.0);
         let ascender = info.ascender.unwrap_or(units_per_em * 0.8);
         let descender = info.descender.unwrap_or(-(units_per_em * 0.2));
+        let x_height = info.x_height;
+        let cap_height = info.cap_height;
         let family_name = info.family_name.clone().unwrap_or_else(|| "Untitled".into());
 
         let mut glyphs: Vec<GlyphEntry> = font
@@ -447,6 +454,8 @@ impl FontModel {
             units_per_em,
             ascender,
             descender,
+            x_height,
+            cap_height,
             glyphs,
             dirty: false,
         }
@@ -1462,7 +1471,7 @@ impl EditorState {
             return;
         }
         self.viewport
-            .fit_to_canvas(w as f64, h as f64, advance, ascender, descender, 0.62);
+            .fit_to_canvas(w as f64, h as f64, advance, ascender, descender, 0.6);
         self.initialized = true;
     }
 }
@@ -1554,11 +1563,11 @@ struct Workspace {
     /// type size in pixels, how far it is blurred (a spacing check),
     /// whether the colors are flipped, and how the line is aligned.
     preview_visible: bool,
-    preview_size: f32,
     preview_blur: f32,
+    /// The last blurred frame, kept so dragging a point does not
+    /// re-rasterize the preview on every mouse move.
+    preview_blur_cache: Arc<Mutex<Option<(u64, Arc<gpui::RenderImage>)>>>,
     preview_invert: bool,
-    /// 0 left, 1 center, 2 right.
-    preview_align: u8,
     preview_blur_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
     /// Grid cell size in px, driven by the bottom bar's zoom slider.
     /// This is the *target*: cells stretch from it to fill the row.
@@ -1758,19 +1767,141 @@ fn flat_slider(
                         .w_full()
                         .h(px(TRACK))
                         .rounded_full()
-                        .bg(t::cell_border())
-                        .child(
-                            div()
-                                .absolute()
-                                .h_full()
-                                .left_0()
-                                .w(gpui::relative(pct))
-                                .rounded_full()
-                                .bg(t::accent()),
-                        )
+                        // One colour end to end: this reports a value,
+                        // it is not a progress bar.
+                        .bg(t::accent())
                         .child(thumb),
                 ),
         )
+}
+
+/// Everything the blurred preview image depends on, hashed: the line
+/// itself, the pane size, the radius and the two colours.
+fn blur_key(
+    line: &BezPath,
+    w: f64,
+    h: f64,
+    blur: f32,
+    ink: gpui::Rgba,
+    ground: gpui::Rgba,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for element in line.elements() {
+        match element {
+            PathEl::MoveTo(p) | PathEl::LineTo(p) => {
+                (p.x.to_bits(), p.y.to_bits()).hash(&mut hasher)
+            }
+            PathEl::QuadTo(a, b) => {
+                (a.x.to_bits(), a.y.to_bits(), b.x.to_bits(), b.y.to_bits())
+                    .hash(&mut hasher)
+            }
+            PathEl::CurveTo(a, b, c) => (
+                a.x.to_bits(),
+                a.y.to_bits(),
+                b.x.to_bits(),
+                b.y.to_bits(),
+                c.x.to_bits(),
+                c.y.to_bits(),
+            )
+                .hash(&mut hasher),
+            PathEl::ClosePath => 0u8.hash(&mut hasher),
+        }
+    }
+    (
+        w.to_bits(),
+        h.to_bits(),
+        blur.to_bits(),
+        ink.r.to_bits(),
+        ink.g.to_bits(),
+        ink.b.to_bits(),
+        ground.r.to_bits(),
+        ground.g.to_bits(),
+        ground.b.to_bits(),
+    )
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
+/// A drawn eye, for the preview's show/hide switch. The icon set has
+/// no eye, and the "preview" icon in it is a hand, which reads as a
+/// pan tool.
+fn eye_icon(color: gpui::Rgba, open: bool) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| bounds,
+        move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+            let w = f32::from(bounds.size.width) as f64;
+            let h = f32::from(bounds.size.height) as f64;
+            let o = bounds.origin;
+            let (cx_, cy_) = (w / 2.0, h / 2.0);
+            let rx = w * 0.40;
+            let ry = h * 0.30;
+            let pt = |x: f64, y: f64| {
+                gpui::point(o.x + px(x as f32), o.y + px(y as f32))
+            };
+            let mut pb = PathBuilder::stroke(px(1.2));
+            // The almond: one curve over, one curve back.
+            pb.move_to(pt(cx_ - rx, cy_));
+            pb.curve_to(pt(cx_ + rx, cy_), pt(cx_, cy_ - ry * 2.2));
+            pb.move_to(pt(cx_ - rx, cy_));
+            pb.curve_to(pt(cx_ + rx, cy_), pt(cx_, cy_ + ry * 2.2));
+            if !open {
+                pb.move_to(pt(cx_ - rx, cy_ + ry));
+                pb.line_to(pt(cx_ + rx, cy_ - ry));
+            }
+            if let Ok(p) = pb.build() {
+                window.paint_path(p, color);
+            }
+            if open {
+                use kurbo::Shape as _;
+                let pupil = kurbo::Circle::new((cx_, cy_), ry * 0.62).to_path(0.1);
+                if let Some(p) = build_fill_path(&pupil, Affine::IDENTITY, o) {
+                    window.paint_path(p, color);
+                }
+            }
+        },
+    )
+    .w(px(16.0))
+    .h(px(16.0))
+}
+
+/// A circle filled on one half: the ink/ground flip.
+fn invert_icon(color: gpui::Rgba) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| bounds,
+        move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+            use kurbo::Shape as _;
+            let w = f32::from(bounds.size.width) as f64;
+            let h = f32::from(bounds.size.height) as f64;
+            let o = bounds.origin;
+            let r = (w.min(h) / 2.0) - 1.5;
+            let center = (w / 2.0, h / 2.0);
+            let ring = kurbo::Circle::new(center, r).to_path(0.1);
+            if let Some(p) = build_path(
+                &ring,
+                Affine::IDENTITY,
+                o,
+                PathBuilder::stroke(px(1.2)),
+            ) {
+                window.paint_path(p, color);
+            }
+            // The filled half, as a half-turn arc closed across the
+            // diameter.
+            let half = kurbo::Arc {
+                center: center.into(),
+                radii: (r, r).into(),
+                start_angle: std::f64::consts::FRAC_PI_2,
+                sweep_angle: std::f64::consts::PI,
+                x_rotation: 0.0,
+            }
+            .to_path(0.1);
+            if let Some(p) = build_fill_path(&half, Affine::IDENTITY, o) {
+                window.paint_path(p, color);
+            }
+        },
+    )
+    .w(px(16.0))
+    .h(px(16.0))
 }
 
 /// How a grid of glyph cells fits its pane: cell size, and how many
@@ -1793,6 +1924,15 @@ impl GridFit {
 const CELL: f32 = 96.0;
 /// Target cell size for the editor sidebar's mini grid.
 const MINI_CELL: f32 = 44.0;
+/// Height of every bottom bar, so the ones in neighbouring columns
+/// line up across the divider.
+const BOTTOM_BAR_H: f32 = 28.0;
+/// Wheel zoom response and limits, matching the web editor.
+const ZOOM_PER_PIXEL: f64 = 0.0015;
+const ZOOM_MIN: f64 = 1e-3;
+const ZOOM_MAX: f64 = 1e4;
+/// One press of the zoom keys.
+const ZOOM_KEY_STEP: f64 = 1.1;
 /// Height of a header tab, and the side of the square icon buttons
 /// that sit beside tabs in the header and the status bar.
 const TAB_H: f32 = 24.0;
@@ -3707,14 +3847,14 @@ impl Workspace {
                     ),
             )
             .child(
-                // Same bar the main grid has: cell size, and the count
-                // of what is showing.
+                // Same bar the main grid has, and the same height, so
+                // the two line up across the divider.
                 div()
+                    .h(px(BOTTOM_BAR_H))
                     .flex()
                     .items_center()
                     .gap_2()
                     .px_2()
-                    .py_1()
                     .border_t_1()
                     .border_color(t::panel_outline())
                     .child(
@@ -4873,6 +5013,14 @@ impl Workspace {
         let advance = entry.advance;
         let ascender = font.ascender;
         let descender = font.descender;
+        let upm = font.units_per_em;
+        let x_height = font.x_height;
+        let cap_height = font.cap_height;
+        // The metric box runs to the upm when that is higher than the
+        // ascender, so an icon font's full em still reads as its space
+        // (web `glyph_metric_bounds`).
+        let box_top = upm.max(ascender);
+        let box_bottom = descender;
 
         let transform = self.editor.transform();
         let zoom = self.editor.zoom();
@@ -5129,1122 +5277,1296 @@ impl Workspace {
                     move |bounds, _, _| bounds,
                     move |_, bounds: Bounds<gpui::Pixels>, window, cx| {
                         *bounds_slot.lock().unwrap() = bounds;
-                        let mut transform = transform;
-                        let mut zoom = zoom;
-                        if needs_fit {
-                            // First paint after opening: fit the glyph.
-                            // Recompute locally; the entity state is
-                            // fitted on the next mouse interaction via
-                            // the same bounds slot.
-                            let h: f32 = bounds.size.height.into();
-                            let w: f32 = bounds.size.width.into();
-                            let mut vp = ViewPort::new();
-                            vp.fit_to_canvas(
-                                w as f64,
-                                h as f64,
-                                advance,
-                                ascender,
-                                descender,
-                                0.62,
-                            );
-                            transform = vp.affine();
-                            zoom = vp.zoom;
-                        }
-                        let _ = cx;
-                        let origin = bounds.origin;
-                        let to_screen = |x: f64, y: f64| {
-                            let p = transform * kurbo::Point::new(x, y);
-                            gpui::point(origin.x + px(p.x as f32), origin.y + px(p.y as f32))
-                        };
-
-                        // Zoom-dependent design grid behind everything
-                        // (web draw_design_grid): the 8-unit lattice
-                        // fades in past 0.8x, and past 8x a 2-unit fine
-                        // grid joins underneath — the 8s stay one grid
-                        // at every zoom. Anchored at the active sort's
-                        // origin (our design space is sort-relative),
-                        // so the baseline lands on a gridline.
-                        let smoothstep = |t: f64| t * t * (3.0 - 2.0 * t);
-                        let grid_mid_alpha =
-                            smoothstep(((zoom - 0.8) / 0.8).clamp(0.0, 1.0));
-                        if !preview_mode && grid_mid_alpha > 0.0 {
-                            let inv = transform.inverse();
-                            let bw: f32 = bounds.size.width.into();
-                            let bh: f32 = bounds.size.height.into();
-                            let c0 = inv * kurbo::Point::new(0.0, 0.0);
-                            let c1 = inv * kurbo::Point::new(bw as f64, bh as f64);
-                            let (min_x, max_x) = (c0.x.min(c1.x), c0.x.max(c1.x));
-                            let (min_y, max_y) = (c0.y.min(c1.y), c0.y.max(c1.y));
-                            let mut level = |spacing: f64,
-                                             skip_every: u64,
-                                             width_px: f32,
-                                             color: gpui::Rgba,
-                                             window: &mut Window| {
-                                let mut pb = PathBuilder::stroke(px(width_px));
-                                for ix in (min_x / spacing).floor() as i64
-                                    ..=(max_x / spacing).ceil() as i64
-                                {
-                                    if skip_every > 0
-                                        && ix.unsigned_abs() % skip_every == 0
-                                    {
-                                        continue;
-                                    }
-                                    let x = ix as f64 * spacing;
-                                    pb.move_to(to_screen(x, min_y));
-                                    pb.line_to(to_screen(x, max_y));
-                                }
-                                for iy in (min_y / spacing).floor() as i64
-                                    ..=(max_y / spacing).ceil() as i64
-                                {
-                                    if skip_every > 0
-                                        && iy.unsigned_abs() % skip_every == 0
-                                    {
-                                        continue;
-                                    }
-                                    let y = iy as f64 * spacing;
-                                    pb.move_to(to_screen(min_x, y));
-                                    pb.line_to(to_screen(max_x, y));
-                                }
-                                if let Ok(p) = pb.build() {
-                                    window.paint_path(p, color);
-                                }
+                        // Everything the editor draws is clipped to
+                        // the canvas: without a mask the outline and
+                        // the neighbouring sorts paint straight over
+                        // the header and the panels beside it.
+                        window.with_content_mask(
+                            Some(gpui::ContentMask { bounds }),
+                            move |window| {
+                            let mut transform = transform;
+                            let mut zoom = zoom;
+                            if needs_fit {
+                                // First paint after opening: fit the glyph.
+                                // Recompute locally; the entity state is
+                                // fitted on the next mouse interaction via
+                                // the same bounds slot.
+                                let h: f32 = bounds.size.height.into();
+                                let w: f32 = bounds.size.width.into();
+                                let mut vp = ViewPort::new();
+                                vp.fit_to_canvas(
+                                    w as f64,
+                                    h as f64,
+                                    advance,
+                                    ascender,
+                                    descender,
+                                    0.62,
+                                );
+                                transform = vp.affine();
+                                zoom = vp.zoom;
+                            }
+                            let _ = cx;
+                            let origin = bounds.origin;
+                            let to_screen = |x: f64, y: f64| {
+                                let p = transform * kurbo::Point::new(x, y);
+                                gpui::point(origin.x + px(p.x as f32), origin.y + px(p.y as f32))
                             };
-                            level(
-                                8.0,
-                                0,
-                                1.0,
-                                t::design_grid_coarse(grid_mid_alpha as f32),
-                                window,
-                            );
-                            let close_alpha =
+
+                            // Zoom-dependent design grid behind everything
+                            // (web draw_design_grid): the 8-unit lattice
+                            // fades in past 0.8x, and past 8x a 2-unit fine
+                            // grid joins underneath — the 8s stay one grid
+                            // at every zoom. Anchored at the active sort's
+                            // origin (our design space is sort-relative),
+                            // so the baseline lands on a gridline.
+                            let smoothstep = |t: f64| t * t * (3.0 - 2.0 * t);
+                            let grid_mid_alpha =
+                                smoothstep(((zoom - 0.8) / 0.8).clamp(0.0, 1.0));
+                            let grid_close_alpha =
                                 smoothstep(((zoom - 8.0) / 8.0).clamp(0.0, 1.0));
-                            if close_alpha > 0.0 {
-                                // The 2s only; every 4th line is an 8
-                                // the mid pass already drew.
-                                level(
-                                    2.0,
-                                    4,
-                                    0.5,
-                                    t::design_grid_fine(close_alpha as f32),
-                                    window,
-                                );
-                            }
-                        }
-
-                        // Metrics: baseline, ascender, descender,
-                        // sidebearings.
-                        let hline = |y: f64, window: &mut Window| {
-                            let a = to_screen(0.0, y);
-                            let b = to_screen(advance, y);
-                            window.paint_quad(gpui::fill(
-                                Bounds::from_corners(a, gpui::point(b.x, b.y + px(1.0))),
-                                t::metrics_line(),
-                            ));
-                        };
-                        if !text_mode {
-                            hline(0.0, window);
-                            hline(ascender, window);
-                            hline(descender, window);
-                            for (right, x) in [(false, 0.0), (true, advance)] {
-                                let hovered = sidebearing_hover == Some(right);
-                                let a = to_screen(x, ascender);
-                                let b = to_screen(x, descender);
-                                let (grow_l, grow_r) =
-                                    if hovered { (1.0, 2.0) } else { (0.0, 1.0) };
-                                window.paint_quad(gpui::fill(
-                                    Bounds::from_corners(
-                                        gpui::point(a.x - px(grow_l), a.y),
-                                        gpui::point(a.x + px(grow_r), b.y),
-                                    ),
-                                    if hovered {
-                                        t::text_cursor()
-                                    } else {
-                                        t::metrics_line()
-                                    },
-                                ));
-                            }
-                        }
-
-                        // Space-hold preview: the filled glyph and
-                        // nothing else on top of it.
-                        if preview_mode {
-                            let mut combined = outline.as_ref().clone();
-                            combined.extend(component_path.elements().iter().cloned());
-                            if let Some(p) =
-                                build_fill_path(&combined, transform, origin)
-                            {
-                                window.paint_path(p, t::text());
-                            }
-                        }
-
-                        // The text buffer, web-style. Quiet metric
-                        // boxes first so marks and fills sit on top.
-                        let zoom_now = zoom;
-                        let sort_h_px =
-                            ((sort_top - sort_bottom).max(1.0) * zoom_now).max(1.0);
-                        let mark = (sort_h_px * 0.05).clamp(1.5, 24.0);
-                        let marks_visible = mark >= 3.0;
-                        let mut line = |a: Point<gpui::Pixels>,
-                                        b: Point<gpui::Pixels>,
-                                        color: gpui::Rgba,
-                                        window: &mut Window| {
-                            let mut pb = PathBuilder::stroke(px(1.0));
-                            pb.move_to(a);
-                            pb.line_to(b);
-                            if let Ok(p) = pb.build() {
-                                window.paint_path(p, color);
-                            }
-                        };
-                        if !preview_mode && marks_visible {
-                            for sp in sort_paints.iter() {
-                                // Quiet full box for the sorts nobody is
-                                // editing (the active one draws its own
-                                // metrics outside text mode).
-                                if !sp.active {
-                                    let color = t::metric_quiet();
-                                    for ex in [sp.x, sp.x + sp.advance] {
-                                        line(
-                                            to_screen(ex, sp.y + sort_bottom),
-                                            to_screen(ex, sp.y + sort_top),
-                                            color,
-                                            window,
-                                        );
-                                    }
-                                    for my in [sort_bottom, 0.0, ascender, sort_top] {
-                                        line(
-                                            to_screen(sp.x, sp.y + my),
-                                            to_screen(sp.x + sp.advance, sp.y + my),
-                                            color,
-                                            window,
-                                        );
-                                    }
-                                }
-                                // Corner marks: inward ticks at each
-                                // metric height on both edges, clipped
-                                // to the box. Skipped for the active
-                                // sort outside text mode (it has the
-                                // full green box instead).
-                                if sp.active && !text_mode {
-                                    continue;
-                                }
-                                let color = match sp.kern {
-                                    1 => t::kern_active(),
-                                    2 => t::kern_previous(),
-                                    _ => t::metrics_line(),
-                                };
-                                let ca = to_screen(sp.x, sp.y + sort_bottom);
-                                let cb =
-                                    to_screen(sp.x + sp.advance, sp.y + sort_top);
-                                let (left, right) =
-                                    (ca.x.min(cb.x), ca.x.max(cb.x));
-                                let (top_px, bottom_px) =
-                                    (ca.y.min(cb.y), ca.y.max(cb.y));
-                                let mark_px = px(mark as f32);
-                                for ex in [sp.x, sp.x + sp.advance] {
-                                    for my in [sort_bottom, 0.0, ascender, sort_top]
+                            if !preview_mode && grid_mid_alpha > 0.0 {
+                                let inv = transform.inverse();
+                                let bw: f32 = bounds.size.width.into();
+                                let bh: f32 = bounds.size.height.into();
+                                let c0 = inv * kurbo::Point::new(0.0, 0.0);
+                                let c1 = inv * kurbo::Point::new(bw as f64, bh as f64);
+                                let (min_x, max_x) = (c0.x.min(c1.x), c0.x.max(c1.x));
+                                let (min_y, max_y) = (c0.y.min(c1.y), c0.y.max(c1.y));
+                                let mut level = |spacing: f64,
+                                                 skip_every: u64,
+                                                 width_px: f32,
+                                                 color: gpui::Rgba,
+                                                 window: &mut Window| {
+                                    let mut pb = PathBuilder::stroke(px(width_px));
+                                    for ix in (min_x / spacing).floor() as i64
+                                        ..=(max_x / spacing).ceil() as i64
                                     {
-                                        let c = to_screen(ex, sp.y + my);
-                                        let x0 = (c.x - mark_px).max(left);
-                                        let x1 = (c.x + mark_px).min(right);
-                                        if x1 > x0 {
-                                            line(
-                                                gpui::point(x0, c.y),
-                                                gpui::point(x1, c.y),
-                                                color,
-                                                window,
-                                            );
+                                        if skip_every > 0
+                                            && ix.unsigned_abs() % skip_every == 0
+                                        {
+                                            continue;
                                         }
-                                        let y0 = (c.y - mark_px).max(top_px);
-                                        let y1 = (c.y + mark_px).min(bottom_px);
-                                        if y1 > y0 {
-                                            line(
-                                                gpui::point(c.x, y0),
-                                                gpui::point(c.x, y1),
-                                                color,
-                                                window,
-                                            );
+                                        let x = ix as f64 * spacing;
+                                        pb.move_to(to_screen(x, min_y));
+                                        pb.line_to(to_screen(x, max_y));
+                                    }
+                                    for iy in (min_y / spacing).floor() as i64
+                                        ..=(max_y / spacing).ceil() as i64
+                                    {
+                                        if skip_every > 0
+                                            && iy.unsigned_abs() % skip_every == 0
+                                        {
+                                            continue;
                                         }
-                                    }
-                                }
-                            }
-                        }
-                        // Sort fills: everyone but the active sort —
-                        // and the active one too while the text tool
-                        // is up (points return with select). Once the
-                        // design grid is up (you are drawing, not
-                        // reading) the neighbours thin to a 0.34 fill
-                        // plus an outline with read-only grey points,
-                        // the web's zoomed-in treatment.
-                        let zoomed_in = !preview_mode && zoom > 0.8;
-                        // The web's point_scale curve, simplified to
-                        // its zoom ramps (device scale is 1 here).
-                        let point_scale = if zoom <= 0.8 {
-                            0.72 + (1.0 - 0.72) * smoothstep((zoom / 0.8).clamp(0.0, 1.0))
-                        } else if zoom <= 8.0 {
-                            1.0 + 0.6 * smoothstep(((zoom - 0.8) / 7.2).clamp(0.0, 1.0))
-                        } else {
-                            1.6 + 0.8 * smoothstep(((zoom - 8.0) / 20.0).clamp(0.0, 1.0))
-                        };
-                        for sp in sort_paints.iter() {
-                            // The active sort renders as editable
-                            // chrome except in text mode, where it is
-                            // a plain fill like its neighbors. The
-                            // preview fill already drew it.
-                            if sp.active && (!text_mode || preview_mode) {
-                                continue;
-                            }
-                            let Some(path) = sp.path.as_ref() else {
-                                continue;
-                            };
-                            let dim = zoomed_in && !sp.active;
-                            let sort_transform =
-                                transform * Affine::translate((sp.x, sp.y));
-                            if let Some(p) =
-                                build_fill_path(path, sort_transform, origin)
-                            {
-                                let mut fill = t::glyph_fill();
-                                if dim {
-                                    fill.a *= 0.34;
-                                }
-                                window.paint_path(p, fill);
-                            }
-                            if !dim {
-                                continue;
-                            }
-                            // Outline + read-only points so the
-                            // neighbour reads as structure.
-                            if let Some(p) = build_path(
-                                path,
-                                sort_transform,
-                                origin,
-                                PathBuilder::stroke(px(1.0)),
-                            ) {
-                                window.paint_path(p, t::glyph_fill());
-                            }
-                            use kurbo::Shape as _;
-                            let on_r = 4.5 * point_scale * 0.85;
-                            let off_r = 4.5 * point_scale * 0.6;
-                            let screen = |pt: kurbo::Point| {
-                                let sp2 = sort_transform * pt;
-                                kurbo::Point::new(
-                                    sp2.x + f64::from(f32::from(origin.x)),
-                                    sp2.y + f64::from(f32::from(origin.y)),
-                                )
-                            };
-                            let mut dots = BezPath::new();
-                            let mut handles = PathBuilder::stroke(px(1.0));
-                            let mut any_handles = false;
-                            let mut current = kurbo::Point::ZERO;
-                            let mut start = kurbo::Point::ZERO;
-                            let mut hline2 = |a: kurbo::Point,
-                                              b: kurbo::Point,
-                                              pb: &mut PathBuilder,
-                                              any: &mut bool| {
-                                pb.move_to(gpui::point(
-                                    px(a.x as f32),
-                                    px(a.y as f32),
-                                ));
-                                pb.line_to(gpui::point(
-                                    px(b.x as f32),
-                                    px(b.y as f32),
-                                ));
-                                *any = true;
-                            };
-                            for el in path.elements() {
-                                match *el {
-                                    kurbo::PathEl::MoveTo(p) => {
-                                        let p = screen(p);
-                                        dots.extend(
-                                            kurbo::Circle::new(p, on_r)
-                                                .to_path(0.25),
-                                        );
-                                        current = p;
-                                        start = p;
-                                    }
-                                    kurbo::PathEl::LineTo(p) => {
-                                        let p = screen(p);
-                                        dots.extend(
-                                            kurbo::Circle::new(p, on_r)
-                                                .to_path(0.25),
-                                        );
-                                        current = p;
-                                    }
-                                    kurbo::PathEl::QuadTo(c, p) => {
-                                        let (c, p) = (screen(c), screen(p));
-                                        dots.extend(
-                                            kurbo::Circle::new(c, off_r)
-                                                .to_path(0.25),
-                                        );
-                                        dots.extend(
-                                            kurbo::Circle::new(p, on_r)
-                                                .to_path(0.25),
-                                        );
-                                        hline2(current, c, &mut handles, &mut any_handles);
-                                        hline2(c, p, &mut handles, &mut any_handles);
-                                        current = p;
-                                    }
-                                    kurbo::PathEl::CurveTo(c1, c2, p) => {
-                                        let (c1, c2, p) =
-                                            (screen(c1), screen(c2), screen(p));
-                                        dots.extend(
-                                            kurbo::Circle::new(c1, off_r)
-                                                .to_path(0.25),
-                                        );
-                                        dots.extend(
-                                            kurbo::Circle::new(c2, off_r)
-                                                .to_path(0.25),
-                                        );
-                                        dots.extend(
-                                            kurbo::Circle::new(p, on_r)
-                                                .to_path(0.25),
-                                        );
-                                        hline2(current, c1, &mut handles, &mut any_handles);
-                                        hline2(c2, p, &mut handles, &mut any_handles);
-                                        current = p;
-                                    }
-                                    kurbo::PathEl::ClosePath => {
-                                        current = start;
-                                    }
-                                }
-                            }
-                            if any_handles && let Ok(p) = handles.build() {
-                                window.paint_path(p, t::point_readonly());
-                            }
-                            if let Some(p) = build_fill_path(
-                                &dots,
-                                Affine::IDENTITY,
-                                gpui::point(px(0.0), px(0.0)),
-                            ) {
-                                window.paint_path(p, t::point_inner());
-                            }
-                            if let Some(p) = build_path(
-                                &dots,
-                                Affine::IDENTITY,
-                                gpui::point(px(0.0), px(0.0)),
-                                PathBuilder::stroke(px(1.0)),
-                            ) {
-                                window.paint_path(p, t::point_readonly());
-                            }
-                        }
-                        // Caret: line plus inward triangles, sized off
-                        // the sort's on-screen height like the web.
-                        if let Some((cx_, cy)) = text_caret {
-                            let top = to_screen(cx_, cy + sort_top);
-                            let bottom = to_screen(cx_, cy + sort_bottom);
-                            let caret_color = t::text_cursor();
-                            window.paint_quad(gpui::fill(
-                                Bounds::from_corners(
-                                    gpui::point(top.x - px(0.75), top.y),
-                                    gpui::point(top.x + px(0.75), bottom.y),
-                                ),
-                                caret_color,
-                            ));
-                            let tri_scale =
-                                ((sort_h_px * 0.09).clamp(4.0, 34.0)) / 24.0;
-                            let tw = px((24.0 * tri_scale) as f32);
-                            let th = px((16.0 * tri_scale) as f32);
-                            let mut tri = PathBuilder::fill();
-                            tri.move_to(gpui::point(top.x - tw / 2.0, top.y));
-                            tri.line_to(gpui::point(top.x + tw / 2.0, top.y));
-                            tri.line_to(gpui::point(top.x, top.y + th));
-                            if let Ok(p) = tri.build() {
-                                window.paint_path(p, caret_color);
-                            }
-                            let mut tri = PathBuilder::fill();
-                            tri.move_to(gpui::point(bottom.x - tw / 2.0, bottom.y));
-                            tri.line_to(gpui::point(bottom.x + tw / 2.0, bottom.y));
-                            tri.line_to(gpui::point(bottom.x, bottom.y - th));
-                            if let Ok(p) = tri.build() {
-                                window.paint_path(p, caret_color);
-                            }
-                        }
-
-                        // Reference layers: other masters as dim strokes.
-                        for path in &reference_paths {
-                            if let Some(p) = build_path(
-                                path,
-                                transform,
-                                origin,
-                                PathBuilder::stroke(px(1.0)),
-                            ) {
-                                window.paint_path(p, t::reference_layer());
-                            }
-                        }
-
-                        // Components: dim distinct fill, not editable
-                        // directly (Cmd+Shift+D decomposes).
-                        if !component_path.elements().is_empty()
-                            && let Some(p) =
-                                build_fill_path(&component_path, transform, origin)
-                        {
-                            let color = if component_selected {
-                                t::component_selected_fill()
-                            } else {
-                                t::component_fill()
-                            };
-                            window.paint_path(p, color);
-                        }
-                        // Interpolated instance at the axes-bar
-                        // location, as a ghost outline.
-                        if let Some(ghost) = &ghost
-                            && let Some(p) = build_path(
-                                ghost,
-                                transform,
-                                origin,
-                                PathBuilder::stroke(px(1.0)),
-                            )
-                        {
-                            window.paint_path(p, t::ghost());
-                        }
-                        // Reference glyph: a ghost fill so it never
-                        // reads as the background layer's outline.
-                        if let Some(path) = &reference_path
-                            && let Some(p) =
-                                build_fill_path(path, transform, origin)
-                        {
-                            let mut fill = t::glyph_fill();
-                            fill.a *= 0.22;
-                            window.paint_path(p, fill);
-                        }
-                        // Background layer: a quiet outline behind the
-                        // drawing, the way Glyphs shows a background.
-                        if let Some(path) = &background_path
-                            && let Some(p) = build_path(
-                                path,
-                                transform,
-                                origin,
-                                PathBuilder::stroke(px(1.0)),
-                            )
-                        {
-                            window.paint_path(p, t::metric_quiet());
-                        }
-                        // Curvature comb, behind the outline so points
-                        // stay selectable over it.
-                        for strip in &comb_strips {
-                            for w in strip.windows(2) {
-                                let (s0, s1) = (&w[0], &w[1]);
-                                let mut quad = BezPath::new();
-                                quad.move_to(transform * s0.on);
-                                quad.line_to(transform * s1.on);
-                                quad.line_to(transform * s1.outer);
-                                quad.line_to(transform * s0.outer);
-                                quad.close_path();
-                                let k = if comb_maxk > 1e-12 {
-                                    (s0.kappa.abs() + s1.kappa.abs()) * 0.5
-                                        / comb_maxk
-                                } else {
-                                    0.0
-                                };
-                                if let Some(p) = build_fill_path(
-                                    &quad,
-                                    Affine::IDENTITY,
-                                    origin,
-                                ) {
-                                    window
-                                        .paint_path(p, t::comb_gradient(k));
-                                }
-                            }
-                        }
-
-                        // Ghost fill under the glyph being edited: the
-                        // same grey the inactive sorts use at a tenth
-                        // strength, so counters read as counters
-                        // without competing with the outline (web
-                        // ACTIVE_GLYPH_FILL_ALPHA).
-                        if !preview_mode && !text_mode {
-                            let mut combined = outline.as_ref().clone();
-                            combined
-                                .extend(component_path.elements().iter().cloned());
-                            if let Some(p) =
-                                build_fill_path(&combined, transform, origin)
-                            {
-                                let mut fill = t::glyph_fill();
-                                fill.a *= 0.16;
-                                window.paint_path(p, fill);
-                            }
-                        }
-                        // Edit mode is a stroked outline (no fill),
-                        // like the other editors.
-                        if !preview_mode
-                            && !text_mode
-                            && let Some(path) =
-                            build_path(&outline, transform, origin, PathBuilder::stroke(px(1.0)))
-                        {
-                            window.paint_path(path, t::path_stroke());
-                        }
-
-                        // Handle lines: each off-curve connects to its
-                        // anchoring on-curve neighbor.
-                        if !preview_mode && !text_mode {
-                            let mut lines = PathBuilder::stroke(px(1.0));
-                            let mut any_line = false;
-                            for (i, p) in points.iter().enumerate() {
-                                if p.on_curve {
-                                    continue;
-                                }
-                                // Neighbors within the same contour, cyclic.
-                                let contour_pts: Vec<&GlyphPoint> = points
-                                    .iter()
-                                    .filter(|q| q.contour == p.contour)
-                                    .collect();
-                                let n = contour_pts.len();
-                                let pos = contour_pts
-                                    .iter()
-                                    .position(|q| q.index == p.index)
-                                    .unwrap_or(0);
-                                let prev = contour_pts[(pos + n - 1) % n];
-                                let next = contour_pts[(pos + 1) % n];
-                                let anchor = if prev.on_curve {
-                                    prev
-                                } else if next.on_curve {
-                                    next
-                                } else {
-                                    continue;
-                                };
-                                lines.move_to(to_screen(p.x, p.y));
-                                lines.line_to(to_screen(anchor.x, anchor.y));
-                                any_line = true;
-                                let _ = i;
-                            }
-                            if any_line && let Ok(path) = lines.build() {
-                                window.paint_path(path, t::handle_line());
-                            }
-                        }
-
-                        // Points: smooth = blue circle, corner = green
-                        // square, off-curve = purple circle, selection
-                        // in yellow/orange — the shared palette.
-                        let circle = |window: &mut Window,
-                                      center: Point<gpui::Pixels>,
-                                      r: f32,
-                                      color: gpui::Rgba| {
-                            use kurbo::Shape;
-                            let cx_: f32 = center.x.into();
-                            let cy_: f32 = center.y.into();
-                            let shape = kurbo::Circle::new(
-                                (cx_ as f64, cy_ as f64),
-                                r as f64,
-                            )
-                            .to_path(0.25);
-                            if let Some(p) = build_fill_path(
-                                &shape,
-                                Affine::IDENTITY,
-                                gpui::point(px(0.0), px(0.0)),
-                            ) {
-                                window.paint_path(p, color);
-                            }
-                        };
-                        let square = |window: &mut Window,
-                                      center: Point<gpui::Pixels>,
-                                      r: f32,
-                                      color: gpui::Rgba| {
-                            window.paint_quad(gpui::fill(
-                                Bounds::from_corners(
-                                    gpui::point(center.x - px(r), center.y - px(r)),
-                                    gpui::point(center.x + px(r), center.y + px(r)),
-                                ),
-                                color,
-                            ));
-                        };
-                        // Point markers follow the web's sizes, scaled
-                        // by zoom the same way (point_scale): smooth and
-                        // off-curve circles r4.5, corner squares half
-                        // 3.5, hyper circles r4.0, each a point bigger
-                        // when selected.
-                        let ps = point_scale as f32;
-                        for p in points.iter() {
-                            if preview_mode || text_mode {
-                                break;
-                            }
-                            let center = to_screen(p.x, p.y);
-                            let is_selected =
-                                selected_points.contains(&(p.contour, p.index));
-                            // Web style: colored ring, dark inner;
-                            // selected points fill solid yellow.
-                            let (ring, inner) = if is_selected {
-                                (t::point_selected(), t::point_selected())
-                            } else if p.hyper {
-                                (t::point_hyper_outer(), t::point_inner())
-                            } else if !p.on_curve {
-                                (t::point_offcurve_outer(), t::point_inner())
-                            } else if p.smooth {
-                                (t::point_smooth_outer(), t::point_inner())
-                            } else {
-                                (t::point_corner_outer(), t::point_inner())
-                            };
-                            let outer = if p.hyper && p.on_curve {
-                                if is_selected { 5.0 } else { 4.0 }
-                            } else if p.on_curve && !p.smooth {
-                                if is_selected { 4.5 } else { 3.5 }
-                            } else if is_selected {
-                                5.5
-                            } else {
-                                4.5
-                            } * ps;
-                            let inner_r = (outer * 0.55).max(1.0f32);
-                            if p.on_curve && !p.smooth && !p.hyper {
-                                square(window, center, outer, ring);
-                                square(window, center, inner_r, inner);
-                            } else {
-                                circle(window, center, outer, ring);
-                                circle(window, center, inner_r, inner);
-                            }
-                        }
-                        // Start-of-contour arrow: which point a closed
-                        // contour begins at, and which way it runs
-                        // (web draw_start_arrow).
-                        if !preview_mode && !text_mode {
-                            for start in start_markers.iter() {
-                                let (from, to, selected) = *start;
-                                let a = to_screen(from.0, from.1);
-                                let b = to_screen(to.0, to.1);
-                                let size =
-                                    (if selected { 6.5 } else { 5.5 }) * ps;
-                                let dir = (
-                                    f32::from(b.x - a.x),
-                                    f32::from(b.y - a.y),
-                                );
-                                let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt();
-                                if len < 0.001 {
-                                    continue;
-                                }
-                                let f = (dir.0 / len, dir.1 / len);
-                                let perp = (-f.1, f.0);
-                                let cx_ = f32::from(a.x) + perp.0 * 8.0 * ps;
-                                let cy_ = f32::from(a.y) + perp.1 * 8.0 * ps;
-                                let tip = (cx_ + f.0 * size, cy_ + f.1 * size);
-                                let base = (
-                                    cx_ - f.0 * size * 0.5,
-                                    cy_ - f.1 * size * 0.5,
-                                );
-                                let left = (
-                                    base.0 + perp.0 * size * 0.5,
-                                    base.1 + perp.1 * size * 0.5,
-                                );
-                                let right = (
-                                    base.0 - perp.0 * size * 0.5,
-                                    base.1 - perp.1 * size * 0.5,
-                                );
-                                let mut pb = PathBuilder::fill();
-                                pb.move_to(gpui::point(px(tip.0), px(tip.1)));
-                                pb.line_to(gpui::point(px(left.0), px(left.1)));
-                                pb.line_to(gpui::point(px(right.0), px(right.1)));
-                                pb.close();
-                                if let Ok(path) = pb.build() {
-                                    window.paint_path(
-                                        path,
-                                        if selected {
-                                            t::point_selected()
-                                        } else {
-                                            t::point_smooth_outer()
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                        // Anchors: diamonds (rotated squares drawn as
-                        // two overlapping quads approximate; use a
-                        // filled path).
-                        for (ai, (_, ax, ay)) in anchors.iter().enumerate() {
-                            if preview_mode || text_mode {
-                                break;
-                            }
-                            let c = to_screen(*ax, *ay);
-                            let r = px(5.0);
-                            let mut pb = PathBuilder::fill();
-                            pb.move_to(gpui::point(c.x, c.y - r));
-                            pb.line_to(gpui::point(c.x + r, c.y));
-                            pb.line_to(gpui::point(c.x, c.y + r));
-                            pb.line_to(gpui::point(c.x - r, c.y));
-                            pb.close();
-                            if let Ok(pth) = pb.build() {
-                                let color = if selected_anchors.contains(&ai) {
-                                    t::accent()
-                                } else {
-                                    t::anchor()
-                                };
-                                window.paint_path(pth, color);
-                            }
-                        }
-
-                        // Shapes-tool live preview.
-                        if let Some((a, b, ellipse)) = shape_preview {
-                            use kurbo::Shape as _;
-                            let rect = kurbo::Rect::from_points(
-                                kurbo::Point::new(a.0, a.1),
-                                kurbo::Point::new(b.0, b.1),
-                            );
-                            let shape: BezPath = if ellipse {
-                                kurbo::Ellipse::from_rect(rect).to_path(0.1)
-                            } else {
-                                rect.to_path(0.1)
-                            };
-                            if let Some(p) = build_path(
-                                &shape,
-                                transform,
-                                origin,
-                                PathBuilder::stroke(px(1.0)),
-                            ) {
-                                window.paint_path(p, t::accent());
-                            }
-                        }
-                        // Measure-tool line.
-                        if let Some(seg) = hover_seg {
-                            let mut pb = PathBuilder::stroke(px(3.0));
-                            match seg {
-                                kurbo::PathSeg::Line(l) => {
-                                    pb.move_to(to_screen(l.p0.x, l.p0.y));
-                                    pb.line_to(to_screen(l.p1.x, l.p1.y));
-                                }
-                                kurbo::PathSeg::Quad(q) => {
-                                    pb.move_to(to_screen(q.p0.x, q.p0.y));
-                                    pb.curve_to(
-                                        to_screen(q.p2.x, q.p2.y),
-                                        to_screen(q.p1.x, q.p1.y),
-                                    );
-                                }
-                                kurbo::PathSeg::Cubic(c) => {
-                                    pb.move_to(to_screen(c.p0.x, c.p0.y));
-                                    pb.cubic_bezier_to(
-                                        to_screen(c.p3.x, c.p3.y),
-                                        to_screen(c.p1.x, c.p1.y),
-                                        to_screen(c.p2.x, c.p2.y),
-                                    );
-                                }
-                            }
-                            if let Ok(p) = pb.build() {
-                                window.paint_path(p, t::accent());
-                            }
-                        }
-                        if let Some(((lx, ly), (cx3, cy3), close)) = pen_preview {
-                            let mut pb = PathBuilder::stroke(px(1.0));
-                            pb.move_to(to_screen(lx, ly));
-                            pb.line_to(to_screen(cx3, cy3));
-                            if let Ok(p) = pb.build() {
-                                window.paint_path(p, t::accent());
-                            }
-                            if let Some((sx2, sy2)) = close {
-                                circle(
-                                    window,
-                                    to_screen(sx2, sy2),
-                                    6.0,
-                                    t::accent(),
-                                );
-                            }
-                        }
-                        if let Some(((sx, sy), (cx2, cy2), hits)) = &knife_line {
-                            let a = to_screen(*sx, *sy);
-                            let b = to_screen(*cx2, *cy2);
-                            let mut line = PathBuilder::stroke(px(1.0));
-                            line.move_to(a);
-                            line.line_to(b);
-                            if let Ok(p) = line.build() {
-                                window.paint_path(p, t::anchor());
-                            }
-                            for hit in hits {
-                                let c = to_screen(hit.x, hit.y);
-                                circle(window, c, 3.5, t::anchor());
-                            }
-                        }
-                        if let Some((a, b)) = measure_line {
-                            let mut pb = PathBuilder::stroke(px(1.0));
-                            let pa = to_screen(a.0, a.1);
-                            let pbp = to_screen(b.0, b.1);
-                            pb.move_to(pa);
-                            pb.line_to(pbp);
-                            if let Ok(p) = pb.build() {
-                                window.paint_path(p, t::accent());
-                            }
-                        }
-                        // Measure-tool HUD (web draw_measurements):
-                        // popcount-colored outline, dimension lines
-                        // with outward arrowheads, and labels that
-                        // dodge each other. Fades in with zoom.
-                        if let Some((strokes, measurements, sb)) = &measure_hud {
-                            use runebender_core::measure::{self, MeasureKind};
-                            let t32 = (((zoom - 0.30) / 0.40).clamp(0.0, 1.0)) as f32;
-                            if t32 > 0.0 {
-                                let fade = |mut c: gpui::Rgba, mul: f32| {
-                                    c.a *= t32 * mul;
-                                    c
-                                };
-                                for cs in strokes {
-                                    let width = if cs.wide { 1.5 } else { 1.0 };
-                                    if let Some(p) = build_path(
-                                        &cs.path,
-                                        transform,
-                                        origin,
-                                        PathBuilder::stroke(px(width)),
-                                    ) {
-                                        window.paint_path(
-                                            p,
-                                            fade(t::popcount_tier(cs.popcount), 1.0),
-                                        );
-                                    }
-                                }
-                                let gp = |p: kurbo::Point| {
-                                    gpui::point(
-                                        origin.x + px(p.x as f32),
-                                        origin.y + px(p.y as f32),
-                                    )
-                                };
-                                // A span's dimension line: a shaft that
-                                // stops short of both endpoints with an
-                                // outward arrowhead at each end.
-                                let dim_line = |window: &mut gpui::Window,
-                                                a: kurbo::Point,
-                                                b: kurbo::Point,
-                                                color: gpui::Rgba| {
-                                    let (dx, dy) = (b.x - a.x, b.y - a.y);
-                                    let len = dx.hypot(dy);
-                                    if len < 1e-3 {
-                                        return;
-                                    }
-                                    let (ux, uy) = (dx / len, dy / len);
-                                    let (nx, ny) = (-uy, ux);
-                                    let (end_gap, head, wing) = (3.0, 7.0, 4.0);
-                                    let a2 = kurbo::Point::new(
-                                        a.x + ux * end_gap,
-                                        a.y + uy * end_gap,
-                                    );
-                                    let b2 = kurbo::Point::new(
-                                        b.x - ux * end_gap,
-                                        b.y - uy * end_gap,
-                                    );
-                                    let mut pb = PathBuilder::stroke(px(1.25));
-                                    pb.move_to(gp(a2));
-                                    pb.line_to(gp(b2));
-                                    for (p0, sx) in [(a2, 1.0), (b2, -1.0)] {
-                                        for side in [1.0, -1.0] {
-                                            pb.move_to(gp(p0));
-                                            pb.line_to(gp(kurbo::Point::new(
-                                                p0.x + sx * ux * head + side * nx * wing,
-                                                p0.y + sx * uy * head + side * ny * wing,
-                                            )));
-                                        }
+                                        let y = iy as f64 * spacing;
+                                        pb.move_to(to_screen(min_x, y));
+                                        pb.line_to(to_screen(max_x, y));
                                     }
                                     if let Ok(p) = pb.build() {
                                         window.paint_path(p, color);
                                     }
                                 };
-                                // Place a label just off its line, then
-                                // step it outward (and to the other
-                                // side) until it clears every label
-                                // already placed this frame.
-                                let label_px = px(13.0);
-                                let line_h = px(15.0);
-                                let label_font = window.text_style().font();
-                                let mut placed: Vec<kurbo::Rect> = Vec::new();
-                                let mut draw_label =
-                                    |window: &mut gpui::Window,
-                                     cx: &mut gpui::App,
-                                     a: kurbo::Point,
-                                     b: kurbo::Point,
-                                     text: String,
-                                     color: gpui::Rgba,
-                                     placed: &mut Vec<kurbo::Rect>| {
-                                        let run = gpui::TextRun {
-                                            len: text.len(),
-                                            font: label_font.clone(),
-                                            color: color.into(),
-                                            background_color: None,
-                                            underline: None,
-                                            strikethrough: None,
-                                        };
-                                        let line = window.text_system().shape_line(
-                                            gpui::SharedString::from(text),
-                                            label_px,
-                                            std::slice::from_ref(&run),
-                                            None,
-                                        );
-                                        let w = f32::from(line.width) as f64;
-                                        let h = f32::from(line_h) as f64;
-                                        let (dx, dy) = (b.x - a.x, b.y - a.y);
-                                        let len = dx.hypot(dy).max(1e-6);
-                                        let (mut nx, mut ny) = (-dy / len, dx / len);
-                                        let horizontalish = dx.abs() >= dy.abs();
-                                        if (horizontalish && ny > 0.0)
-                                            || (!horizontalish && nx < 0.0)
-                                        {
-                                            nx = -nx;
-                                            ny = -ny;
+                                level(
+                                    8.0,
+                                    0,
+                                    1.0,
+                                    t::design_grid_coarse(grid_mid_alpha as f32),
+                                    window,
+                                );
+                                let close_alpha =
+                                    smoothstep(((zoom - 8.0) / 8.0).clamp(0.0, 1.0));
+                                if close_alpha > 0.0 {
+                                    // The 2s only; every 4th line is an 8
+                                    // the mid pass already drew.
+                                    level(
+                                        2.0,
+                                        4,
+                                        0.5,
+                                        t::design_grid_fine(close_alpha as f32),
+                                        window,
+                                    );
+                                }
+                            }
+
+                            // Metrics: baseline, ascender, descender,
+                            // sidebearings.
+                            let hline = |y: f64, window: &mut Window| {
+                                let a = to_screen(0.0, y);
+                                let b = to_screen(advance, y);
+                                window.paint_quad(gpui::fill(
+                                    Bounds::from_corners(a, gpui::point(b.x, b.y + px(1.0))),
+                                    t::metrics_line(),
+                                ));
+                            };
+                            if !text_mode {
+                                // Every guide the font defines, the way
+                                // the web draws them: the baseline
+                                // always, then the box edges, the upm,
+                                // ascender, descender, x-height and
+                                // cap-height, deduplicated.
+                                let mut ys = vec![0.0, box_top, box_bottom, upm, ascender, descender];
+                                ys.extend(x_height);
+                                ys.extend(cap_height);
+                                ys.retain(|y: &f64| y.is_finite());
+                                ys.sort_by(|a, b| a.total_cmp(b));
+                                ys.dedup_by(|a, b| (*a - *b).abs() < 0.001);
+                                for y in ys {
+                                    hline(y, window);
+                                }
+                                for (right, x) in [(false, 0.0), (true, advance)] {
+                                    let hovered = sidebearing_hover == Some(right);
+                                    let a = to_screen(x, box_top);
+                                    let b = to_screen(x, box_bottom);
+                                    let (grow_l, grow_r) =
+                                        if hovered { (1.0, 2.0) } else { (0.0, 1.0) };
+                                    window.paint_quad(gpui::fill(
+                                        Bounds::from_corners(
+                                            gpui::point(a.x - px(grow_l), a.y),
+                                            gpui::point(a.x + px(grow_r), b.y),
+                                        ),
+                                        if hovered {
+                                            t::text_cursor()
+                                        } else {
+                                            t::metrics_line()
+                                        },
+                                    ));
+                                }
+                            }
+
+                            // Space-hold preview: the filled glyph and
+                            // nothing else on top of it.
+                            if preview_mode {
+                                let mut combined = outline.as_ref().clone();
+                                combined.extend(component_path.elements().iter().cloned());
+                                if let Some(p) =
+                                    build_fill_path(&combined, transform, origin)
+                                {
+                                    window.paint_path(p, t::text());
+                                }
+                            }
+
+                            // The text buffer, web-style. Quiet metric
+                            // boxes first so marks and fills sit on top.
+                            let zoom_now = zoom;
+                            let sort_h_px =
+                                ((sort_top - sort_bottom).max(1.0) * zoom_now).max(1.0);
+                            let mark = (sort_h_px * 0.05).clamp(1.5, 24.0);
+                            let marks_visible = mark >= 3.0;
+                            let mut line = |a: Point<gpui::Pixels>,
+                                            b: Point<gpui::Pixels>,
+                                            color: gpui::Rgba,
+                                            window: &mut Window| {
+                                let mut pb = PathBuilder::stroke(px(1.0));
+                                pb.move_to(a);
+                                pb.line_to(b);
+                                if let Ok(p) = pb.build() {
+                                    window.paint_path(p, color);
+                                }
+                            };
+                            if !preview_mode && marks_visible {
+                                for sp in sort_paints.iter() {
+                                    // Quiet full box for the sorts nobody is
+                                    // editing (the active one draws its own
+                                    // metrics outside text mode).
+                                    if !sp.active {
+                                        let color = t::metric_quiet();
+                                        for ex in [sp.x, sp.x + sp.advance] {
+                                            line(
+                                                to_screen(ex, sp.y + sort_bottom),
+                                                to_screen(ex, sp.y + sort_top),
+                                                color,
+                                                window,
+                                            );
                                         }
-                                        let mid = a.midpoint(b);
-                                        let (base, step, pad) = (6.0, h + 4.0, 2.0);
-                                        let top_left = |dirx: f64, diry: f64, dist: f64| {
-                                            let cx0 = mid.x + dirx * dist;
-                                            let cy0 = mid.y + diry * dist;
-                                            let x = if dirx > 0.3 {
-                                                cx0
-                                            } else if dirx < -0.3 {
-                                                cx0 - w
-                                            } else {
-                                                cx0 - w / 2.0
-                                            };
-                                            let y = if diry > 0.3 {
-                                                cy0
-                                            } else if diry < -0.3 {
-                                                cy0 - h
-                                            } else {
-                                                cy0 - h / 2.0
-                                            };
-                                            kurbo::Point::new(x, y)
-                                        };
-                                        let mut chosen = top_left(nx, ny, base);
-                                        'search: for &sign in &[1.0_f64, -1.0] {
-                                            let (dirx, diry) = (nx * sign, ny * sign);
-                                            for k in 0..6 {
-                                                let cand = top_left(
-                                                    dirx,
-                                                    diry,
-                                                    base + k as f64 * step,
+                                        for my in [sort_bottom, 0.0, ascender, sort_top] {
+                                            line(
+                                                to_screen(sp.x, sp.y + my),
+                                                to_screen(sp.x + sp.advance, sp.y + my),
+                                                color,
+                                                window,
+                                            );
+                                        }
+                                    }
+                                    // Corner marks: inward ticks at each
+                                    // metric height on both edges, clipped
+                                    // to the box. Skipped for the active
+                                    // sort outside text mode (it has the
+                                    // full green box instead).
+                                    if sp.active && !text_mode {
+                                        continue;
+                                    }
+                                    let color = match sp.kern {
+                                        1 => t::kern_active(),
+                                        2 => t::kern_previous(),
+                                        _ => t::metrics_line(),
+                                    };
+                                    let ca = to_screen(sp.x, sp.y + sort_bottom);
+                                    let cb =
+                                        to_screen(sp.x + sp.advance, sp.y + sort_top);
+                                    let (left, right) =
+                                        (ca.x.min(cb.x), ca.x.max(cb.x));
+                                    let (top_px, bottom_px) =
+                                        (ca.y.min(cb.y), ca.y.max(cb.y));
+                                    let mark_px = px(mark as f32);
+                                    for ex in [sp.x, sp.x + sp.advance] {
+                                        for my in [sort_bottom, 0.0, ascender, sort_top]
+                                        {
+                                            let c = to_screen(ex, sp.y + my);
+                                            let x0 = (c.x - mark_px).max(left);
+                                            let x1 = (c.x + mark_px).min(right);
+                                            if x1 > x0 {
+                                                line(
+                                                    gpui::point(x0, c.y),
+                                                    gpui::point(x1, c.y),
+                                                    color,
+                                                    window,
                                                 );
-                                                let rect = kurbo::Rect::new(
-                                                    cand.x - pad,
-                                                    cand.y - pad,
-                                                    cand.x + w + pad,
-                                                    cand.y + h + pad,
+                                            }
+                                            let y0 = (c.y - mark_px).max(top_px);
+                                            let y1 = (c.y + mark_px).min(bottom_px);
+                                            if y1 > y0 {
+                                                line(
+                                                    gpui::point(c.x, y0),
+                                                    gpui::point(c.x, y1),
+                                                    color,
+                                                    window,
                                                 );
-                                                let clear = !placed.iter().any(|r| {
-                                                    r.x0 < rect.x1
-                                                        && rect.x0 < r.x1
-                                                        && r.y0 < rect.y1
-                                                        && rect.y0 < r.y1
-                                                });
-                                                if clear {
-                                                    chosen = cand;
-                                                    break 'search;
-                                                }
                                             }
                                         }
-                                        placed.push(kurbo::Rect::new(
-                                            chosen.x,
-                                            chosen.y,
-                                            chosen.x + w,
-                                            chosen.y + h,
-                                        ));
-                                        let halo = kurbo::Rect::new(
-                                            chosen.x - 3.0,
-                                            chosen.y - 1.0,
-                                            chosen.x + w + 3.0,
-                                            chosen.y + h + 1.0,
-                                        );
-                                        let mut halo_color = t::measure_halo();
-                                        halo_color.a *= t32;
-                                        window.paint_quad(gpui::fill(
-                                            Bounds::new(
-                                                gp(halo.origin()),
-                                                gpui::size(
-                                                    px(halo.width() as f32),
-                                                    px(halo.height() as f32),
-                                                ),
-                                            ),
-                                            halo_color,
-                                        ));
-                                        let _ = line.paint(
-                                            gp(chosen),
-                                            line_h,
-                                            gpui::TextAlign::Left,
-                                            None,
-                                            window,
-                                            cx,
-                                        );
+                                    }
+                                }
+                            }
+                            // Sort fills: everyone but the active sort —
+                            // and the active one too while the text tool
+                            // is up (points return with select). Once the
+                            // design grid is up (you are drawing, not
+                            // reading) the neighbours thin to a 0.34 fill
+                            // plus an outline with read-only grey points,
+                            // the web's zoomed-in treatment.
+                            let zoomed_in = !preview_mode && zoom > 0.8;
+                            // The web's point_scale curve, simplified to
+                            // its zoom ramps (device scale is 1 here).
+                            let point_scale = if zoom <= 0.8 {
+                                0.72 + (1.0 - 0.72) * smoothstep((zoom / 0.8).clamp(0.0, 1.0))
+                            } else if zoom <= 8.0 {
+                                1.0 + 0.6 * smoothstep(((zoom - 0.8) / 7.2).clamp(0.0, 1.0))
+                            } else {
+                                1.6 + 0.8 * smoothstep(((zoom - 8.0) / 20.0).clamp(0.0, 1.0))
+                            };
+                            for sp in sort_paints.iter() {
+                                // The active sort renders as editable
+                                // chrome except in text mode, where it is
+                                // a plain fill like its neighbors. The
+                                // preview fill already drew it.
+                                if sp.active && (!text_mode || preview_mode) {
+                                    continue;
+                                }
+                                let Some(path) = sp.path.as_ref() else {
+                                    continue;
+                                };
+                                let dim = zoomed_in && !sp.active;
+                                let sort_transform =
+                                    transform * Affine::translate((sp.x, sp.y));
+                                if let Some(p) =
+                                    build_fill_path(path, sort_transform, origin)
+                                {
+                                    let mut fill = t::glyph_fill();
+                                    if dim {
+                                        fill.a *= 0.34;
+                                    }
+                                    window.paint_path(p, fill);
+                                }
+                                if !dim {
+                                    continue;
+                                }
+                                // Outline + read-only points so the
+                                // neighbour reads as structure.
+                                if let Some(p) = build_path(
+                                    path,
+                                    sort_transform,
+                                    origin,
+                                    PathBuilder::stroke(px(1.0)),
+                                ) {
+                                    window.paint_path(p, t::glyph_fill());
+                                }
+                                use kurbo::Shape as _;
+                                let on_r = 4.5 * point_scale * 0.85;
+                                let off_r = 4.5 * point_scale * 0.6;
+                                let screen = |pt: kurbo::Point| {
+                                    let sp2 = sort_transform * pt;
+                                    kurbo::Point::new(
+                                        sp2.x + f64::from(f32::from(origin.x)),
+                                        sp2.y + f64::from(f32::from(origin.y)),
+                                    )
+                                };
+                                let mut dots = BezPath::new();
+                                let mut handles = PathBuilder::stroke(px(1.0));
+                                let mut any_handles = false;
+                                let mut current = kurbo::Point::ZERO;
+                                let mut start = kurbo::Point::ZERO;
+                                let mut hline2 = |a: kurbo::Point,
+                                                  b: kurbo::Point,
+                                                  pb: &mut PathBuilder,
+                                                  any: &mut bool| {
+                                    pb.move_to(gpui::point(
+                                        px(a.x as f32),
+                                        px(a.y as f32),
+                                    ));
+                                    pb.line_to(gpui::point(
+                                        px(b.x as f32),
+                                        px(b.y as f32),
+                                    ));
+                                    *any = true;
+                                };
+                                for el in path.elements() {
+                                    match *el {
+                                        kurbo::PathEl::MoveTo(p) => {
+                                            let p = screen(p);
+                                            dots.extend(
+                                                kurbo::Circle::new(p, on_r)
+                                                    .to_path(0.25),
+                                            );
+                                            current = p;
+                                            start = p;
+                                        }
+                                        kurbo::PathEl::LineTo(p) => {
+                                            let p = screen(p);
+                                            dots.extend(
+                                                kurbo::Circle::new(p, on_r)
+                                                    .to_path(0.25),
+                                            );
+                                            current = p;
+                                        }
+                                        kurbo::PathEl::QuadTo(c, p) => {
+                                            let (c, p) = (screen(c), screen(p));
+                                            dots.extend(
+                                                kurbo::Circle::new(c, off_r)
+                                                    .to_path(0.25),
+                                            );
+                                            dots.extend(
+                                                kurbo::Circle::new(p, on_r)
+                                                    .to_path(0.25),
+                                            );
+                                            hline2(current, c, &mut handles, &mut any_handles);
+                                            hline2(c, p, &mut handles, &mut any_handles);
+                                            current = p;
+                                        }
+                                        kurbo::PathEl::CurveTo(c1, c2, p) => {
+                                            let (c1, c2, p) =
+                                                (screen(c1), screen(c2), screen(p));
+                                            dots.extend(
+                                                kurbo::Circle::new(c1, off_r)
+                                                    .to_path(0.25),
+                                            );
+                                            dots.extend(
+                                                kurbo::Circle::new(c2, off_r)
+                                                    .to_path(0.25),
+                                            );
+                                            dots.extend(
+                                                kurbo::Circle::new(p, on_r)
+                                                    .to_path(0.25),
+                                            );
+                                            hline2(current, c1, &mut handles, &mut any_handles);
+                                            hline2(c2, p, &mut handles, &mut any_handles);
+                                            current = p;
+                                        }
+                                        kurbo::PathEl::ClosePath => {
+                                            current = start;
+                                        }
+                                    }
+                                }
+                                if any_handles && let Ok(p) = handles.build() {
+                                    window.paint_path(p, t::point_readonly());
+                                }
+                                if let Some(p) = build_fill_path(
+                                    &dots,
+                                    Affine::IDENTITY,
+                                    gpui::point(px(0.0), px(0.0)),
+                                ) {
+                                    window.paint_path(p, t::point_inner());
+                                }
+                                if let Some(p) = build_path(
+                                    &dots,
+                                    Affine::IDENTITY,
+                                    gpui::point(px(0.0), px(0.0)),
+                                    PathBuilder::stroke(px(1.0)),
+                                ) {
+                                    window.paint_path(p, t::point_readonly());
+                                }
+                            }
+                            // Caret: line plus inward triangles, sized off
+                            // the sort's on-screen height like the web.
+                            if let Some((cx_, cy)) = text_caret {
+                                let top = to_screen(cx_, cy + sort_top);
+                                let bottom = to_screen(cx_, cy + sort_bottom);
+                                let caret_color = t::text_cursor();
+                                window.paint_quad(gpui::fill(
+                                    Bounds::from_corners(
+                                        gpui::point(top.x - px(0.75), top.y),
+                                        gpui::point(top.x + px(0.75), bottom.y),
+                                    ),
+                                    caret_color,
+                                ));
+                                let tri_scale =
+                                    ((sort_h_px * 0.09).clamp(4.0, 34.0)) / 24.0;
+                                let tw = px((24.0 * tri_scale) as f32);
+                                let th = px((16.0 * tri_scale) as f32);
+                                let mut tri = PathBuilder::fill();
+                                tri.move_to(gpui::point(top.x - tw / 2.0, top.y));
+                                tri.line_to(gpui::point(top.x + tw / 2.0, top.y));
+                                tri.line_to(gpui::point(top.x, top.y + th));
+                                if let Ok(p) = tri.build() {
+                                    window.paint_path(p, caret_color);
+                                }
+                                let mut tri = PathBuilder::fill();
+                                tri.move_to(gpui::point(bottom.x - tw / 2.0, bottom.y));
+                                tri.line_to(gpui::point(bottom.x + tw / 2.0, bottom.y));
+                                tri.line_to(gpui::point(bottom.x, bottom.y - th));
+                                if let Ok(p) = tri.build() {
+                                    window.paint_path(p, caret_color);
+                                }
+                            }
+
+                            // Reference layers: other masters as dim strokes.
+                            for path in &reference_paths {
+                                if let Some(p) = build_path(
+                                    path,
+                                    transform,
+                                    origin,
+                                    PathBuilder::stroke(px(1.0)),
+                                ) {
+                                    window.paint_path(p, t::reference_layer());
+                                }
+                            }
+
+                            // Components: dim distinct fill, not editable
+                            // directly (Cmd+Shift+D decomposes).
+                            if !component_path.elements().is_empty()
+                                && let Some(p) =
+                                    build_fill_path(&component_path, transform, origin)
+                            {
+                                let color = if component_selected {
+                                    t::component_selected_fill()
+                                } else {
+                                    t::component_fill()
+                                };
+                                window.paint_path(p, color);
+                            }
+                            // Interpolated instance at the axes-bar
+                            // location, as a ghost outline.
+                            if let Some(ghost) = &ghost
+                                && let Some(p) = build_path(
+                                    ghost,
+                                    transform,
+                                    origin,
+                                    PathBuilder::stroke(px(1.0)),
+                                )
+                            {
+                                window.paint_path(p, t::ghost());
+                            }
+                            // Reference glyph: a ghost fill so it never
+                            // reads as the background layer's outline.
+                            if let Some(path) = &reference_path
+                                && let Some(p) =
+                                    build_fill_path(path, transform, origin)
+                            {
+                                let mut fill = t::glyph_fill();
+                                fill.a *= 0.22;
+                                window.paint_path(p, fill);
+                            }
+                            // Background layer: a quiet outline behind the
+                            // drawing, the way Glyphs shows a background.
+                            if let Some(path) = &background_path
+                                && let Some(p) = build_path(
+                                    path,
+                                    transform,
+                                    origin,
+                                    PathBuilder::stroke(px(1.0)),
+                                )
+                            {
+                                window.paint_path(p, t::metric_quiet());
+                            }
+                            // Curvature comb, behind the outline so points
+                            // stay selectable over it.
+                            for strip in &comb_strips {
+                                for w in strip.windows(2) {
+                                    let (s0, s1) = (&w[0], &w[1]);
+                                    let mut quad = BezPath::new();
+                                    quad.move_to(transform * s0.on);
+                                    quad.line_to(transform * s1.on);
+                                    quad.line_to(transform * s1.outer);
+                                    quad.line_to(transform * s0.outer);
+                                    quad.close_path();
+                                    let k = if comb_maxk > 1e-12 {
+                                        (s0.kappa.abs() + s1.kappa.abs()) * 0.5
+                                            / comb_maxk
+                                    } else {
+                                        0.0
                                     };
-                                if let Some(sb) = sb {
-                                    for (is_left, x, y, val) in [
-                                        (true, sb.min_x, sb.y_left, sb.lsb),
-                                        (false, sb.max_x, sb.y_right, sb.rsb),
+                                    if let Some(p) = build_fill_path(
+                                        &quad,
+                                        Affine::IDENTITY,
+                                        origin,
+                                    ) {
+                                        window
+                                            .paint_path(p, t::comb_gradient(k));
+                                    }
+                                }
+                            }
+
+                            // Ghost fill under the glyph being edited: the
+                            // same grey the inactive sorts use at a tenth
+                            // strength, so counters read as counters
+                            // without competing with the outline (web
+                            // ACTIVE_GLYPH_FILL_ALPHA).
+                            if !preview_mode && !text_mode {
+                                let mut combined = outline.as_ref().clone();
+                                combined
+                                    .extend(component_path.elements().iter().cloned());
+                                if let Some(p) =
+                                    build_fill_path(&combined, transform, origin)
+                                {
+                                    let mut fill = t::glyph_fill();
+                                    fill.a *= 0.16;
+                                    window.paint_path(p, fill);
+                                }
+                            }
+                            // Edit mode is a stroked outline (no fill),
+                            // like the other editors.
+                            if !preview_mode
+                                && !text_mode
+                                && let Some(path) =
+                                build_path(&outline, transform, origin, PathBuilder::stroke(px(1.0)))
+                            {
+                                window.paint_path(path, t::path_stroke());
+                            }
+
+                            // Handle lines: each off-curve connects to its
+                            // anchoring on-curve neighbor.
+                            if !preview_mode && !text_mode {
+                                let mut lines = PathBuilder::stroke(px(1.0));
+                                let mut any_line = false;
+                                for (i, p) in points.iter().enumerate() {
+                                    if p.on_curve {
+                                        continue;
+                                    }
+                                    // Neighbors within the same contour, cyclic.
+                                    let contour_pts: Vec<&GlyphPoint> = points
+                                        .iter()
+                                        .filter(|q| q.contour == p.contour)
+                                        .collect();
+                                    let n = contour_pts.len();
+                                    let pos = contour_pts
+                                        .iter()
+                                        .position(|q| q.index == p.index)
+                                        .unwrap_or(0);
+                                    let prev = contour_pts[(pos + n - 1) % n];
+                                    let next = contour_pts[(pos + 1) % n];
+                                    let anchor = if prev.on_curve {
+                                        prev
+                                    } else if next.on_curve {
+                                        next
+                                    } else {
+                                        continue;
+                                    };
+                                    lines.move_to(to_screen(p.x, p.y));
+                                    lines.line_to(to_screen(anchor.x, anchor.y));
+                                    any_line = true;
+                                    let _ = i;
+                                }
+                                if any_line && let Ok(path) = lines.build() {
+                                    window.paint_path(path, t::handle_line());
+                                }
+                            }
+
+                            // Points: smooth = blue circle, corner = green
+                            // square, off-curve = purple circle, selection
+                            // in yellow/orange — the shared palette.
+                            let circle = |window: &mut Window,
+                                          center: Point<gpui::Pixels>,
+                                          r: f32,
+                                          color: gpui::Rgba| {
+                                use kurbo::Shape;
+                                let cx_: f32 = center.x.into();
+                                let cy_: f32 = center.y.into();
+                                let shape = kurbo::Circle::new(
+                                    (cx_ as f64, cy_ as f64),
+                                    r as f64,
+                                )
+                                .to_path(0.25);
+                                if let Some(p) = build_fill_path(
+                                    &shape,
+                                    Affine::IDENTITY,
+                                    gpui::point(px(0.0), px(0.0)),
+                                ) {
+                                    window.paint_path(p, color);
+                                }
+                            };
+                            // A point is a dark window with a coloured
+                            // ring, the web's recipe: a halo casing so
+                            // it keeps an edge over the outline and the
+                            // comb, an interior fill that masks what
+                            // runs underneath, then a constant-width
+                            // ring on top. Selected points fill yellow
+                            // and ring in the selection colour.
+                            let ps = point_scale as f32;
+                            let ring_w = (1.5 * ps).max(1.0);
+                            let halo_w = ring_w + 2.0;
+                            let shape = |center: Point<gpui::Pixels>,
+                                         r: f32,
+                                         square: bool|
+                             -> kurbo::BezPath {
+                                use kurbo::Shape as _;
+                                let (cx_, cy_) =
+                                    (f32::from(center.x) as f64, f32::from(center.y) as f64);
+                                if square {
+                                    kurbo::Rect::new(
+                                        cx_ - r as f64,
+                                        cy_ - r as f64,
+                                        cx_ + r as f64,
+                                        cy_ + r as f64,
+                                    )
+                                    .to_path(0.1)
+                                } else {
+                                    kurbo::Circle::new((cx_, cy_), r as f64).to_path(0.15)
+                                }
+                            };
+                            let zero = gpui::point(px(0.0), px(0.0));
+                            for p in points.iter() {
+                                if preview_mode || text_mode {
+                                    break;
+                                }
+                                let center = to_screen(p.x, p.y);
+                                let is_selected =
+                                    selected_points.contains(&(p.contour, p.index));
+                                let (ring, inner) = if is_selected {
+                                    (t::point_selected_ring(), t::point_selected())
+                                } else if p.hyper {
+                                    (t::point_hyper_outer(), t::point_inner())
+                                } else if !p.on_curve {
+                                    (t::point_offcurve_outer(), t::point_inner())
+                                } else if p.smooth {
+                                    (t::point_smooth_outer(), t::point_inner())
+                                } else {
+                                    (t::point_corner_outer(), t::point_inner())
+                                };
+                                let is_square = p.on_curve && !p.smooth && !p.hyper;
+                                let r = if p.hyper && p.on_curve {
+                                    if is_selected { 5.0 } else { 4.0 }
+                                } else if is_square {
+                                    if is_selected { 4.5 } else { 3.5 }
+                                } else if is_selected {
+                                    5.5
+                                } else {
+                                    4.5
+                                } * ps;
+                                let path = shape(center, r, is_square);
+                                if let Some(p) = build_path(
+                                    &path,
+                                    Affine::IDENTITY,
+                                    zero,
+                                    PathBuilder::stroke(px(halo_w)),
+                                ) {
+                                    window.paint_path(p, t::halo());
+                                }
+                                if let Some(p) =
+                                    build_fill_path(&path, Affine::IDENTITY, zero)
+                                {
+                                    window.paint_path(p, inner);
+                                }
+                                // The point is a window onto the design
+                                // grid: the gridlines that cross it are
+                                // redrawn inside, tinted with the
+                                // point's own colour, so you can read
+                                // where it sits (web draws this by
+                                // clipping the grid to the point; gpui
+                                // masks rectangles only, so the chords
+                                // are solved instead — exact, and it
+                                // costs a few lines per point).
+                                if grid_mid_alpha > 0.0 && !preview_mode && !text_mode {
+                                    let (cx_, cy_) = (
+                                        f32::from(center.x) as f64,
+                                        f32::from(center.y) as f64,
+                                    );
+                                    let r = r as f64;
+                                    let inv = transform.inverse();
+                                    for (spacing, alpha, wide) in [
+                                        (8.0_f64, grid_mid_alpha, 1.0_f32),
+                                        (2.0, grid_close_alpha, 0.7),
                                     ] {
-                                        let color = fade(
-                                            t::popcount_tier(measure::popcount(val)),
-                                            0.9,
+                                        if alpha <= 0.0 {
+                                            continue;
+                                        }
+                                        let mut tint = ring;
+                                        tint.a = alpha as f32;
+                                        let mut lines = PathBuilder::stroke(px(wide));
+                                        let mut any = false;
+                                        // Vertical gridlines: the chord
+                                        // is the circle's half-height at
+                                        // that offset (the full radius
+                                        // for a square point).
+                                        let a = (inv * kurbo::Point::new(cx_ - r, cy_)).x;
+                                        let b = (inv * kurbo::Point::new(cx_ + r, cy_)).x;
+                                        let (lo, hi) = (a.min(b), a.max(b));
+                                        for k in (lo / spacing).ceil() as i64
+                                            ..=(hi / spacing).floor() as i64
+                                        {
+                                            let sx = (transform
+                                                * kurbo::Point::new(
+                                                    k as f64 * spacing,
+                                                    0.0,
+                                                ))
+                                            .x;
+                                            let d = sx - cx_;
+                                            let half = if is_square {
+                                                r
+                                            } else {
+                                                (r * r - d * d).max(0.0).sqrt()
+                                            };
+                                            if half <= 0.2 {
+                                                continue;
+                                            }
+                                            lines.move_to(gpui::point(
+                                                px(sx as f32),
+                                                px((cy_ - half) as f32),
+                                            ));
+                                            lines.line_to(gpui::point(
+                                                px(sx as f32),
+                                                px((cy_ + half) as f32),
+                                            ));
+                                            any = true;
+                                        }
+                                        let a = (inv * kurbo::Point::new(cx_, cy_ - r)).y;
+                                        let b = (inv * kurbo::Point::new(cx_, cy_ + r)).y;
+                                        let (lo, hi) = (a.min(b), a.max(b));
+                                        for k in (lo / spacing).ceil() as i64
+                                            ..=(hi / spacing).floor() as i64
+                                        {
+                                            let sy = (transform
+                                                * kurbo::Point::new(
+                                                    0.0,
+                                                    k as f64 * spacing,
+                                                ))
+                                            .y;
+                                            let d = sy - cy_;
+                                            let half = if is_square {
+                                                r
+                                            } else {
+                                                (r * r - d * d).max(0.0).sqrt()
+                                            };
+                                            if half <= 0.2 {
+                                                continue;
+                                            }
+                                            lines.move_to(gpui::point(
+                                                px((cx_ - half) as f32),
+                                                px(sy as f32),
+                                            ));
+                                            lines.line_to(gpui::point(
+                                                px((cx_ + half) as f32),
+                                                px(sy as f32),
+                                            ));
+                                            any = true;
+                                        }
+                                        if any && let Ok(p) = lines.build() {
+                                            window.paint_path(p, tint);
+                                        }
+                                    }
+                                }
+                                if let Some(p) = build_path(
+                                    &path,
+                                    Affine::IDENTITY,
+                                    zero,
+                                    PathBuilder::stroke(px(ring_w)),
+                                ) {
+                                    window.paint_path(p, ring);
+                                }
+                            }
+                            // Start-of-contour arrow: which point a closed
+                            // contour begins at, and which way it runs
+                            // (web draw_start_arrow).
+                            if !preview_mode && !text_mode {
+                                for start in start_markers.iter() {
+                                    let (from, to, selected) = *start;
+                                    let a = to_screen(from.0, from.1);
+                                    let b = to_screen(to.0, to.1);
+                                    let size =
+                                        (if selected { 6.5 } else { 5.5 }) * ps;
+                                    let dir = (
+                                        f32::from(b.x - a.x),
+                                        f32::from(b.y - a.y),
+                                    );
+                                    let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt();
+                                    if len < 0.001 {
+                                        continue;
+                                    }
+                                    let f = (dir.0 / len, dir.1 / len);
+                                    let perp = (-f.1, f.0);
+                                    let cx_ = f32::from(a.x) + perp.0 * 8.0 * ps;
+                                    let cy_ = f32::from(a.y) + perp.1 * 8.0 * ps;
+                                    let tip = (cx_ + f.0 * size, cy_ + f.1 * size);
+                                    let base = (
+                                        cx_ - f.0 * size * 0.5,
+                                        cy_ - f.1 * size * 0.5,
+                                    );
+                                    let left = (
+                                        base.0 + perp.0 * size * 0.5,
+                                        base.1 + perp.1 * size * 0.5,
+                                    );
+                                    let right = (
+                                        base.0 - perp.0 * size * 0.5,
+                                        base.1 - perp.1 * size * 0.5,
+                                    );
+                                    let mut pb = PathBuilder::fill();
+                                    pb.move_to(gpui::point(px(tip.0), px(tip.1)));
+                                    pb.line_to(gpui::point(px(left.0), px(left.1)));
+                                    pb.line_to(gpui::point(px(right.0), px(right.1)));
+                                    pb.close();
+                                    if let Ok(path) = pb.build() {
+                                        window.paint_path(
+                                            path,
+                                            if selected {
+                                                t::point_selected()
+                                            } else {
+                                                t::point_smooth_outer()
+                                            },
                                         );
-                                        let margin_x =
-                                            if is_left { 0.0 } else { sb.advance };
-                                        let a = transform
-                                            * kurbo::Point::new(margin_x, y);
-                                        let b = transform * kurbo::Point::new(x, y);
-                                        dim_line(window, a, b, color);
+                                    }
+                                }
+                            }
+                            // Anchors: diamonds (rotated squares drawn as
+                            // two overlapping quads approximate; use a
+                            // filled path).
+                            // Anchors are diamonds built like points: a
+                            // dark window with a coloured ring, sized
+                            // off the smooth-point radius and widened a
+                            // little so a rotated square reads as the
+                            // same size (web ANCHOR_DIAMOND_SCALE).
+                            for (ai, (_, ax, ay)) in anchors.iter().enumerate() {
+                                if preview_mode || text_mode {
+                                    break;
+                                }
+                                let center = to_screen(*ax, *ay);
+                                let is_selected = selected_anchors.contains(&ai);
+                                let r = (if is_selected { 5.5 } else { 4.5 }) * ps * 1.35;
+                                let (cx_, cy_) = (
+                                    f32::from(center.x) as f64,
+                                    f32::from(center.y) as f64,
+                                );
+                                let r = r as f64;
+                                let mut diamond = BezPath::new();
+                                diamond.move_to((cx_, cy_ - r));
+                                diamond.line_to((cx_ + r, cy_));
+                                diamond.line_to((cx_, cy_ + r));
+                                diamond.line_to((cx_ - r, cy_));
+                                diamond.close_path();
+                                let (ring, inner) = if is_selected {
+                                    (t::point_selected_ring(), t::point_selected())
+                                } else {
+                                    (t::anchor(), t::point_inner())
+                                };
+                                if let Some(p) = build_path(
+                                    &diamond,
+                                    Affine::IDENTITY,
+                                    zero,
+                                    PathBuilder::stroke(px(halo_w)),
+                                ) {
+                                    window.paint_path(p, t::halo());
+                                }
+                                if let Some(p) =
+                                    build_fill_path(&diamond, Affine::IDENTITY, zero)
+                                {
+                                    window.paint_path(p, inner);
+                                }
+                                if let Some(p) = build_path(
+                                    &diamond,
+                                    Affine::IDENTITY,
+                                    zero,
+                                    PathBuilder::stroke(px(ring_w)),
+                                ) {
+                                    window.paint_path(p, ring);
+                                }
+                            }
+
+                            // Shapes-tool live preview.
+                            if let Some((a, b, ellipse)) = shape_preview {
+                                use kurbo::Shape as _;
+                                let rect = kurbo::Rect::from_points(
+                                    kurbo::Point::new(a.0, a.1),
+                                    kurbo::Point::new(b.0, b.1),
+                                );
+                                let shape: BezPath = if ellipse {
+                                    kurbo::Ellipse::from_rect(rect).to_path(0.1)
+                                } else {
+                                    rect.to_path(0.1)
+                                };
+                                if let Some(p) = build_path(
+                                    &shape,
+                                    transform,
+                                    origin,
+                                    PathBuilder::stroke(px(1.0)),
+                                ) {
+                                    window.paint_path(p, t::accent());
+                                }
+                            }
+                            // Measure-tool line.
+                            if let Some(seg) = hover_seg {
+                                let mut pb = PathBuilder::stroke(px(3.0));
+                                match seg {
+                                    kurbo::PathSeg::Line(l) => {
+                                        pb.move_to(to_screen(l.p0.x, l.p0.y));
+                                        pb.line_to(to_screen(l.p1.x, l.p1.y));
+                                    }
+                                    kurbo::PathSeg::Quad(q) => {
+                                        pb.move_to(to_screen(q.p0.x, q.p0.y));
+                                        pb.curve_to(
+                                            to_screen(q.p2.x, q.p2.y),
+                                            to_screen(q.p1.x, q.p1.y),
+                                        );
+                                    }
+                                    kurbo::PathSeg::Cubic(c) => {
+                                        pb.move_to(to_screen(c.p0.x, c.p0.y));
+                                        pb.cubic_bezier_to(
+                                            to_screen(c.p3.x, c.p3.y),
+                                            to_screen(c.p1.x, c.p1.y),
+                                            to_screen(c.p2.x, c.p2.y),
+                                        );
+                                    }
+                                }
+                                if let Ok(p) = pb.build() {
+                                    window.paint_path(p, t::accent());
+                                }
+                            }
+                            if let Some(((lx, ly), (cx3, cy3), close)) = pen_preview {
+                                let mut pb = PathBuilder::stroke(px(1.0));
+                                pb.move_to(to_screen(lx, ly));
+                                pb.line_to(to_screen(cx3, cy3));
+                                if let Ok(p) = pb.build() {
+                                    window.paint_path(p, t::accent());
+                                }
+                                if let Some((sx2, sy2)) = close {
+                                    circle(
+                                        window,
+                                        to_screen(sx2, sy2),
+                                        6.0,
+                                        t::accent(),
+                                    );
+                                }
+                            }
+                            if let Some(((sx, sy), (cx2, cy2), hits)) = &knife_line {
+                                let a = to_screen(*sx, *sy);
+                                let b = to_screen(*cx2, *cy2);
+                                let mut line = PathBuilder::stroke(px(1.0));
+                                line.move_to(a);
+                                line.line_to(b);
+                                if let Ok(p) = line.build() {
+                                    window.paint_path(p, t::anchor());
+                                }
+                                for hit in hits {
+                                    let c = to_screen(hit.x, hit.y);
+                                    circle(window, c, 3.5, t::anchor());
+                                }
+                            }
+                            if let Some((a, b)) = measure_line {
+                                let mut pb = PathBuilder::stroke(px(1.0));
+                                let pa = to_screen(a.0, a.1);
+                                let pbp = to_screen(b.0, b.1);
+                                pb.move_to(pa);
+                                pb.line_to(pbp);
+                                if let Ok(p) = pb.build() {
+                                    window.paint_path(p, t::accent());
+                                }
+                            }
+                            // Measure-tool HUD (web draw_measurements):
+                            // popcount-colored outline, dimension lines
+                            // with outward arrowheads, and labels that
+                            // dodge each other. Fades in with zoom.
+                            if let Some((strokes, measurements, sb)) = &measure_hud {
+                                use runebender_core::measure::{self, MeasureKind};
+                                let t32 = (((zoom - 0.30) / 0.40).clamp(0.0, 1.0)) as f32;
+                                if t32 > 0.0 {
+                                    let fade = |mut c: gpui::Rgba, mul: f32| {
+                                        c.a *= t32 * mul;
+                                        c
+                                    };
+                                    for cs in strokes {
+                                        let width = if cs.wide { 1.5 } else { 1.0 };
+                                        if let Some(p) = build_path(
+                                            &cs.path,
+                                            transform,
+                                            origin,
+                                            PathBuilder::stroke(px(width)),
+                                        ) {
+                                            window.paint_path(
+                                                p,
+                                                fade(t::popcount_tier(cs.popcount), 1.0),
+                                            );
+                                        }
+                                    }
+                                    let gp = |p: kurbo::Point| {
+                                        gpui::point(
+                                            origin.x + px(p.x as f32),
+                                            origin.y + px(p.y as f32),
+                                        )
+                                    };
+                                    // A span's dimension line: a shaft that
+                                    // stops short of both endpoints with an
+                                    // outward arrowhead at each end.
+                                    let dim_line = |window: &mut gpui::Window,
+                                                    a: kurbo::Point,
+                                                    b: kurbo::Point,
+                                                    color: gpui::Rgba| {
+                                        let (dx, dy) = (b.x - a.x, b.y - a.y);
+                                        let len = dx.hypot(dy);
+                                        if len < 1e-3 {
+                                            return;
+                                        }
+                                        let (ux, uy) = (dx / len, dy / len);
+                                        let (nx, ny) = (-uy, ux);
+                                        let (end_gap, head, wing) = (3.0, 7.0, 4.0);
+                                        let a2 = kurbo::Point::new(
+                                            a.x + ux * end_gap,
+                                            a.y + uy * end_gap,
+                                        );
+                                        let b2 = kurbo::Point::new(
+                                            b.x - ux * end_gap,
+                                            b.y - uy * end_gap,
+                                        );
+                                        let mut pb = PathBuilder::stroke(px(1.25));
+                                        pb.move_to(gp(a2));
+                                        pb.line_to(gp(b2));
+                                        for (p0, sx) in [(a2, 1.0), (b2, -1.0)] {
+                                            for side in [1.0, -1.0] {
+                                                pb.move_to(gp(p0));
+                                                pb.line_to(gp(kurbo::Point::new(
+                                                    p0.x + sx * ux * head + side * nx * wing,
+                                                    p0.y + sx * uy * head + side * ny * wing,
+                                                )));
+                                            }
+                                        }
+                                        if let Ok(p) = pb.build() {
+                                            window.paint_path(p, color);
+                                        }
+                                    };
+                                    // Place a label just off its line, then
+                                    // step it outward (and to the other
+                                    // side) until it clears every label
+                                    // already placed this frame.
+                                    let label_px = px(13.0);
+                                    let line_h = px(15.0);
+                                    let label_font = window.text_style().font();
+                                    let mut placed: Vec<kurbo::Rect> = Vec::new();
+                                    let mut draw_label =
+                                        |window: &mut gpui::Window,
+                                         cx: &mut gpui::App,
+                                         a: kurbo::Point,
+                                         b: kurbo::Point,
+                                         text: String,
+                                         color: gpui::Rgba,
+                                         placed: &mut Vec<kurbo::Rect>| {
+                                            let run = gpui::TextRun {
+                                                len: text.len(),
+                                                font: label_font.clone(),
+                                                color: color.into(),
+                                                background_color: None,
+                                                underline: None,
+                                                strikethrough: None,
+                                            };
+                                            let line = window.text_system().shape_line(
+                                                gpui::SharedString::from(text),
+                                                label_px,
+                                                std::slice::from_ref(&run),
+                                                None,
+                                            );
+                                            let w = f32::from(line.width) as f64;
+                                            let h = f32::from(line_h) as f64;
+                                            let (dx, dy) = (b.x - a.x, b.y - a.y);
+                                            let len = dx.hypot(dy).max(1e-6);
+                                            let (mut nx, mut ny) = (-dy / len, dx / len);
+                                            let horizontalish = dx.abs() >= dy.abs();
+                                            if (horizontalish && ny > 0.0)
+                                                || (!horizontalish && nx < 0.0)
+                                            {
+                                                nx = -nx;
+                                                ny = -ny;
+                                            }
+                                            let mid = a.midpoint(b);
+                                            let (base, step, pad) = (6.0, h + 4.0, 2.0);
+                                            let top_left = |dirx: f64, diry: f64, dist: f64| {
+                                                let cx0 = mid.x + dirx * dist;
+                                                let cy0 = mid.y + diry * dist;
+                                                let x = if dirx > 0.3 {
+                                                    cx0
+                                                } else if dirx < -0.3 {
+                                                    cx0 - w
+                                                } else {
+                                                    cx0 - w / 2.0
+                                                };
+                                                let y = if diry > 0.3 {
+                                                    cy0
+                                                } else if diry < -0.3 {
+                                                    cy0 - h
+                                                } else {
+                                                    cy0 - h / 2.0
+                                                };
+                                                kurbo::Point::new(x, y)
+                                            };
+                                            let mut chosen = top_left(nx, ny, base);
+                                            'search: for &sign in &[1.0_f64, -1.0] {
+                                                let (dirx, diry) = (nx * sign, ny * sign);
+                                                for k in 0..6 {
+                                                    let cand = top_left(
+                                                        dirx,
+                                                        diry,
+                                                        base + k as f64 * step,
+                                                    );
+                                                    let rect = kurbo::Rect::new(
+                                                        cand.x - pad,
+                                                        cand.y - pad,
+                                                        cand.x + w + pad,
+                                                        cand.y + h + pad,
+                                                    );
+                                                    let clear = !placed.iter().any(|r| {
+                                                        r.x0 < rect.x1
+                                                            && rect.x0 < r.x1
+                                                            && r.y0 < rect.y1
+                                                            && rect.y0 < r.y1
+                                                    });
+                                                    if clear {
+                                                        chosen = cand;
+                                                        break 'search;
+                                                    }
+                                                }
+                                            }
+                                            placed.push(kurbo::Rect::new(
+                                                chosen.x,
+                                                chosen.y,
+                                                chosen.x + w,
+                                                chosen.y + h,
+                                            ));
+                                            let halo = kurbo::Rect::new(
+                                                chosen.x - 3.0,
+                                                chosen.y - 1.0,
+                                                chosen.x + w + 3.0,
+                                                chosen.y + h + 1.0,
+                                            );
+                                            let mut halo_color = t::measure_halo();
+                                            halo_color.a *= t32;
+                                            window.paint_quad(gpui::fill(
+                                                Bounds::new(
+                                                    gp(halo.origin()),
+                                                    gpui::size(
+                                                        px(halo.width() as f32),
+                                                        px(halo.height() as f32),
+                                                    ),
+                                                ),
+                                                halo_color,
+                                            ));
+                                            let _ = line.paint(
+                                                gp(chosen),
+                                                line_h,
+                                                gpui::TextAlign::Left,
+                                                None,
+                                                window,
+                                                cx,
+                                            );
+                                        };
+                                    if let Some(sb) = sb {
+                                        for (is_left, x, y, val) in [
+                                            (true, sb.min_x, sb.y_left, sb.lsb),
+                                            (false, sb.max_x, sb.y_right, sb.rsb),
+                                        ] {
+                                            let color = fade(
+                                                t::popcount_tier(measure::popcount(val)),
+                                                0.9,
+                                            );
+                                            let margin_x =
+                                                if is_left { 0.0 } else { sb.advance };
+                                            let a = transform
+                                                * kurbo::Point::new(margin_x, y);
+                                            let b = transform * kurbo::Point::new(x, y);
+                                            dim_line(window, a, b, color);
+                                            draw_label(
+                                                window,
+                                                cx,
+                                                a,
+                                                b,
+                                                measure_opts.label(val),
+                                                color,
+                                                &mut placed,
+                                            );
+                                        }
+                                    }
+                                    for m in measurements {
+                                        let show = match m.kind {
+                                            MeasureKind::Handle => measure_opts.handles,
+                                            MeasureKind::Segment => measure_opts.segments,
+                                            MeasureKind::Horizontal
+                                            | MeasureKind::Vertical => measure_opts.spans,
+                                        };
+                                        if !show {
+                                            continue;
+                                        }
+                                        let a = transform * m.a;
+                                        let b = transform * m.b;
+                                        let color = fade(
+                                            t::popcount_tier(measure::popcount(m.length)),
+                                            1.0,
+                                        );
+                                        if matches!(
+                                            m.kind,
+                                            MeasureKind::Horizontal | MeasureKind::Vertical
+                                        ) {
+                                            dim_line(window, a, b, color);
+                                        }
                                         draw_label(
                                             window,
                                             cx,
                                             a,
                                             b,
-                                            measure_opts.label(val),
+                                            measure_opts.label(m.length),
                                             color,
                                             &mut placed,
                                         );
                                     }
                                 }
-                                for m in measurements {
-                                    let show = match m.kind {
-                                        MeasureKind::Handle => measure_opts.handles,
-                                        MeasureKind::Segment => measure_opts.segments,
-                                        MeasureKind::Horizontal
-                                        | MeasureKind::Vertical => measure_opts.spans,
-                                    };
-                                    if !show {
-                                        continue;
-                                    }
-                                    let a = transform * m.a;
-                                    let b = transform * m.b;
-                                    let color = fade(
-                                        t::popcount_tier(measure::popcount(m.length)),
-                                        1.0,
-                                    );
-                                    if matches!(
-                                        m.kind,
-                                        MeasureKind::Horizontal | MeasureKind::Vertical
+                            }
+                            // Continuity rings around on-curve nodes.
+                            if !continuity_rings.is_empty() {
+                                use kurbo::Shape as _;
+                                let r = (4.5 * 1.9) as f64;
+                                for (at, color) in &continuity_rings {
+                                    let c = transform * *at;
+                                    let circle = kurbo::Circle::new(c, r)
+                                        .to_path(0.25);
+                                    if let Some(p) = build_path(
+                                        &circle,
+                                        Affine::IDENTITY,
+                                        origin,
+                                        PathBuilder::stroke(px(1.5)),
                                     ) {
-                                        dim_line(window, a, b, color);
+                                        window.paint_path(p, *color);
                                     }
-                                    draw_label(
-                                        window,
-                                        cx,
-                                        a,
-                                        b,
-                                        measure_opts.label(m.length),
-                                        color,
-                                        &mut placed,
-                                    );
                                 }
                             }
-                        }
-                        // Continuity rings around on-curve nodes.
-                        if !continuity_rings.is_empty() {
-                            use kurbo::Shape as _;
-                            let r = (4.5 * 1.9) as f64;
-                            for (at, color) in &continuity_rings {
-                                let c = transform * *at;
-                                let circle = kurbo::Circle::new(c, r)
-                                    .to_path(0.25);
-                                if let Some(p) = build_path(
-                                    &circle,
-                                    Affine::IDENTITY,
-                                    origin,
-                                    PathBuilder::stroke(px(1.5)),
-                                ) {
-                                    window.paint_path(p, *color);
-                                }
-                            }
-                        }
 
-                        // Marquee rectangle.
-                        if let Some((a, b)) = marquee {
-                            let pa = to_screen(a.0, a.1);
-                            let pb = to_screen(b.0, b.1);
-                            let rect = Bounds::from_corners(
-                                gpui::point(pa.x.min(pb.x), pa.y.min(pb.y)),
-                                gpui::point(pa.x.max(pb.x), pa.y.max(pb.y)),
-                            );
-                            window.paint_quad(gpui::fill(rect, t::marquee_fill()));
-                            window.paint_quad(gpui::outline(
-                                rect,
-                                t::marquee_stroke(),
-                                gpui::BorderStyle::Solid,
-                            ));
-                        }
-                        let _ = (zoom, &component_names);
+                            // Marquee rectangle.
+                            if let Some((a, b)) = marquee {
+                                let pa = to_screen(a.0, a.1);
+                                let pb = to_screen(b.0, b.1);
+                                let rect = Bounds::from_corners(
+                                    gpui::point(pa.x.min(pb.x), pa.y.min(pb.y)),
+                                    gpui::point(pa.x.max(pb.x), pa.y.max(pb.y)),
+                                );
+                                window.paint_quad(gpui::fill(rect, t::marquee_fill()));
+                                window.paint_quad(gpui::outline(
+                                    rect,
+                                    t::marquee_stroke(),
+                                    gpui::BorderStyle::Solid,
+                                ));
+                            }
+                            let _ = (zoom, &component_names);
+                            },
+                        );
                     },
                 )
                 .size_full(),
@@ -6289,129 +6611,139 @@ impl Workspace {
         .map(|g| g.as_str().replace("public.kern2.", ""))
         .unwrap_or_default();
 
+        // One card, built on a 6px rhythm: an 8px inset on every side,
+        // 6px between rows, and a header band the same height as the
+        // fields under it.
+        const CARD_PAD: f32 = 8.0;
+        const CARD_GAP: f32 = 6.0;
+        const CARD_RADIUS: f32 = 6.0;
+        const HEADER_H: f32 = 22.0;
         let card = || {
             div()
-                .rounded_md()
+                .rounded(px(CARD_RADIUS))
                 .border_1()
                 .border_color(t::panel_outline())
                 .bg(t::panel_bg())
-                .overflow_hidden()
+                .flex()
+                .flex_col()
         };
         let label = |text: SharedString| {
-            div().text_xs().text_color(t::text_muted()).child(text)
-        };
-        let value = |text: SharedString| {
-            div().text_sm().text_color(t::text()).child(text)
+            div()
+                .text_xs()
+                .text_color(t::text_muted())
+                .child(text)
         };
         let metric = |input: &gpui::Entity<gpui_component::input::InputState>| {
             use gpui_component::Sizable as _;
             div()
-                .w(px(58.0))
+                .w(px(64.0))
                 .child(gpui_component::input::Input::new(input).small())
         };
 
         let metrics = card()
             .child(
-                // Title bar, Glyphs-style: the glyph on the left, its
-                // codepoint on the right.
+                // Header: the glyph on the left, its codepoint on the
+                // right. A quiet band, not a colour statement — the
+                // corners follow the card's radius so nothing pokes
+                // out past the border.
                 div()
+                    .h(px(HEADER_H))
+                    .px(px(CARD_PAD))
                     .flex()
                     .items_center()
                     .justify_between()
                     .gap_4()
-                    .px_2()
-                    .py_0p5()
-                    .bg(t::accent())
+                    .rounded_t(px(CARD_RADIUS - 1.0))
+                    .bg(t::cell_selected_bg())
+                    .border_b_1()
+                    .border_color(t::panel_outline())
                     .text_sm()
-                    .text_color(t::window_bg())
+                    .text_color(t::text())
                     .child(name)
-                    .child(unicode),
+                    .child(
+                        div()
+                            .text_color(t::text_muted())
+                            .child(unicode),
+                    ),
             )
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .child(label("LSB".into()))
-                    .child(metric(&self.metric_inputs.lsb))
-                    .child(metric(&self.metric_inputs.width))
-                    .child(metric(&self.metric_inputs.rsb))
-                    .child(label("RSB".into())),
-            )
-            .child(
-                // Kerning groups sit under the sidebearings they apply
-                // to, the way Glyphs stacks them.
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .px_2()
-                    .pb_1()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child(SharedString::from(group_l))
-                    .child(SharedString::from(group_r)),
+                    .flex_col()
+                    .gap(px(CARD_GAP))
+                    .p(px(CARD_PAD))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(CARD_GAP))
+                            .child(label("LSB".into()))
+                            .child(metric(&self.metric_inputs.lsb))
+                            .child(metric(&self.metric_inputs.width))
+                            .child(metric(&self.metric_inputs.rsb))
+                            .child(label("RSB".into())),
+                    )
+                    .child(
+                        // Kerning groups sit under the sidebearing they
+                        // apply to, the way Glyphs stacks them.
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(label(SharedString::from(group_l)))
+                            .child(label(SharedString::from(group_r))),
+                    ),
             );
 
         let selection = self.selection_bounds().map(|r| {
+            let readout = |name: &'static str, value: f64| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(CARD_GAP))
+                    .child(div().w(px(10.0)).text_xs().text_color(t::text_muted()).child(name))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(t::text())
+                            .child(SharedString::from(format!("{value:.0}"))),
+                    )
+            };
             card()
                 .child(
                     div()
+                        .h(px(HEADER_H))
+                        .px(px(CARD_PAD))
                         .flex()
                         .items_center()
-                        .gap_3()
-                        .px_2()
-                        .py_1()
+                        .rounded_t(px(CARD_RADIUS - 1.0))
+                        .bg(t::cell_selected_bg())
+                        .border_b_1()
+                        .border_color(t::panel_outline())
+                        .text_sm()
+                        .text_color(t::text_muted())
+                        .child("Selection"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(CARD_PAD * 2.0))
+                        .p(px(CARD_PAD))
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap_0p5()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap_1()
-                                        .child(label("X".into()))
-                                        .child(value(
-                                            format!("{:.0}", r.x0).into(),
-                                        )),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap_1()
-                                        .child(label("Y".into()))
-                                        .child(value(
-                                            format!("{:.0}", r.y0).into(),
-                                        )),
-                                ),
+                                .gap(px(CARD_GAP))
+                                .child(readout("X", r.x0))
+                                .child(readout("Y", r.y0)),
                         )
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap_0p5()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap_1()
-                                        .child(label("↔".into()))
-                                        .child(value(
-                                            format!("{:.0}", r.width()).into(),
-                                        )),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap_1()
-                                        .child(label("↕".into()))
-                                        .child(value(
-                                            format!("{:.0}", r.height()).into(),
-                                        )),
-                                ),
+                                .gap(px(CARD_GAP))
+                                .child(readout("W", r.width()))
+                                .child(readout("H", r.height())),
                         ),
                 )
         });
@@ -6723,6 +7055,16 @@ impl Workspace {
         }
         if self.editor.tool == Tool::Pen {
             self.pen_mouse_down(index, pos, alt);
+            return;
+        }
+        if self.editor.tool == Tool::Preview {
+            // Preview is the pan tool: dragging moves the viewport,
+            // the way the web's PreviewTool does. Hold space to reach
+            // it from any other tool.
+            let local = self.editor.window_to_local(pos);
+            self.editor.drag = Some(Drag::Pan {
+                last: (local.x, local.y),
+            });
             return;
         }
         if matches!(self.editor.tool, Tool::Shapes | Tool::Measure) {
@@ -9056,14 +9398,16 @@ impl Workspace {
             }
             gpui::ScrollDelta::Lines(p) => ((p.x * 24.0) as f64, (p.y * 24.0) as f64),
         };
-        if event.modifiers.platform {
-            // Cmd+wheel: zoom about the cursor.
-            let local = self.editor.window_to_local(event.position);
-            let factor = (delta.1 * 0.01).exp();
-            self.editor.viewport.zoom_about(local, factor, 0.01, 100.0);
-        } else {
-            self.editor.viewport.pan(delta.0, delta.1);
-        }
+        // The wheel zooms about the cursor, always — the web editor's
+        // `wheel()`, same 0.0015-per-pixel response and the same
+        // limits, so a notch wheel and a trackpad flick both feel like
+        // they do there. Panning is alt-drag, as it is in the web.
+        let local = self.editor.window_to_local(event.position);
+        let factor = (delta.1 * ZOOM_PER_PIXEL).exp();
+        self.editor
+            .viewport
+            .zoom_about(local, factor, ZOOM_MIN, ZOOM_MAX);
+        let _ = delta.0;
     }
 
     /// The Glyphs-style tab strip under the header: a Font tab that
@@ -9808,17 +10152,30 @@ impl Workspace {
             .iter()
             .map(|(_, x, _, adv)| x + adv)
             .fold(0.0_f64, f64::max);
+        // The line's ink, in design units relative to the first
+        // baseline: what the preview centres on.
+        let ink_extent: Option<(f64, f64)> = {
+            use kurbo::Shape as _;
+            let mut extent: Option<(f64, f64)> = None;
+            for (path, _, y, _) in items.iter() {
+                if path.elements().is_empty() {
+                    continue;
+                }
+                let b = path.bounding_box();
+                let (top, bottom) = (b.y1 + y, b.y0 + y);
+                extent = Some(match extent {
+                    Some((t, bo)) => (t.max(top), bo.min(bottom)),
+                    None => (top, bottom),
+                });
+            }
+            extent
+        };
 
-        let size = self.preview_size as f64;
         let blur = self.preview_blur;
+        let blur_cache = self.preview_blur_cache.clone();
         let invert = self.preview_invert;
-        let align = self.preview_align;
-        let visible = self.preview_visible;
-        // The strip grows with the type size so big text is not
-        // clipped, within reason.
-        let strip_h = ((size * 1.6) as f32).clamp(96.0, 320.0);
 
-        let body = div().flex_1().min_h(px(0.0)).child(
+        let body = div().size_full().min_h(px(0.0)).child(
             canvas(
                 move |bounds, _, _| bounds,
                 move |_, bounds: Bounds<gpui::Pixels>, window, _| {
@@ -9830,52 +10187,92 @@ impl Workspace {
                         (t::preview_glyph(), t::panel_bg())
                     };
                     window.paint_quad(gpui::fill(bounds, ground));
-                    if !visible {
-                        return;
-                    }
-                    let scale = size / upm.max(1.0);
-                    // Centered vertically on the em box, and placed
-                    // horizontally by the alignment setting.
-                    let baseline = h / 2.0 + (ascender + descender) / 2.0 * scale;
-                    let text_w = line_width * scale;
-                    let pad = 24.0;
-                    let origin_x = match align {
-                        0 => pad,
-                        2 => (w - text_w - pad).max(pad),
-                        _ => ((w - text_w) / 2.0).max(pad),
+                    // The type fits the pane, the way Glyphs and the
+                    // web preview do it: one scale that fits vertically
+                    // and the whole line horizontally, whichever is
+                    // tighter. Drag the pane taller and the text grows
+                    // with it.
+                    //
+                    // The em box is the wrong thing to centre on: for
+                    // "8" the descender depth is empty, so centring the
+                    // box leaves the ink riding high. Centre the ink
+                    // the line actually has instead, which also keeps a
+                    // deep Arabic descender in the middle of the pane
+                    // rather than hanging off the bottom. The em box is
+                    // the fallback when there is no ink at all.
+                    let pad = 16.0;
+                    let (ink_top, ink_bottom) = ink_extent
+                        .unwrap_or((ascender, descender));
+                    let ink_h = (ink_top - ink_bottom).max(1.0);
+                    let by_height = (h - pad * 2.0).max(1.0) / ink_h;
+                    let by_width = if line_width > 0.0 {
+                        (w - pad * 2.0).max(1.0) / line_width
+                    } else {
+                        by_height
                     };
+                    let scale = by_height.min(by_width);
+                    // Baseline placed so the ink's own middle lands on
+                    // the pane's middle.
+                    let baseline = h / 2.0 + (ink_top + ink_bottom) / 2.0 * scale;
+                    let text_w = line_width * scale;
+                    let origin_x = (w - text_w) / 2.0;
+                    let _ = (upm, ascender, descender);
                     // gpui paints paths, not filters, so a blur is a
                     // stack of offset passes: one ring plus the middle,
                     // each at a fraction of the ink's alpha.
-                    let passes: Vec<(f64, f64, f32)> = if blur > 0.05 {
-                        let r = blur as f64;
-                        let mut v = vec![(0.0, 0.0, 0.34_f32)];
-                        for i in 0..8 {
-                            let a = std::f64::consts::TAU * (i as f64) / 8.0;
-                            v.push((r * a.cos(), r * a.sin(), 0.14));
-                        }
-                        for i in 0..8 {
-                            let a = std::f64::consts::TAU * (i as f64 + 0.5) / 8.0;
-                            v.push((r * 0.5 * a.cos(), r * 0.5 * a.sin(), 0.20));
-                        }
-                        v
-                    } else {
-                        vec![(0.0, 0.0, 1.0)]
-                    };
+                    // One path for the whole line, in the pane's own
+                    // pixel space.
+                    let mut line = BezPath::new();
                     for (path, x, y, _) in items.iter() {
-                        for (ox, oy, alpha) in passes.iter() {
-                            let transform = Affine::translate((
-                                origin_x + x * scale + ox,
-                                baseline - y * scale + oy,
-                            )) * Affine::scale_non_uniform(scale, -scale);
-                            if let Some(p) =
-                                build_fill_path(path, transform, bounds.origin)
-                            {
-                                let mut color = ink;
-                                color.a *= alpha;
-                                window.paint_path(p, color);
-                            }
+                        let transform = Affine::translate((
+                            origin_x + x * scale,
+                            baseline - y * scale,
+                        )) * Affine::scale_non_uniform(scale, -scale);
+                        line.extend(
+                            (transform * path.as_ref().clone()).into_iter(),
+                        );
+                    }
+                    if blur > 0.05 {
+                        // Rasterized and blurred for real: gpui has no
+                        // blur for paths, and stacking offset copies
+                        // reads as ghosting rather than defocus.
+                        let key = blur_key(&line, w, h, blur, ink, ground);
+                        let cached = {
+                            let slot = blur_cache.lock().unwrap();
+                            slot.as_ref()
+                                .filter(|(k, _)| *k == key)
+                                .map(|(_, image)| image.clone())
+                        };
+                        let image = cached.or_else(|| {
+                            let image = blur::blurred_line(
+                                &line,
+                                w as f32,
+                                h as f32,
+                                window.scale_factor(),
+                                ink,
+                                ground,
+                                blur,
+                            )?;
+                            *blur_cache.lock().unwrap() =
+                                Some((key, image.clone()));
+                            Some(image)
+                        });
+                        if let Some(image) = image {
+                            let _ = window.paint_image(
+                                bounds,
+                                bounds,
+                                gpui::Corners::default(),
+                                image,
+                                0,
+                                false,
+                            );
+                            return;
                         }
+                    }
+                    if let Some(p) =
+                        build_fill_path(&line, Affine::IDENTITY, bounds.origin)
+                    {
+                        window.paint_path(p, ink);
                     }
                 },
             )
@@ -9884,7 +10281,8 @@ impl Workspace {
 
         let _ = cx;
         div()
-            .h(px(strip_h))
+            .size_full()
+            .min_h(px(0.0))
             .flex()
             .flex_col()
             .bg(t::panel_bg())
@@ -9894,81 +10292,9 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// Preview controls, after Glyphs': show/hide, color flip, blur
-    /// (a spacing check), line alignment, and type size. They live in
-    /// the one bottom bar, not a bar of their own.
-    fn preview_controls(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let toggle = |id: &'static str,
-                      label: SharedString,
-                      active: bool,
-                      on: fn(&mut Workspace),
-                      cx: &mut Context<Self>| {
-            div()
-                .id(id)
-                .h(px(18.0))
-                .px_1p5()
-                .rounded_sm()
-                .border_1()
-                .flex()
-                .items_center()
-                .text_xs()
-                .cursor_pointer()
-                .when(active, |el| {
-                    el.border_color(t::accent()).text_color(t::accent())
-                })
-                .when(!active, |el| {
-                    el.border_color(t::cell_border()).text_color(t::text_muted())
-                })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    on(this);
-                    cx.notify();
-                }))
-        };
-        let align_button = |which: u8, label: &'static str, cx: &mut Context<Self>| {
-            div()
-                .id(("preview-align", which as usize))
-                .h(px(18.0))
-                .w(px(20.0))
-                .rounded_sm()
-                .border_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_xs()
-                .cursor_pointer()
-                .when(self.preview_align == which, |el| {
-                    el.border_color(t::accent()).text_color(t::accent())
-                })
-                .when(self.preview_align != which, |el| {
-                    el.border_color(t::cell_border()).text_color(t::text_muted())
-                })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.preview_align = which;
-                    cx.notify();
-                }))
-        };
-        let step = |id: &'static str, label: &'static str, delta: f32, cx: &mut Context<Self>| {
-            div()
-                .id(id)
-                .h(px(18.0))
-                .w(px(18.0))
-                .rounded_sm()
-                .border_1()
-                .border_color(t::cell_border())
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_xs()
-                .text_color(t::text_muted())
-                .cursor_pointer()
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.preview_size = (this.preview_size + delta).clamp(24.0, 400.0);
-                    cx.notify();
-                }))
-        };
+    /// The preview's on/off switch, in the bottom bar's left corner
+    /// where the tool hints used to be.
+    fn preview_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .flex()
             .items_center()
@@ -9977,54 +10303,54 @@ impl Workspace {
             .child(
                 div()
                     .id("preview-eye")
-                    .w(px(20.0))
-                    .h(px(18.0))
+                    .flex_none()
                     .cursor_pointer()
-                    .child(icon_svg(
-                        "preview",
+                    .child(eye_icon(
                         if self.preview_visible {
                             t::accent()
                         } else {
                             t::text_muted()
                         },
+                        self.preview_visible,
                     ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.preview_visible = !this.preview_visible;
                         cx.notify();
                     })),
             )
-            .child(toggle(
-                "preview-invert",
-                "invert".into(),
-                self.preview_invert,
-                |this| this.preview_invert = !this.preview_invert,
-                cx,
-            ))
             .child(
                 div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("blur"),
+                    .id("preview-invert")
+                    .flex_none()
+                    .cursor_pointer()
+                    .child(invert_icon(if self.preview_invert {
+                        t::accent()
+                    } else {
+                        t::text_muted()
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.preview_invert = !this.preview_invert;
+                        cx.notify();
+                    })),
             )
+    }
+
+    /// What is left on the right of the bar: the blur, which is a
+    /// spacing check. Show/hide and the ink flip live in the left
+    /// corner beside each other.
+    fn preview_controls(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .flex_none()
+            .child(div().text_xs().text_color(t::text_muted()).child("blur"))
             .children(self.preview_blur_slider.as_ref().map(|slider| {
-                div().w(px(90.0)).child(flat_slider(slider, cx))
+                // The thumb hangs past both ends of the track, so the
+                // slider gets its own room rather than sitting on the
+                // label.
+                div().w(px(90.0)).mr_1().child(flat_slider(slider, cx))
             }))
-            .child(align_button(0, "L", cx))
-            .child(align_button(1, "C", cx))
-            .child(align_button(2, "R", cx))
-            .child(step("preview-smaller", "−", -8.0, cx))
-            .child(
-                div()
-                    .w(px(46.0))
-                    .text_xs()
-                    .text_center()
-                    .text_color(t::text_muted())
-                    .child(SharedString::from(format!(
-                        "{:.0} pt",
-                        self.preview_size
-                    ))),
-            )
-            .child(step("preview-bigger", "+", 8.0, cx))
     }
 
     /// Add an empty glyph to every master (bottom bar +), like
@@ -10216,11 +10542,11 @@ impl Workspace {
                     .child(label)
             };
             return div()
+                .h(px(BOTTOM_BAR_H))
                 .flex()
                 .items_center()
                 .gap_1()
-                // Even margins, like the header strip.
-                .p_1p5()
+                .px_1p5()
                 .bg(t::panel_bg())
                 .border_t_1()
                 .border_color(t::cell_border())
@@ -10252,34 +10578,10 @@ impl Workspace {
             note.clone()
         } else {
             match (&self.mode, self.selected, self.font()) {
-                (Mode::Editor(i), _, Some(font)) => {
-                    let g = &font.glyphs[*i];
-                    let sel = match self.editor.selected.len() {
-                        0 => String::new(),
-                        n => format!(" · {n} selected"),
-                    };
-                    let comps = if g.component_names.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            " · components: {} (Cmd+Shift+D decomposes)",
-                            g.component_names
-                                .iter()
-                                .map(|n| n.as_ref())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    };
-                    let tool = match self.editor.tool {
-                        Tool::Select => "V select",
-                        Tool::Pen => "P pen: click adds, drag curves, click start closes, Enter ends",
-                        Tool::Shapes => "R shapes: drag draws (press again for ellipse)",
-                        Tool::Measure => "M measure: drag to read distances",
-                        Tool::Text => "T text: type composes · click places caret · double-click a sort edits it · shift-drag kerns",
-                        Tool::Knife => "K knife: drag a line to cut contours",
-                        Tool::HyperPen => "H hyper pen: click adds smooth, shift-click corner, click start closes, Enter ends",
-                        Tool::Preview => "space preview: filled outline, no points",
-                    };
+                (Mode::Editor(_), _, Some(_)) => {
+                    // No standing hint text here: the tool cheatsheet
+                    // was permanent clutter. Only live readouts and
+                    // transient notes speak.
                     if let Some(Drag::Measure { start, current }) = &self.editor.drag {
                         let (dx, dy) = (current.0 - start.0, current.1 - start.1);
                         let len = (dx * dx + dy * dy).sqrt();
@@ -10296,7 +10598,7 @@ impl Workspace {
                                 "dx {dx:.0} · dy {dy:.0} · length {len:.1} · angle {angle:.1}°"
                             )));
                     }
-                    format!("{}{}{} · {tool} · Cmd+Z undo · Cmd+S saves · Esc", g.name, sel, comps).into()
+                    SharedString::default()
                 }
                 (_, Some(i), Some(font)) => {
                     let g = &font.glyphs[i];
@@ -10314,14 +10616,18 @@ impl Workspace {
             }
         };
         div()
+            .h(px(BOTTOM_BAR_H))
             .flex()
             .items_center()
             .gap_2()
             .px_2()
-            .py_1()
             .bg(t::panel_bg())
             .border_t_1()
             .border_color(t::cell_border())
+            .children(
+                matches!(self.mode, Mode::Editor(_))
+                    .then(|| self.preview_toggle(cx)),
+            )
             .child(
                 div()
                     .flex_1()
@@ -10856,6 +11162,16 @@ impl Workspace {
             ("right", false) if in_editor => self.nudge_selection(step, 0.0, alt),
             ("up", false) if in_editor => self.nudge_selection(0.0, step, alt),
             ("down", false) if in_editor => self.nudge_selection(0.0, -step, alt),
+            ("+" | "=", false) if in_editor => {
+                let zoom = self.editor.viewport.zoom;
+                self.editor.viewport.zoom = (zoom * ZOOM_KEY_STEP).min(ZOOM_MAX);
+                true
+            }
+            ("-" | "_", false) if in_editor => {
+                let zoom = self.editor.viewport.zoom;
+                self.editor.viewport.zoom = (zoom / ZOOM_KEY_STEP).max(ZOOM_MIN);
+                true
+            }
             ("0", _) if matches!(self.mode, Mode::Editor(_)) => {
                 self.editor.initialized = false;
                 self.ensure_editor_fit();
@@ -10886,7 +11202,7 @@ impl Render for Workspace {
             self.refresh_coord_inputs(false, window, cx);
         }
         self.refresh_glyph_inputs(false, window, cx);
-        use gpui_component::resizable::{h_resizable, resizable_panel};
+        use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
 
         // Glyphs-style docked layout: left sidebar | center | right
         // sidebar as flat resizable panels, no floating containers.
@@ -10898,12 +11214,42 @@ impl Render for Workspace {
                     .flex_col()
                     .size_full()
                     .min_h(px(0.0))
-                    .child(self.editor_view(index, cx).into_any_element())
-                    // The preview and the bottom bar belong to the
-                    // canvas column, so the side panels keep the
+                    // Canvas over preview, with a draggable divider:
+                    // the preview takes whatever height it is given and
+                    // fits its type to it. The bottom bar belongs to
+                    // this column too, so the side panels keep the
                     // window's full height and the dividers between
                     // the three columns run all the way down.
-                    .child(self.preview_strip(cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .child(
+                                v_resizable("editor-column")
+                                    .child(
+                                        resizable_panel().child(
+                                            // A flex column: the canvas
+                                            // grows into the panel. In a
+                                            // plain block its flex_1 is
+                                            // ignored and it lays out at
+                                            // zero height.
+                                            div()
+                                                .size_full()
+                                                .min_h(px(0.0))
+                                                .flex()
+                                                .flex_col()
+                                                .child(self.editor_view(index, cx)),
+                                        ),
+                                    )
+                                    .child(
+                                        resizable_panel()
+                                            .size(px(140.0))
+                                            .size_range(px(0.0)..px(720.0))
+                                            .visible(self.preview_visible)
+                                            .child(self.preview_strip(cx)),
+                                    ),
+                            ),
+                    )
                     .child(self.status_bar(cx))
                     .into_any_element(),
             ),
@@ -11655,10 +12001,9 @@ fn main() {
                         sort_unicode: true,
                         nudging: false,
                         preview_visible: true,
-                        preview_size: 96.0,
                         preview_blur: 0.0,
+                        preview_blur_cache: Arc::new(Mutex::new(None)),
                         preview_invert: false,
-                        preview_align: 1,
                         preview_blur_slider: None,
                         grid_cell_size: CELL,
                         grid_viewport: gpui::size(px(0.0), px(0.0)),
