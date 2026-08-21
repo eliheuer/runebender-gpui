@@ -58,6 +58,15 @@ gpui::actions!(
         CopyContours,
         PasteContours,
         CopySelectedGlyphs,
+        MeasureColorize,
+        MeasureHandles,
+        MeasureSegments,
+        MeasureSpans,
+        MeasureSideBearings,
+        MeasureSizes,
+        MeasurePopcount,
+        MeasureAllOn,
+        MeasureAllOff,
         SetThemeDark,
         SetThemeMidnight,
         SetThemeGray,
@@ -119,6 +128,37 @@ fn theme_menu_items() -> Vec<gpui::MenuItem> {
             }
         })
         .collect()
+}
+
+/// The Measure overlays, as a menu of toggles. They are view options,
+/// so they live beside the other view settings rather than taking a
+/// panel's worth of sidebar.
+fn measure_menu_items() -> Vec<gpui::MenuItem> {
+    use gpui::MenuItem;
+    let o = *MEASURE_MENU.lock().expect("measure menu");
+    let item = |name: &'static str, action: Box<dyn gpui::Action>, checked: bool| {
+        MenuItem::Action {
+            name: name.into(),
+            action,
+            os_action: None,
+            checked,
+            disabled: false,
+        }
+    };
+    vec![
+        item("Colorize Outline", Box::new(MeasureColorize), o.colorize),
+        item("Handle Lengths", Box::new(MeasureHandles), o.handles),
+        item("Segment Lengths", Box::new(MeasureSegments), o.segments),
+        item("Segment Sizes", Box::new(MeasureSizes), o.sizes),
+        item("Stems & Counters", Box::new(MeasureSpans), o.spans),
+        item("Side Bearings", Box::new(MeasureSideBearings), o.sidebearings),
+        MenuItem::separator(),
+        // Not a layer: how the labels that are on get written.
+        item("Popcount Sums", Box::new(MeasurePopcount), o.popcount),
+        MenuItem::separator(),
+        MenuItem::action("All On", MeasureAllOn),
+        MenuItem::action("All Off", MeasureAllOff),
+    ]
 }
 
 fn app_menus() -> Vec<gpui::Menu> {
@@ -198,6 +238,11 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Next Master", NextMaster),
                 MenuItem::action("Previous Master", PreviousMaster),
                 MenuItem::separator(),
+                MenuItem::Submenu(Menu {
+                    name: "Measure".into(),
+                    items: measure_menu_items(),
+                    disabled: false,
+                }),
                 MenuItem::Submenu(Menu {
                     name: "Theme".into(),
                     items: theme_menu_items(),
@@ -749,8 +794,6 @@ struct Project {
     master_names: Vec<SharedString>,
     axes: Vec<AxisInfo>,
     /// Normalized (-1..1) location of each master, by axis name.
-    /// (Kept for future per-master UI; the model owns a copy.)
-    #[allow(dead_code)]
     master_locations: Vec<runebender_core::var_model::Location>,
     model: Option<runebender_core::var_model::VariationModel>,
     /// Current preview location, normalized, by axis name.
@@ -760,6 +803,38 @@ struct Project {
 }
 
 impl Project {
+    /// The master sitting exactly at `location`, if any. Landing on a
+    /// master is a master switch, not an interpolation: the web treats
+    /// it that way so the outline stays editable.
+    fn master_at_location(&self) -> Option<usize> {
+        if self.axes.is_empty() {
+            return None;
+        }
+        self.master_locations.iter().position(|there| {
+            self.axes.iter().all(|axis| {
+                let a = there.get(&axis.name).copied().unwrap_or(0.0);
+                let b = self.location.get(&axis.name).copied().unwrap_or(0.0);
+                (a - b).abs() < 1e-6
+            })
+        })
+    }
+
+    /// True while the sliders sit between masters: what the canvas
+    /// shows is an interpolated instance, and nothing there is
+    /// editable.
+    fn showing_instance(&self) -> bool {
+        self.model.is_some()
+            && !self.axes.is_empty()
+            && self.master_at_location().is_none()
+    }
+
+    /// Put `location` back on a master, for a master switch.
+    fn snap_location_to_master(&mut self, master: usize) {
+        if let Some(there) = self.master_locations.get(master) {
+            self.location = there.clone();
+        }
+    }
+
     /// File → New Font: one master from the GF-shaped template. The
     /// source path is where Save will write; Save As picks it.
     fn new_font(path: PathBuf) -> Self {
@@ -1672,6 +1747,20 @@ impl Default for MeasureOpts {
     }
 }
 
+/// What the Measure menu shows as ticked. The menu is built outside
+/// the view, so the live options are mirrored here whenever they
+/// change.
+static MEASURE_MENU: std::sync::Mutex<MeasureOpts> =
+    std::sync::Mutex::new(MeasureOpts {
+        colorize: false,
+        handles: false,
+        segments: false,
+        spans: false,
+        sidebearings: false,
+        sizes: false,
+        popcount: true,
+    });
+
 impl MeasureOpts {
     fn any(&self) -> bool {
         self.colorize
@@ -1856,6 +1945,54 @@ fn eye_icon(color: gpui::Rgba, open: bool) -> impl IntoElement {
     .h(px(16.0))
 }
 
+/// A drawn plus, minus or cross. Set as text these sit visibly
+/// off-centre — a "×" carries its own side bearings and a "−" rides
+/// above the middle — so they are stroked instead.
+fn glyph_free_icon(color: gpui::Rgba, kind: IconMark) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| bounds,
+        move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+            let w = f32::from(bounds.size.width) as f64;
+            let h = f32::from(bounds.size.height) as f64;
+            let o = bounds.origin;
+            let (cx_, cy_) = (w / 2.0, h / 2.0);
+            let r = (w.min(h) / 2.0) * 0.42;
+            let pt = |x: f64, y: f64| {
+                gpui::point(o.x + px(x as f32), o.y + px(y as f32))
+            };
+            let mut pb = PathBuilder::stroke(px(1.3));
+            match kind {
+                IconMark::Plus | IconMark::Minus => {
+                    pb.move_to(pt(cx_ - r, cy_));
+                    pb.line_to(pt(cx_ + r, cy_));
+                    if matches!(kind, IconMark::Plus) {
+                        pb.move_to(pt(cx_, cy_ - r));
+                        pb.line_to(pt(cx_, cy_ + r));
+                    }
+                }
+                IconMark::Cross => {
+                    let d = r * 0.78;
+                    pb.move_to(pt(cx_ - d, cy_ - d));
+                    pb.line_to(pt(cx_ + d, cy_ + d));
+                    pb.move_to(pt(cx_ + d, cy_ - d));
+                    pb.line_to(pt(cx_ - d, cy_ + d));
+                }
+            }
+            if let Ok(p) = pb.build() {
+                window.paint_path(p, color);
+            }
+        },
+    )
+    .size_full()
+}
+
+#[derive(Clone, Copy)]
+enum IconMark {
+    Plus,
+    Minus,
+    Cross,
+}
+
 /// A circle filled on one half: the ink/ground flip.
 fn invert_icon(color: gpui::Rgba) -> impl IntoElement {
     canvas(
@@ -1893,6 +2030,110 @@ fn invert_icon(color: gpui::Rgba) -> impl IntoElement {
     )
     .w(px(16.0))
     .h(px(16.0))
+}
+
+/// A cell's label block: whether it shows at all, its type size, and
+/// the height it takes. Mirrors the web's cell-labels box — 8px sides
+/// and bottom, a 2px gap, both lines the same size.
+fn cell_label_metrics(cell_w: f32) -> CellLabels {
+    // gpui's default line box is much taller than the type size, which
+    // clipped the first line and pushed the two apart. The line height
+    // is stated here and the block's height is derived from it, so the
+    // box always holds exactly what it draws.
+    const PAD_TOP: f32 = 4.0;
+    const PAD_BOTTOM: f32 = 8.0;
+    const GAP: f32 = 2.0;
+    let build = |size: f32, lines: usize| {
+        let line = (size * 1.25).ceil();
+        CellLabels {
+            show: true,
+            size,
+            line,
+            height: PAD_TOP
+                + line * lines as f32
+                + GAP * (lines.saturating_sub(1)) as f32
+                + PAD_BOTTOM,
+        }
+    };
+    if cell_w < 34.0 {
+        // Too small to carry text: a pure thumbnail.
+        CellLabels {
+            show: false,
+            size: 0.0,
+            line: 0.0,
+            height: 0.0,
+        }
+    } else if cell_w < 90.0 {
+        // Name only.
+        build(10.0, 1)
+    } else {
+        build(12.0, 2)
+    }
+}
+
+/// The label block's type size, line height and total height.
+#[derive(Clone, Copy)]
+struct CellLabels {
+    show: bool,
+    size: f32,
+    line: f32,
+    height: f32,
+}
+
+/// How many columns a glyph should take, ported from the web's
+/// `computeGlyphColumnSpan`: a long name or a wide advance gets more
+/// room instead of being cut off.
+fn glyph_column_span(name: &str, advance: f64, upm: f64) -> usize {
+    let name_span = match name.chars().count() {
+        0..=14 => 1,
+        15..=26 => 2,
+        _ => 3,
+    };
+    let ratio = if upm > 0.0 { advance / upm } else { 0.0 };
+    let width_span = if ratio <= 1.5 {
+        1
+    } else if ratio <= 2.8 {
+        2
+    } else if ratio <= 4.0 {
+        3
+    } else {
+        4
+    };
+    name_span.max(width_span)
+}
+
+/// Pack spanned cells into rows that each fill the width exactly: when
+/// the next cell will not fit, the last one on the row grows into the
+/// gap (the web's `gridGlyphItems`). Returns one vector per row of
+/// (item index, span).
+fn pack_spans(spans: &[(usize, usize)], cols: usize) -> Vec<Vec<(usize, usize)>> {
+    let cols = cols.max(1);
+    let mut rows: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut row: Vec<(usize, usize)> = Vec::new();
+    let mut used = 0usize;
+    for &(item, span) in spans {
+        let span = span.clamp(1, cols);
+        if used + span > cols && !row.is_empty() {
+            if let Some(last) = row.last_mut() {
+                last.1 += cols - used;
+            }
+            rows.push(std::mem::take(&mut row));
+            used = 0;
+        }
+        row.push((item, span));
+        used += span;
+        if used == cols {
+            rows.push(std::mem::take(&mut row));
+            used = 0;
+        }
+    }
+    if !row.is_empty() {
+        if let Some(last) = row.last_mut() {
+            last.1 += cols - used;
+        }
+        rows.push(row);
+    }
+    rows
 }
 
 /// How a grid of glyph cells fits its pane: cell size, and how many
@@ -1967,6 +2208,7 @@ impl Workspace {
             Mode::Grid => None,
         };
         project.active = master;
+        project.snap_location_to_master(master);
         if let Some(name) = open_glyph_name {
             match project
                 .active_font()
@@ -2189,7 +2431,7 @@ impl Workspace {
         target: f32,
         pad: f32,
     ) -> GridFit {
-        let label_h = |w: f32| if w >= 90.0 { 32.0 } else { 14.0 };
+        let label_h = |w: f32| cell_label_metrics(w).height;
         let target = target.max(24.0);
         let vw: f32 = viewport.width.into();
         let vh: f32 = viewport.height.into();
@@ -2248,26 +2490,16 @@ impl Workspace {
         let outline = entry.path.clone();
         let advance = entry.advance;
         let upm = font.units_per_em;
-        // Labels are dropped once a cell is too small to carry them.
-        let show_labels = cell >= 34.0;
-        let label_h = if !show_labels {
-            0.0
-        } else if cell >= 90.0 {
-            20.0
-        } else {
-            14.0
-        };
+        let labels = cell_label_metrics(cell);
+        let (show_labels, label_px, label_h) =
+            (labels.show, labels.size, labels.height);
         let incompatible = self
             .project
             .as_ref()
             .and_then(|p| p.compat.get(entry.name.as_ref()))
             .is_some_and(|ok| !ok);
 
-        let label_h = if show_labels && cell >= 90.0 {
-            32.0
-        } else {
-            label_h
-        };
+
         let mark = entry.mark.as_deref().and_then(t::mark_color);
         div()
             .id(index)
@@ -2372,12 +2604,21 @@ impl Workspace {
                 ),
             )
             .when(show_labels, |el| el.child(
+                // Same inset left, right and bottom, a little air above,
+                // and the two lines close together (the web's
+                // cell-labels box).
                 div()
                     .h(px(label_h))
-                    .px_1()
+                    .pl(px(8.0))
+                    .pr(px(8.0))
+                    .pb(px(8.0))
+                    .pt(px(4.0))
                     .flex()
                     .flex_col()
-                    .text_size(px(if cell >= 90.0 { 10.0 } else { 8.0 }))
+                    .justify_end()
+                    .gap(px(2.0))
+                    .text_size(px(label_px))
+                    .line_height(px(labels.line))
                     .overflow_hidden()
                     .child(
                         div()
@@ -2400,7 +2641,7 @@ impl Workspace {
                             })
                             .child(name),
                     )
-                    .when(cell >= 90.0, |el| {
+                    .when(labels.height >= 40.0, |el| {
                         el.child(
                             div()
                                 .text_color(if selected {
@@ -3352,11 +3593,6 @@ impl Workspace {
         };
         let name = entry.name.to_string();
         let master = project.master_names[project.active].clone();
-        let contours = font
-            .font
-            .get_glyph(name.as_str())
-            .map(|g| g.contours.len())
-            .unwrap_or(0);
         let _ = name;
         // Editable fields commit on Enter (rename, unicode, kerning
         // groups); the rest stay read-only rows.
@@ -3432,8 +3668,7 @@ impl Workspace {
                 &self.glyph_inputs.group_l,
                 &self.glyph_inputs.group_r,
             ))
-            .child(input_row("Unicode", &self.glyph_inputs.unicode))
-            .child(row("Contours", format!("{contours}").into()));
+            .child(input_row("Unicode", &self.glyph_inputs.unicode));
         self.section(cx, "Glyph", panel)
     }
 
@@ -3643,53 +3878,73 @@ impl Workspace {
         const SWATCH: f32 = 14.0;
         // (bar height - swatch) / 2, so the ring of space around the
         // row is the same on every side.
-        const INSET: f32 = (BOTTOM_BAR_H - SWATCH) / 2.0;
+        const INSET: f32 = (BOTTOM_BAR_H - (SWATCH + 6.0)) / 2.0;
         let slot = |child: gpui::Stateful<gpui::Div>| child;
         let mut swatches =
             div().flex().items_center().justify_between().w_full();
         for (index, (label, color)) in t::mark_palette().into_iter().enumerate() {
             let is_current = current.as_deref() == Some(label.as_str());
+            // Selected reads as a ring in the swatch's own colour with
+            // a dark gap inside it, rather than a white outline drawn
+            // over the colour: the colour stays the thing you see.
             swatches = swatches.child(slot(
                 div()
                     .id(("mark-swatch", index))
-                    .w(px(SWATCH))
-                    .h(px(SWATCH))
+                    .w(px(SWATCH + 6.0))
+                    .h(px(SWATCH + 6.0))
                     .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .rounded_full()
-                    .bg(color)
-                    .border_2()
+                    .border_1()
                     .border_color(if is_current {
-                        t::cell_selected_ring()
+                        color
                     } else {
                         gpui::Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }
                     })
                     .cursor_pointer()
+                    .child(
+                        div()
+                            .w(px(SWATCH))
+                            .h(px(SWATCH))
+                            .rounded_full()
+                            .bg(color),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.set_selected_mark(Some(label.clone()));
                         cx.notify();
                     })),
             ));
         }
+        // "No colour" is a swatch like the others: same ring when it is
+        // the one in force, drawn in the muted grey it stands for.
         swatches = swatches.child(slot(
             div()
                 .id("mark-clear")
-                .w(px(SWATCH))
-                .h(px(SWATCH))
+                .w(px(SWATCH + 6.0))
+                .h(px(SWATCH + 6.0))
                 .flex_shrink_0()
-                .rounded_full()
-                .border_1()
-                .border_color(if current.is_none() {
-                    t::cell_selected_ring()
-                } else {
-                    t::cell_border()
-                })
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_sm()
-                .text_color(t::text_muted())
+                .rounded_full()
+                .border_1()
+                .border_color(if current.is_none() {
+                    t::text_muted()
+                } else {
+                    gpui::Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }
+                })
                 .cursor_pointer()
-                .child("×")
+                .child(
+                    div()
+                        .w(px(SWATCH))
+                        .h(px(SWATCH))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(t::text_muted())
+                        .child(glyph_free_icon(t::text_muted(), IconMark::Cross)),
+                )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.set_selected_mark(None);
                     cx.notify();
@@ -3745,20 +4000,34 @@ impl Workspace {
                     })
                     .collect();
                 shown = matched.len();
-                rows_total = matched.len().div_ceil(fit.cols);
-                let start = self
-                    .sidebar_scroll_row
-                    .min(rows_total.saturating_sub(1))
-                    * fit.cols;
-                matched
+                let upm = font.units_per_em;
+                let spans: Vec<(usize, usize)> = matched
+                    .iter()
+                    .map(|&i| {
+                        (
+                            i,
+                            glyph_column_span(
+                                font.glyphs[i].name.as_ref(),
+                                font.glyphs[i].advance,
+                                upm,
+                            ),
+                        )
+                    })
+                    .collect();
+                let packed = pack_spans(&spans, fit.cols);
+                rows_total = packed.len();
+                let start =
+                    self.sidebar_scroll_row.min(rows_total.saturating_sub(1));
+                packed
                     .into_iter()
                     .skip(start)
-                    .take(fit.cols * fit.rows)
-                    .map(|i| {
-                        self.glyph_cell_sized(
-                            i, fit.cell_w, fit.cell_h, true, cx,
-                        )
-                        .into_any_element()
+                    .take(fit.rows)
+                    .flatten()
+                    .map(|(i, span)| {
+                        let w = fit.cell_w * span as f32
+                            + GRID_GAP * (span - 1) as f32;
+                        self.glyph_cell_sized(i, w, fit.cell_h, true, cx)
+                            .into_any_element()
                     })
                     .collect()
             }
@@ -4621,85 +4890,6 @@ impl Workspace {
 
     /// Measure-tool HUD layer toggles (web SelectPanel): only shown
     /// while the Measure tool is active.
-    /// Measure overlays. These are view options, not a tool mode: the
-    /// web keeps them in the sidebar and honours them whatever tool is
-    /// up, so a length stays on screen while you edit.
-    fn measure_section(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let toggle = |id: &'static str,
-                      label: &'static str,
-                      active: bool,
-                      cx: &mut Context<Self>,
-                      on: fn(&mut MeasureOpts)| {
-            div()
-                .id(id)
-                .px_2()
-                .py_0p5()
-                .rounded_sm()
-                .text_sm()
-                .cursor_pointer()
-                .border_1()
-                .when(active, |el| {
-                    el.border_color(t::accent()).text_color(t::accent())
-                })
-                .when(!active, |el| {
-                    el.border_color(t::cell_border()).text_color(t::text())
-                })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    on(&mut this.measure_opts);
-                    cx.notify();
-                }))
-        };
-        let o = self.measure_opts;
-        let body = div()
-            .flex()
-            .flex_wrap()
-            .gap_1()
-            .child(toggle("ms-colorize", "colorize outline", o.colorize, cx, |o| {
-                o.colorize = !o.colorize
-            }))
-            .child(toggle("ms-handles", "handle lengths", o.handles, cx, |o| {
-                o.handles = !o.handles
-            }))
-            .child(toggle("ms-segments", "segment lengths", o.segments, cx, |o| {
-                o.segments = !o.segments
-            }))
-            .child(toggle("ms-spans", "stems & counters", o.spans, cx, |o| {
-                o.spans = !o.spans
-            }))
-            .child(toggle(
-                "ms-sidebearings",
-                "side bearings",
-                o.sidebearings,
-                cx,
-                |o| o.sidebearings = !o.sidebearings,
-            ))
-            .child(toggle("ms-sizes", "segment sizes", o.sizes, cx, |o| {
-                o.sizes = !o.sizes
-            }))
-            .child(toggle("ms-popcount", "popcount sums", o.popcount, cx, |o| {
-                o.popcount = !o.popcount
-            }))
-            // popcount is left out of all-on/all-off on purpose: it is
-            // not a layer, it is how the labels that are on get written.
-            .child(toggle("ms-all", "all on", false, cx, |o| {
-                o.colorize = true;
-                o.handles = true;
-                o.segments = true;
-                o.spans = true;
-                o.sidebearings = true;
-                o.sizes = true;
-            }))
-            .child(toggle("ms-none", "all off", false, cx, |o| {
-                o.colorize = false;
-                o.handles = false;
-                o.segments = false;
-                o.spans = false;
-                o.sidebearings = false;
-                o.sizes = false;
-            }));
-        Some(self.section(cx, "Measure", body))
-    }
 
     /// Background section: show/send/swap/clear plus the reference
     /// glyph (web's Background block).
@@ -4823,7 +5013,18 @@ impl Workspace {
                     .items_center()
                     .gap_1()
                     .children(thumb.map(|(path, advance, asc, desc)| {
-                        div().w(px(22.0)).h(px(22.0)).child(
+                        div()
+                            .id(("layer-thumb", i))
+                            .w(px(22.0))
+                            .h(px(22.0))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.reference_layers.remove(&i) {
+                                    this.reference_layers.insert(i);
+                                }
+                                cx.notify();
+                            }))
+                            .child(
                             canvas(
                                 move |bounds, _, _| bounds,
                                 move |_,
@@ -4862,43 +5063,32 @@ impl Workspace {
                         )
                     }))
                     .child(
-                        // Eye: draw this master as a dim reference
-                        // underlay in the editor (Glyphs-style layer
-                        // visibility). The active master is always
-                        // drawn, so its eye is implicit.
-                        div()
-                            .id(("layer-eye", i))
-                            .w(px(20.0))
-                            .text_sm()
-                            .cursor_pointer()
-                            .text_color(if eye_on { t::text() } else { t::text_muted() })
-                            .child(if is_active {
-                                "●"
-                            } else if eye_on {
-                                "●"
-                            } else {
-                                "○"
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.reference_layers.remove(&i) {
-                                    this.reference_layers.insert(i);
-                                }
-                                cx.notify();
-                            })),
-                    )
-                    .child(
+                        // The active master reads in the accent, like a
+                        // picked category or tab. Clicking the
+                        // thumbnail beside it toggles that master as a
+                        // dim reference underlay — the dot that used to
+                        // carry that is gone.
                         div()
                             .id(("layer", i))
+                            .h(px(20.0))
                             .flex_1()
-                            .px_2()
-                            .py_0p5()
+                            .px_1()
+                            .flex()
+                            .items_center()
                             .rounded_sm()
                             .text_sm()
                             .cursor_pointer()
                             .when(is_active, |el| {
-                                el.bg(t::cell_selected_bg()).text_color(t::text())
+                                el.border_1()
+                                    .border_color(t::accent())
+                                    .text_color(t::accent())
                             })
-                            .when(!is_active, |el| el.text_color(t::text_muted()))
+                            .when(!is_active && eye_on, |el| {
+                                el.text_color(t::text())
+                            })
+                            .when(!is_active && !eye_on, |el| {
+                                el.text_color(t::text_muted())
+                            })
                             .child(name)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.switch_master(i);
@@ -4912,47 +5102,6 @@ impl Workspace {
         self.section(cx, "Masters", body)
     }
 
-    /// Navigate section: the active master with previous/next
-    /// steppers, like the Glyphs Navigate panel.
-    fn navigate_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let (name, count): (SharedString, usize) = match &self.project {
-            Some(p) => (p.master_names[p.active].clone(), p.masters.len()),
-            None => ("—".into(), 0),
-        };
-        let stepper = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .px_2()
-                .py_0p5()
-                .rounded_sm()
-                .border_1()
-                .border_color(t::cell_border())
-                .text_sm()
-                .text_color(t::text())
-                .cursor_pointer()
-                .child(label)
-        };
-        let body = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(div().flex_1().text_sm().text_color(t::text()).child(name))
-            .when(count > 1, |el| {
-                el.child(stepper("nav-prev", "←").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.command_step_master(-1);
-                        cx.notify();
-                    },
-                )))
-                .child(stepper("nav-next", "→").on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.command_step_master(1);
-                        cx.notify();
-                    },
-                )))
-            });
-        self.section(cx, "Navigate", body)
-    }
 
     /// The context-menu overlay, absolutely positioned inside the
     /// editor container.
@@ -5194,11 +5343,24 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
-        let ghost: Option<Arc<BezPath>> = self
+        // Between masters the sliders describe an instance: the web
+        // swaps the outline for the interpolated one and marks the
+        // view read-only, rather than ghosting it behind an editable
+        // master, which leaves you editing something you cannot see.
+        let showing_instance = self
             .project
             .as_ref()
-            .and_then(|p| p.interpolated_glyph(entry.name.as_ref()))
-            .map(|(path, _)| Arc::new(path));
+            .is_some_and(|p| p.showing_instance());
+        let instance: Option<Arc<BezPath>> = showing_instance
+            .then(|| {
+                self.project
+                    .as_ref()
+                    .and_then(|p| p.interpolated_glyph(entry.name.as_ref()))
+                    .map(|(path, _)| Arc::new(path))
+            })
+            .flatten();
+        let ghost: Option<Arc<BezPath>> = None;
+        let outline = instance.clone().unwrap_or(outline);
         let points = entry.points.clone();
         // Where each closed contour starts and which way it runs, for
         // the start arrow. Open contours (pen paths in progress) get
@@ -5465,7 +5627,9 @@ impl Workspace {
                 }
                 _ => None,
             };
-        let preview_mode = self.editor.tool == Tool::Preview;
+        // An instance draws like Preview: filled, no editable chrome.
+        let preview_mode =
+            self.editor.tool == Tool::Preview || showing_instance;
         let bounds_slot = self.editor.bounds.clone();
         let needs_fit = !self.editor.initialized;
 
@@ -7391,6 +7555,23 @@ impl Workspace {
             self.pen_mouse_down(index, pos, alt);
             return;
         }
+        if self
+            .project
+            .as_ref()
+            .is_some_and(|p| p.showing_instance())
+        {
+            // An instance is a view, never an edit: dragging pans, and
+            // the status bar says why nothing else responds.
+            let local = self.editor.window_to_local(pos);
+            self.editor.drag = Some(Drag::Pan {
+                last: (local.x, local.y),
+            });
+            self.status_note = Some(
+                "Interpolated instance · move an axis onto a master to edit"
+                    .into(),
+            );
+            return;
+        }
         if self.editor.tool == Tool::Preview {
             // Preview is the pan tool: dragging moves the viewport,
             // the way the web's PreviewTool does. Hold space to reach
@@ -8912,12 +9093,14 @@ impl Workspace {
     fn selection_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let count = self.editor.selected.len();
         let single = self.single_selected_point();
+        // A quiet count line rather than a heading: the fields below
+        // say what they are.
         let mut body = div().flex().flex_col().gap_2().child(
             div()
-                .text_sm()
+                .text_xs()
                 .text_color(t::text_muted())
                 .child(match count {
-                    0 => "No points selected".to_string(),
+                    0 => "nothing selected".to_string(),
                     1 => "1 point".to_string(),
                     n => format!("{n} points"),
                 }),
@@ -8948,10 +9131,11 @@ impl Workspace {
                     ),
             );
         }
-        let has_selection = !self.editor.selected.is_empty()
-            || self.editor.selected_component.is_some()
-            || !self.editor.selected_anchors.is_empty();
-        if has_selection {
+        // The picker and the fields are always up, the way the web's
+        // CoordinatePanel is: the reference point is a setting you
+        // choose before selecting, and an empty panel that appears and
+        // disappears makes the sidebar jump.
+        {
             use runebender_core::path::Quadrant;
             let field = |label: &'static str,
                          input: &gpui::Entity<gpui_component::input::InputState>| {
@@ -8973,9 +9157,18 @@ impl Workspace {
                     Quadrant::BottomRight,
                 ],
             ];
-            let mut picker = div().flex().flex_col().gap_0p5();
+            let mut picker = div()
+                .w(px(52.0))
+                .h(px(52.0))
+                .flex()
+                .flex_col()
+                .justify_between()
+                .border_1()
+                .border_color(t::panel_outline())
+                .p(px(3.0));
             for (ri, row_quads) in QUADRANTS.iter().enumerate() {
-                let mut row_el = div().flex().gap_0p5();
+                let mut row_el =
+                    div().flex().justify_between().w_full();
                 for (qi, quadrant) in row_quads.iter().enumerate() {
                     let quadrant = *quadrant;
                     let active = self.coord_quadrant == quadrant;
@@ -8984,7 +9177,7 @@ impl Workspace {
                             .id(("quadrant", ri * 3 + qi))
                             .w(px(10.0))
                             .h(px(10.0))
-                            .rounded_sm()
+                            .rounded_full()
                             .cursor_pointer()
                             .border_1()
                             .when(active, |el| {
@@ -9101,7 +9294,7 @@ impl Workspace {
                 );
             }
         }
-        self.section(cx, "Selection", body)
+        self.section(cx, "Coordinates", body)
     }
 
     /// Lock the selected component back onto its anchor, or cut it
@@ -9337,6 +9530,19 @@ impl Workspace {
 
     /// Push the open glyph's contours onto the undo stack and clear
     /// the redo tail. Called at the start of every mutating gesture.
+    /// Apply a change to the measure options, mirror it for the menu,
+    /// and rebuild the menus so the ticks follow.
+    fn toggle_measure(
+        &mut self,
+        change: impl FnOnce(&mut MeasureOpts),
+        cx: &mut Context<Self>,
+    ) {
+        change(&mut self.measure_opts);
+        *MEASURE_MENU.lock().expect("measure menu") = self.measure_opts;
+        cx.set_menus(app_menus());
+        cx.notify();
+    }
+
     /// Switch the palette: the app's own colours, the widget library's
     /// theme, and the menu tick all follow.
     fn command_set_theme(
@@ -9994,9 +10200,9 @@ impl Workspace {
         div()
             .flex()
             .items_center()
-            .gap_3()
-            // Even margins: the strip sits the same distance from the
-            // window's sides as from its top.
+            // The same 6px everywhere: from the window's edges to the
+            // icon, and from the icon to the title.
+            .gap_1p5()
             .px_1p5()
             .py_1p5()
             .bg(t::panel_bg())
@@ -10063,12 +10269,25 @@ impl Workspace {
             // NOTE: .max() must precede .min(): SliderState starts at
             // max=100 and each setter clamps the current value, so a
             // min above 100 panics (f32::clamp with min > max).
+            // Start where the active master sits, not at the axis
+            // default: opening a Bold master with the handle parked on
+            // Regular means the first touch jumps the design.
+            let here = project
+                .master_locations
+                .get(project.active)
+                .and_then(|loc| loc.get(&axis.name).copied())
+                .map(|normalized| {
+                    runebender_core::var_model::denormalize_value(
+                        normalized, axis.min, axis.default, axis.max,
+                    )
+                })
+                .unwrap_or(axis.default);
             let slider = cx.new(|_| {
                 gpui_component::slider::SliderState::new()
                     .max(axis.max as f32)
                     .min(axis.min as f32)
                     .step(1.0)
-                    .default_value(axis.default as f32)
+                    .default_value(here as f32)
             });
             let axis_info = axis.clone();
             let sub = cx.subscribe_in(&slider, window, {
@@ -10081,7 +10300,10 @@ impl Workspace {
                         return;
                     };
                     let raw = value.start() as f64;
-                    if let Some(project) = this.project.as_mut() {
+                    let landed = {
+                        let Some(project) = this.project.as_mut() else {
+                            return;
+                        };
                         project.location.insert(
                             axis_info.name.clone(),
                             runebender_core::var_model::normalize_value(
@@ -10091,6 +10313,12 @@ impl Workspace {
                                 axis_info.max,
                             ),
                         );
+                        project.master_at_location()
+                    };
+                    // Landing on a master hands editing back to it;
+                    // anywhere else the canvas shows an instance.
+                    if let Some(master) = landed {
+                        this.switch_master(master);
                     }
                     cx.notify();
                 }
@@ -10921,7 +11149,7 @@ impl Workspace {
                 )
                 .into(),
             };
-            let bar_button = |id: &'static str, label: &'static str| {
+            let bar_button = |id: &'static str, mark: IconMark| {
                 div()
                     .id(id)
                     .w(px(BAR_BUTTON))
@@ -10932,10 +11160,8 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_sm()
-                    .text_color(t::text())
                     .cursor_pointer()
-                    .child(label)
+                    .child(glyph_free_icon(t::text(), mark))
             };
             return div()
                 .h(px(BOTTOM_BAR_H))
@@ -10946,13 +11172,13 @@ impl Workspace {
                 .bg(t::panel_bg())
                 .border_t_1()
                 .border_color(t::cell_border())
-                .child(bar_button("add-glyph", "+").on_click(cx.listener(
+                .child(bar_button("add-glyph", IconMark::Plus).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.command_add_glyph();
                         cx.notify();
                     },
                 )))
-                .child(bar_button("remove-glyph", "−").on_click(cx.listener(
+                .child(bar_button("remove-glyph", IconMark::Minus).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.command_remove_glyph();
                         cx.notify();
@@ -11676,24 +11902,42 @@ impl Render for Workspace {
                             indices
                                 .sort_by_key(|&i| font.glyphs[i].name.clone());
                         }
-                        rows_total = indices.len().div_ceil(fit.cols);
+                        // A wide advance or a long name takes more
+                        // than one column, and the last cell on a row
+                        // grows into whatever is left, so every row
+                        // fills the width and no name is cut off.
+                        let upm = font.units_per_em;
+                        let spans: Vec<(usize, usize)> = indices
+                            .iter()
+                            .map(|&i| {
+                                (
+                                    i,
+                                    glyph_column_span(
+                                        font.glyphs[i].name.as_ref(),
+                                        font.glyphs[i].advance,
+                                        upm,
+                                    ),
+                                )
+                            })
+                            .collect();
+                        let packed = pack_spans(&spans, fit.cols);
+                        rows_total = packed.len();
                         // Only the rows on screen are built: the view
                         // starts at a row boundary and holds exactly
                         // the rows that fit, so nothing is ever half
                         // drawn at either edge.
-                        let start = self
-                            .grid_scroll_row
-                            .min(rows_total.saturating_sub(1))
-                            * fit.cols;
-                        indices
+                        let start =
+                            self.grid_scroll_row.min(rows_total.saturating_sub(1));
+                        packed
                             .into_iter()
                             .skip(start)
-                            .take(fit.cols * fit.rows)
-                            .map(|i| {
-                                self.glyph_cell_sized(
-                                    i, cell_w, cell_h, false, cx,
-                                )
-                                .into_any_element()
+                            .take(fit.rows)
+                            .flatten()
+                            .map(|(i, span)| {
+                                let w = cell_w * span as f32
+                                    + GRID_GAP * (span - 1) as f32;
+                                self.glyph_cell_sized(i, w, cell_h, false, cx)
+                                    .into_any_element()
                             })
                             .collect()
                     }
@@ -11787,10 +12031,8 @@ impl Render for Workspace {
             .flex()
             .flex_col()
             .when(in_editor, |el| {
-                el.child(self.navigate_section(cx))
-                    .child(self.glyph_info_panel(cx))
+                el.child(self.glyph_info_panel(cx))
                     .child(self.selection_section(cx))
-                    .children(self.measure_section(cx))
                     .child(self.transform_section(cx))
                     .child(self.curves_section(cx))
                     .child(self.background_section(cx))
@@ -11874,6 +12116,53 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CopySelectedGlyphs, _, cx| {
                 this.command_copy_selection_text(cx);
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &MeasureColorize, _, cx| {
+                this.toggle_measure(|o| o.colorize = !o.colorize, cx);
+            }))
+            .on_action(cx.listener(|this, _: &MeasureHandles, _, cx| {
+                this.toggle_measure(|o| o.handles = !o.handles, cx);
+            }))
+            .on_action(cx.listener(|this, _: &MeasureSegments, _, cx| {
+                this.toggle_measure(|o| o.segments = !o.segments, cx);
+            }))
+            .on_action(cx.listener(|this, _: &MeasureSizes, _, cx| {
+                this.toggle_measure(|o| o.sizes = !o.sizes, cx);
+            }))
+            .on_action(cx.listener(|this, _: &MeasureSpans, _, cx| {
+                this.toggle_measure(|o| o.spans = !o.spans, cx);
+            }))
+            .on_action(cx.listener(|this, _: &MeasureSideBearings, _, cx| {
+                this.toggle_measure(|o| o.sidebearings = !o.sidebearings, cx);
+            }))
+            .on_action(cx.listener(|this, _: &MeasurePopcount, _, cx| {
+                this.toggle_measure(|o| o.popcount = !o.popcount, cx);
+            }))
+            .on_action(cx.listener(|this, _: &MeasureAllOn, _, cx| {
+                this.toggle_measure(
+                    |o| {
+                        o.colorize = true;
+                        o.handles = true;
+                        o.segments = true;
+                        o.spans = true;
+                        o.sidebearings = true;
+                        o.sizes = true;
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|this, _: &MeasureAllOff, _, cx| {
+                this.toggle_measure(
+                    |o| {
+                        o.colorize = false;
+                        o.handles = false;
+                        o.segments = false;
+                        o.spans = false;
+                        o.sidebearings = false;
+                        o.sizes = false;
+                    },
+                    cx,
+                );
             }))
             .on_action(cx.listener(|this, _: &SetThemeDark, window, cx| {
                 this.command_set_theme("dark", window, cx);
