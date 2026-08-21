@@ -6,17 +6,56 @@
 //! runebender-web generates its CSS variables from, so the editors
 //! match byte-for-byte.
 
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 use gpui::Rgba;
 use runebender_core::theme::ColorRgba;
 use runebender_core::theme_oklch::{self, Theme};
 
+/// The themes in the shared token file, in menu order.
+pub const THEMES: [(&str, &str); 4] = [
+    ("dark", "Dark"),
+    ("midnight", "Midnight"),
+    ("gray", "Gray"),
+    ("light", "Light"),
+];
+
+/// The live theme. Resolving one is cheap but not free, and every
+/// colour below reads it, so the resolved theme is kept behind a lock
+/// and leaked: switching is rare, and a leaked theme gives every
+/// accessor a `'static` reference with no per-call clone.
+static CURRENT: RwLock<Option<(&'static str, &'static Theme)>> = RwLock::new(None);
+
 fn theme() -> &'static Theme {
-    static THEME: OnceLock<Theme> = OnceLock::new();
-    THEME.get_or_init(|| {
-        theme_oklch::load_theme("dark").expect("dark theme in shared token file")
-    })
+    if let Some((_, theme)) = *CURRENT.read().expect("theme lock") {
+        return theme;
+    }
+    set_theme("dark");
+    CURRENT
+        .read()
+        .expect("theme lock")
+        .expect("dark theme in shared token file")
+        .1
+}
+
+/// Switch the palette. Returns false for a name the token file does
+/// not define, leaving the current theme alone.
+pub fn set_theme(id: &str) -> bool {
+    let Some((name, _)) = THEMES.iter().find(|(name, _)| *name == id) else {
+        return false;
+    };
+    let Some(resolved) = theme_oklch::load_theme(id) else {
+        return false;
+    };
+    *CURRENT.write().expect("theme lock") =
+        Some((name, Box::leak(Box::new(resolved))));
+    true
+}
+
+/// The active theme's id.
+pub fn current_theme() -> &'static str {
+    theme();
+    CURRENT.read().expect("theme lock").map(|(id, _)| id).unwrap_or("dark")
 }
 
 fn c(color: ColorRgba) -> Rgba {
@@ -52,7 +91,17 @@ pub fn cell_border() -> Rgba {
     c(theme().surface("outline"))
 }
 pub fn cell_selected_bg() -> Rgba {
-    c(theme().surface("buttonHover"))
+    // Half way between the cell's own ground and the hover surface:
+    // enough to read as picked, not so much that the cell jumps out of
+    // the grid.
+    let base = c(theme().surface("panel"));
+    let lift = c(theme().surface("buttonHover"));
+    Rgba {
+        r: (base.r + lift.r) / 2.0,
+        g: (base.g + lift.g) / 2.0,
+        b: (base.b + lift.b) / 2.0,
+        a: 1.0,
+    }
 }
 /// Selected grid cell ring (neutral, like the web editor).
 pub fn cell_selected_ring() -> Rgba {
@@ -167,9 +216,12 @@ pub fn install_component_theme(cx: &mut gpui::App) {
     let hex = |c: ColorRgba| -> gpui::SharedString {
         format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b).into()
     };
+    let dark_surface = t.surface("app");
+    let is_light =
+        (dark_surface.r as u32 + dark_surface.g as u32 + dark_surface.b as u32) / 3 > 127;
     let mut config = ThemeConfig {
-        name: "runebender-dark".into(),
-        mode: ThemeMode::Dark,
+        name: format!("runebender-{}", current_theme()).into(),
+        mode: if is_light { ThemeMode::Light } else { ThemeMode::Dark },
         ..Default::default()
     };
     config.colors.background = Some(hex(t.surface("app")));
@@ -192,9 +244,19 @@ pub fn install_component_theme(cx: &mut gpui::App) {
 
     config.colors.ring = Some(hex(t.role("accent")));
 
+    // A light palette needs the library in light mode, or widgets that
+    // branch on the mode (not just on the colours) come out wrong.
+    let app = t.surface("app");
+    let light = (app.r as u32 + app.g as u32 + app.b as u32) / 3 > 127;
     let theme = Theme::global_mut(cx);
-    theme.dark_theme = std::rc::Rc::new(config);
-    Theme::change(ThemeMode::Dark, None, cx);
+    let config = std::rc::Rc::new(config);
+    if light {
+        theme.light_theme = config;
+        Theme::change(ThemeMode::Light, None, cx);
+    } else {
+        theme.dark_theme = config;
+        Theme::change(ThemeMode::Dark, None, cx);
+    }
     // Focused inputs keep a single accent border instead of the
     // thick translucent ring painted outside it.
     Theme::global_mut(cx).focus_ring = false;

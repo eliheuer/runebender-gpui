@@ -57,6 +57,10 @@ gpui::actions!(
         CopyContours,
         PasteContours,
         CopySelectedGlyphs,
+        SetThemeDark,
+        SetThemeMidnight,
+        SetThemeGray,
+        SetThemeLight,
         RemoveOverlap,
         Decompose,
         FlipHorizontal,
@@ -91,6 +95,31 @@ gpui::actions!(
 /// the stored menu Windows/Linux expose to `get_menus`, and the
 /// in-window menu bar (gpui-component AppMenuBar) drawn on every
 /// platform that has no native bar, the browser included.
+/// One item per theme, with the active one checked. The menus are
+/// rebuilt on a switch so the tick follows.
+fn theme_menu_items() -> Vec<gpui::MenuItem> {
+    use gpui::MenuItem;
+    let current = t::current_theme();
+    t::THEMES
+        .iter()
+        .map(|(id, label)| {
+            let action: Box<dyn gpui::Action> = match *id {
+                "midnight" => Box::new(SetThemeMidnight),
+                "gray" => Box::new(SetThemeGray),
+                "light" => Box::new(SetThemeLight),
+                _ => Box::new(SetThemeDark),
+            };
+            MenuItem::Action {
+                name: (*label).into(),
+                action,
+                os_action: None,
+                checked: *id == current,
+                disabled: false,
+            }
+        })
+        .collect()
+}
+
 fn app_menus() -> Vec<gpui::Menu> {
     use gpui::{Menu, MenuItem};
     vec![
@@ -167,6 +196,12 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Next Master", NextMaster),
                 MenuItem::action("Previous Master", PreviousMaster),
+                MenuItem::separator(),
+                MenuItem::Submenu(Menu {
+                    name: "Theme".into(),
+                    items: theme_menu_items(),
+                    disabled: false,
+                }),
             ],
             disabled: false,
         },
@@ -1515,6 +1550,16 @@ struct Workspace {
     /// A run of arrow-key nudges is in progress: they share one undo
     /// step until something else happens.
     nudging: bool,
+    /// Text preview strip under the editor: whether it is showing, its
+    /// type size in pixels, how far it is blurred (a spacing check),
+    /// whether the colors are flipped, and how the line is aligned.
+    preview_visible: bool,
+    preview_size: f32,
+    preview_blur: f32,
+    preview_invert: bool,
+    /// 0 left, 1 center, 2 right.
+    preview_align: u8,
+    preview_blur_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
     /// Grid cell size in px, driven by the bottom bar's zoom slider.
     /// This is the *target*: cells stretch from it to fill the row.
     grid_cell_size: f32,
@@ -1522,6 +1567,14 @@ struct Workspace {
     /// row height are solved against it so rows fill the width and
     /// divide the height evenly (no half row at the bottom edge).
     grid_viewport: gpui::Size<gpui::Pixels>,
+    /// The same, for the editor sidebar's mini glyph grid.
+    sidebar_viewport: gpui::Size<gpui::Pixels>,
+    /// First visible row of each grid. Scrolling moves whole rows.
+    grid_scroll_row: usize,
+    sidebar_scroll_row: usize,
+    /// Target cell size for the editor sidebar's mini grid.
+    sidebar_cell_size: f32,
+    sidebar_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
     cell_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
     mode: Mode,
     editor: EditorState,
@@ -1720,7 +1773,26 @@ fn flat_slider(
         )
 }
 
+/// How a grid of glyph cells fits its pane: cell size, and how many
+/// columns and whole rows are on screen.
+#[derive(Clone, Copy)]
+struct GridFit {
+    cell_w: f32,
+    cell_h: f32,
+    cols: usize,
+    rows: usize,
+}
+
+impl GridFit {
+    /// Exact width of a full row of cells, gaps included.
+    fn content_w(&self) -> f32 {
+        self.cell_w * self.cols as f32 + GRID_GAP * (self.cols - 1) as f32
+    }
+}
+
 const CELL: f32 = 96.0;
+/// Target cell size for the editor sidebar's mini grid.
+const MINI_CELL: f32 = 44.0;
 /// Height of a header tab, and the side of the square icon buttons
 /// that sit beside tabs in the header and the status bar.
 const TAB_H: f32 = 24.0;
@@ -1728,6 +1800,9 @@ const TAB_H: f32 = 24.0;
 const GRID_GAP: f32 = 8.0;
 const GRID_PAD: f32 = 12.0;
 const GRID_PAD_Y: f32 = 8.0;
+/// The sidebar's mini grid is narrow: it spares less padding, but the
+/// fit is solved the same way.
+const GRID_PAD_SM: f32 = 6.0;
 const HIT_RADIUS_PX: f64 = 10.0;
 /// Points are easier to grab than segments: the web select tool gives
 /// them a wider radius (SELECT_POINT_HIT_DISTANCE) than the 10px it
@@ -1941,17 +2016,60 @@ impl Workspace {
     /// then columns are chosen to fill the width exactly and the row
     /// height divides the visible height evenly, so no row is left
     /// sliced in half at the bottom edge.
-    fn grid_cell_metrics(&self) -> (f32, f32) {
+    fn grid_cell_metrics(&self) -> GridFit {
+        Self::solve_grid(self.grid_viewport, self.grid_cell_size, GRID_PAD)
+    }
+
+    /// Same solve for the editor sidebar's mini grid, against its own
+    /// narrower viewport.
+    fn sidebar_cell_metrics(&self) -> GridFit {
+        Self::solve_grid(self.sidebar_viewport, self.sidebar_cell_size, GRID_PAD_SM)
+    }
+
+    /// Scroll a row-quantized grid by a wheel delta. The offset is
+    /// kept in whole rows, so a row is never left sliced at the top or
+    /// bottom edge — the web got this from `scroll-snap-type`, which
+    /// gpui has no equivalent for.
+    fn scroll_grid_rows(
+        offset: &mut usize,
+        delta_y: f32,
+        row_h: f32,
+        rows_visible: usize,
+        rows_total: usize,
+    ) -> bool {
+        let max = rows_total.saturating_sub(rows_visible);
+        let step = (delta_y / row_h.max(1.0)).abs().ceil() as usize;
+        let step = step.clamp(1, rows_visible.max(1));
+        let next = if delta_y > 0.0 {
+            offset.saturating_sub(step)
+        } else {
+            (*offset + step).min(max)
+        };
+        let changed = next != *offset;
+        *offset = next;
+        changed
+    }
+
+    fn solve_grid(
+        viewport: gpui::Size<gpui::Pixels>,
+        target: f32,
+        pad: f32,
+    ) -> GridFit {
         let label_h = |w: f32| if w >= 90.0 { 32.0 } else { 14.0 };
-        let target = self.grid_cell_size.max(24.0);
-        let vw: f32 = self.grid_viewport.width.into();
-        let vh: f32 = self.grid_viewport.height.into();
+        let target = target.max(24.0);
+        let vw: f32 = viewport.width.into();
+        let vh: f32 = viewport.height.into();
         if vw <= 0.0 || vh <= 0.0 {
             // First frame, before the probe reports: fall back to the
             // target size.
-            return (target, target + label_h(target));
+            return GridFit {
+                cell_w: target,
+                cell_h: target + label_h(target),
+                cols: 1,
+                rows: 1,
+            };
         }
-        let usable_w = (vw - GRID_PAD * 2.0).max(target);
+        let usable_w = (vw - pad * 2.0).max(target);
         let cols = (((usable_w + GRID_GAP) / (target + GRID_GAP)).floor()
             as usize)
             .max(1);
@@ -1959,13 +2077,18 @@ impl Workspace {
             ((usable_w - GRID_GAP * (cols - 1) as f32) / cols as f32).floor();
 
         let target_row = cell_w + label_h(cell_w);
-        let usable_h = (vh - GRID_PAD_Y * 2.0).max(target_row);
+        let usable_h = (vh - pad.min(GRID_PAD_Y) * 2.0).max(target_row);
         let rows = (((usable_h + GRID_GAP) / (target_row + GRID_GAP)).round()
             as usize)
             .max(1);
         let cell_h =
             ((usable_h - GRID_GAP * (rows - 1) as f32) / rows as f32).floor();
-        (cell_w, cell_h)
+        GridFit {
+            cell_w,
+            cell_h,
+            cols,
+            rows,
+        }
     }
 
     fn glyph_cell_sized(
@@ -1990,16 +2113,27 @@ impl Workspace {
         };
         let outline = entry.path.clone();
         let advance = entry.advance;
-        let ascender = font.ascender;
-        let descender = font.descender;
-        let label_h = if cell >= 90.0 { 20.0 } else { 14.0 };
+        let upm = font.units_per_em;
+        // Labels are dropped once a cell is too small to carry them.
+        let show_labels = cell >= 34.0;
+        let label_h = if !show_labels {
+            0.0
+        } else if cell >= 90.0 {
+            20.0
+        } else {
+            14.0
+        };
         let incompatible = self
             .project
             .as_ref()
             .and_then(|p| p.compat.get(entry.name.as_ref()))
             .is_some_and(|ok| !ok);
 
-        let label_h = if cell >= 90.0 { 32.0 } else { label_h };
+        let label_h = if show_labels && cell >= 90.0 {
+            32.0
+        } else {
+            label_h
+        };
         let mark = entry.mark.as_deref().and_then(t::mark_color);
         div()
             .id(index)
@@ -2044,17 +2178,57 @@ impl Workspace {
                     canvas(
                         move |bounds, _, _| bounds,
                         move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                            let h: f32 = bounds.size.height.into();
-                            let w: f32 = bounds.size.width.into();
-                            let scale = (h * 0.72) / (ascender - descender) as f32;
-                            let baseline_y = h * 0.86 + (descender as f32 * scale);
-                            let x_offset = (w - advance as f32 * scale) / 2.0;
-                            let transform =
-                                Affine::translate((x_offset as f64, baseline_y as f64))
-                                    * Affine::scale_non_uniform(scale as f64, -(scale as f64));
+                            use kurbo::Shape as _;
+                            let h = f32::from(bounds.size.height) as f64;
+                            let w = f32::from(bounds.size.width) as f64;
+                            // The web's grid thumbnail box
+                            // (glyph_svg.rs): one vertical scale for
+                            // every glyph in the grid, so a period
+                            // stays a dot and an M stays tall, with the
+                            // baseline the same distance down each
+                            // cell. The em window is a minimum, not a
+                            // crop: it grows to hold ink that runs past
+                            // it rather than clipping a descender.
+                            const EM_FILL: f64 = 0.65;
+                            const BASELINE_FROM_TOP: f64 = 0.8;
+                            let ink = outline.bounding_box();
+                            let (ink_x0, ink_w) = if outline.elements().is_empty()
+                                || ink.width() <= 0.0
+                            {
+                                // Blank glyph: centre its advance.
+                                (0.0, advance.max(1.0))
+                            } else {
+                                (ink.x0, ink.width())
+                            };
+                            let em_height = upm.max(1.0) / EM_FILL;
+                            let em_top = -BASELINE_FROM_TOP * em_height;
+                            let (top, bottom) = if outline.elements().is_empty() {
+                                (em_top, em_top + em_height)
+                            } else {
+                                (
+                                    em_top.min(-ink.y1),
+                                    (em_top + em_height).max(-ink.y0),
+                                )
+                            };
+                            let box_h = (bottom - top).max(1.0);
+                            // "meet": the box fits inside the cell,
+                            // centred on both axes.
+                            let scale = (w / ink_w).min(h / box_h);
+                            let x_offset = (w - ink_w * scale) / 2.0 - ink_x0 * scale;
+                            let baseline =
+                                (h - box_h * scale) / 2.0 - top * scale;
+                            let transform = Affine::translate((x_offset, baseline))
+                                * Affine::scale_non_uniform(scale, -scale);
                             if let Some(path) = build_fill_path(&outline, transform, bounds.origin)
                             {
-                                window.paint_path(path, mark.unwrap_or_else(t::glyph_fill));
+                                window.paint_path(
+                                    path,
+                                    if selected {
+                                        t::cell_selected_ring()
+                                    } else {
+                                        mark.unwrap_or_else(t::glyph_fill)
+                                    },
+                                );
                             }
                         },
                     )
@@ -2063,7 +2237,7 @@ impl Workspace {
                     .size_full(),
                 ),
             )
-            .child(
+            .when(show_labels, |el| el.child(
                 div()
                     .h(px(label_h))
                     .px_1()
@@ -2096,14 +2270,14 @@ impl Workspace {
                         el.child(
                             div()
                                 .text_color(if selected {
-                                    t::accent()
+                                    t::cell_selected_ring()
                                 } else {
                                     mark.unwrap_or_else(t::text_muted)
                                 })
                                 .child(unicode_label.unwrap_or_else(|| "".into())),
                         )
                     }),
-            )
+            ))
     }
 
     /// Left sidebar tile: search plus the category filter list,
@@ -2620,6 +2794,8 @@ impl Workspace {
     /// Select a sidebar row.
     fn set_sidebar_filter(&mut self, filter: SidebarFilter) {
         self.sidebar_filter = filter;
+        // A different set of glyphs starts at the top.
+        self.grid_scroll_row = 0;
         self.rebuild_sidebar_matches();
     }
 
@@ -3388,19 +3564,37 @@ impl Workspace {
     /// switching doesn't require leaving the editor.
     fn editor_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let query = self.search_query.clone();
+        let fit = self.sidebar_cell_metrics();
+        let mut rows_total = 0usize;
+        let mut shown = 0usize;
         let cells: Vec<_> = match self.font() {
-            Some(font) => (0..font.glyphs.len())
-                .filter(|&i| {
-                    self.search_matches(
-                        font.glyphs[i].name.as_ref(),
-                        font.glyphs[i].codepoint,
-                    )
-                })
-                .map(|i| {
-                    self.glyph_cell_sized(i, 44.0, 58.0, true, cx)
+            Some(font) => {
+                let matched: Vec<usize> = (0..font.glyphs.len())
+                    .filter(|&i| {
+                        self.search_matches(
+                            font.glyphs[i].name.as_ref(),
+                            font.glyphs[i].codepoint,
+                        )
+                    })
+                    .collect();
+                shown = matched.len();
+                rows_total = matched.len().div_ceil(fit.cols);
+                let start = self
+                    .sidebar_scroll_row
+                    .min(rows_total.saturating_sub(1))
+                    * fit.cols;
+                matched
+                    .into_iter()
+                    .skip(start)
+                    .take(fit.cols * fit.rows)
+                    .map(|i| {
+                        self.glyph_cell_sized(
+                            i, fit.cell_w, fit.cell_h, true, cx,
+                        )
                         .into_any_element()
-                })
-                .collect(),
+                    })
+                    .collect()
+            }
             None => Vec::new(),
         };
         div()
@@ -3446,12 +3640,96 @@ impl Workspace {
                     )),
             )
             .child(
+                // Measured the same way the main grid is, so the mini
+                // cells stretch to fill the pane and a row is never
+                // left half-showing at the bottom.
                 div()
-                    .id("editor-sidebar-grid")
                     .flex_1()
                     .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .child(div().flex().flex_wrap().gap_1().p_2().children(cells)),
+                    .relative()
+                    .child({
+                        let this = cx.entity().downgrade();
+                        canvas(
+                            move |bounds: Bounds<gpui::Pixels>,
+                                  _,
+                                  app: &mut gpui::App| {
+                                this.update(app, |this, cx| {
+                                    if this.sidebar_viewport != bounds.size {
+                                        this.sidebar_viewport = bounds.size;
+                                        cx.notify();
+                                    }
+                                })
+                                .ok();
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full()
+                    })
+                    .child(
+                        div()
+                            .id("editor-sidebar-grid")
+                            .size_full()
+                            .min_h(px(0.0))
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .size_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        div()
+                                            .w(px(fit.content_w()))
+                                            .flex()
+                                            .flex_wrap()
+                                            .gap(px(GRID_GAP))
+                                            .children(cells),
+                                    ),
+                            )
+                            .on_scroll_wheel(cx.listener(
+                                move |this, ev: &gpui::ScrollWheelEvent, _, cx| {
+                                    let dy = match ev.delta {
+                                        gpui::ScrollDelta::Pixels(p) => f32::from(p.y),
+                                        gpui::ScrollDelta::Lines(p) => p.y * 24.0,
+                                    };
+                                    if Self::scroll_grid_rows(
+                                        &mut this.sidebar_scroll_row,
+                                        dy,
+                                        fit.cell_h + GRID_GAP,
+                                        fit.rows,
+                                        rows_total,
+                                    ) {
+                                        cx.notify();
+                                    }
+                                },
+                            )),
+                    ),
+            )
+            .child(
+                // Same bar the main grid has: cell size, and the count
+                // of what is showing.
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .border_t_1()
+                    .border_color(t::panel_outline())
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xs()
+                            .text_color(t::text_muted())
+                            .child(SharedString::from(format!(
+                                "{} glyphs",
+                                shown
+                            ))),
+                    )
+                    .children(self.sidebar_slider.as_ref().map(|slider| {
+                        div().w(px(96.0)).child(flat_slider(slider, cx))
+                    })),
             )
     }
 
@@ -8321,6 +8599,33 @@ impl Workspace {
 
     /// Push the open glyph's contours onto the undo stack and clear
     /// the redo tail. Called at the start of every mutating gesture.
+    /// Switch the palette: the app's own colours, the widget library's
+    /// theme, and the menu tick all follow.
+    fn command_set_theme(
+        &mut self,
+        id: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !t::set_theme(id) {
+            return;
+        }
+        t::install_component_theme(cx);
+        cx.set_menus(app_menus());
+        self.status_note = Some(
+            format!(
+                "{} theme",
+                t::THEMES
+                    .iter()
+                    .find(|(name, _)| *name == id)
+                    .map(|(_, label)| *label)
+                    .unwrap_or(id)
+            )
+            .into(),
+        );
+        cx.notify();
+    }
+
     fn push_undo_snapshot(&mut self, index: usize) {
         // Any other edit ends a nudge burst, so the next arrow press
         // opens a fresh undo group.
@@ -9471,15 +9776,17 @@ impl Workspace {
     }
 
     fn preview_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let _ = cx;
         let Some(font) = self.font() else {
             return div().into_any_element();
         };
-        let upm = font.units_per_em;
+        let ascender = font.ascender;
         let descender = font.descender;
+        let upm = font.units_per_em;
         let line_height = self.text_line_height();
         let layout = self.edit_buffer.layout(line_height);
-        let items: Vec<(Arc<BezPath>, f64, f64)> = layout
+        // Each sort's outline, its pen position, and its advance, so
+        // the line can be measured and centered.
+        let items: Vec<(Arc<BezPath>, f64, f64, f64)> = layout
             .items
             .iter()
             .filter_map(|item| {
@@ -9489,42 +9796,235 @@ impl Workspace {
                 }
                 let name = sort.glyph_name()?;
                 let glyph = *font.name_map.get(name)?;
-                Some((font.glyphs[glyph].path.clone(), item.x, item.y))
+                Some((
+                    font.glyphs[glyph].path.clone(),
+                    item.x,
+                    item.y,
+                    font.glyphs[glyph].advance,
+                ))
             })
             .collect();
+        let line_width = items
+            .iter()
+            .map(|(_, x, _, adv)| x + adv)
+            .fold(0.0_f64, f64::max);
+
+        let size = self.preview_size as f64;
+        let blur = self.preview_blur;
+        let invert = self.preview_invert;
+        let align = self.preview_align;
+        let visible = self.preview_visible;
+        // The strip grows with the type size so big text is not
+        // clipped, within reason.
+        let strip_h = ((size * 1.6) as f32).clamp(96.0, 320.0);
+
+        let body = div().flex_1().min_h(px(0.0)).child(
+            canvas(
+                move |bounds, _, _| bounds,
+                move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+                    let w: f64 = f32::from(bounds.size.width) as f64;
+                    let h: f64 = f32::from(bounds.size.height) as f64;
+                    let (ink, ground) = if invert {
+                        (t::window_bg(), t::preview_glyph())
+                    } else {
+                        (t::preview_glyph(), t::panel_bg())
+                    };
+                    window.paint_quad(gpui::fill(bounds, ground));
+                    if !visible {
+                        return;
+                    }
+                    let scale = size / upm.max(1.0);
+                    // Centered vertically on the em box, and placed
+                    // horizontally by the alignment setting.
+                    let baseline = h / 2.0 + (ascender + descender) / 2.0 * scale;
+                    let text_w = line_width * scale;
+                    let pad = 24.0;
+                    let origin_x = match align {
+                        0 => pad,
+                        2 => (w - text_w - pad).max(pad),
+                        _ => ((w - text_w) / 2.0).max(pad),
+                    };
+                    // gpui paints paths, not filters, so a blur is a
+                    // stack of offset passes: one ring plus the middle,
+                    // each at a fraction of the ink's alpha.
+                    let passes: Vec<(f64, f64, f32)> = if blur > 0.05 {
+                        let r = blur as f64;
+                        let mut v = vec![(0.0, 0.0, 0.34_f32)];
+                        for i in 0..8 {
+                            let a = std::f64::consts::TAU * (i as f64) / 8.0;
+                            v.push((r * a.cos(), r * a.sin(), 0.14));
+                        }
+                        for i in 0..8 {
+                            let a = std::f64::consts::TAU * (i as f64 + 0.5) / 8.0;
+                            v.push((r * 0.5 * a.cos(), r * 0.5 * a.sin(), 0.20));
+                        }
+                        v
+                    } else {
+                        vec![(0.0, 0.0, 1.0)]
+                    };
+                    for (path, x, y, _) in items.iter() {
+                        for (ox, oy, alpha) in passes.iter() {
+                            let transform = Affine::translate((
+                                origin_x + x * scale + ox,
+                                baseline - y * scale + oy,
+                            )) * Affine::scale_non_uniform(scale, -scale);
+                            if let Some(p) =
+                                build_fill_path(path, transform, bounds.origin)
+                            {
+                                let mut color = ink;
+                                color.a *= alpha;
+                                window.paint_path(p, color);
+                            }
+                        }
+                    }
+                },
+            )
+            .size_full(),
+        );
+
+        let _ = cx;
         div()
-            .h(px(104.0))
+            .h(px(strip_h))
             .flex()
-            .items_center()
+            .flex_col()
             .bg(t::panel_bg())
             .border_t_1()
             .border_color(t::cell_border())
-            .child(
-                div().flex_1().h_full().child(
-                    canvas(
-                        move |bounds, _, _| bounds,
-                        move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                            let h: f32 = bounds.size.height.into();
-                            let scale = (h as f64 * 0.72) / upm;
-                            let baseline = h as f64 * 0.82 + descender * scale;
-                            let origin_x: f64 = 24.0;
-                            for (path, x, y) in items.iter() {
-                                let transform = Affine::translate((
-                                    origin_x + x * scale,
-                                    baseline - y * scale,
-                                )) * Affine::scale_non_uniform(scale, -scale);
-                                if let Some(p) =
-                                    build_fill_path(path, transform, bounds.origin)
-                                {
-                                    window.paint_path(p, t::preview_glyph());
-                                }
-                            }
-                        },
-                    )
-                    .size_full(),
-                ),
-            )
+            .child(body)
             .into_any_element()
+    }
+
+    /// Preview controls, after Glyphs': show/hide, color flip, blur
+    /// (a spacing check), line alignment, and type size. They live in
+    /// the one bottom bar, not a bar of their own.
+    fn preview_controls(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let toggle = |id: &'static str,
+                      label: SharedString,
+                      active: bool,
+                      on: fn(&mut Workspace),
+                      cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .h(px(18.0))
+                .px_1p5()
+                .rounded_sm()
+                .border_1()
+                .flex()
+                .items_center()
+                .text_xs()
+                .cursor_pointer()
+                .when(active, |el| {
+                    el.border_color(t::accent()).text_color(t::accent())
+                })
+                .when(!active, |el| {
+                    el.border_color(t::cell_border()).text_color(t::text_muted())
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    on(this);
+                    cx.notify();
+                }))
+        };
+        let align_button = |which: u8, label: &'static str, cx: &mut Context<Self>| {
+            div()
+                .id(("preview-align", which as usize))
+                .h(px(18.0))
+                .w(px(20.0))
+                .rounded_sm()
+                .border_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_xs()
+                .cursor_pointer()
+                .when(self.preview_align == which, |el| {
+                    el.border_color(t::accent()).text_color(t::accent())
+                })
+                .when(self.preview_align != which, |el| {
+                    el.border_color(t::cell_border()).text_color(t::text_muted())
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.preview_align = which;
+                    cx.notify();
+                }))
+        };
+        let step = |id: &'static str, label: &'static str, delta: f32, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .h(px(18.0))
+                .w(px(18.0))
+                .rounded_sm()
+                .border_1()
+                .border_color(t::cell_border())
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_xs()
+                .text_color(t::text_muted())
+                .cursor_pointer()
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.preview_size = (this.preview_size + delta).clamp(24.0, 400.0);
+                    cx.notify();
+                }))
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .flex_none()
+            .child(
+                div()
+                    .id("preview-eye")
+                    .w(px(20.0))
+                    .h(px(18.0))
+                    .cursor_pointer()
+                    .child(icon_svg(
+                        "preview",
+                        if self.preview_visible {
+                            t::accent()
+                        } else {
+                            t::text_muted()
+                        },
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.preview_visible = !this.preview_visible;
+                        cx.notify();
+                    })),
+            )
+            .child(toggle(
+                "preview-invert",
+                "invert".into(),
+                self.preview_invert,
+                |this| this.preview_invert = !this.preview_invert,
+                cx,
+            ))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("blur"),
+            )
+            .children(self.preview_blur_slider.as_ref().map(|slider| {
+                div().w(px(90.0)).child(flat_slider(slider, cx))
+            }))
+            .child(align_button(0, "L", cx))
+            .child(align_button(1, "C", cx))
+            .child(align_button(2, "R", cx))
+            .child(step("preview-smaller", "−", -8.0, cx))
+            .child(
+                div()
+                    .w(px(46.0))
+                    .text_xs()
+                    .text_center()
+                    .text_color(t::text_muted())
+                    .child(SharedString::from(format!(
+                        "{:.0} pt",
+                        self.preview_size
+                    ))),
+            )
+            .child(step("preview-bigger", "+", 8.0, cx))
     }
 
     /// Add an empty glyph to every master (bottom bar +), like
@@ -9579,6 +10079,65 @@ impl Workspace {
     }
 
     /// Create the bottom bar's cell-size slider once a window exists.
+    fn ensure_preview_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.preview_blur_slider.is_some() {
+            return;
+        }
+        let slider = cx.new(|_| {
+            gpui_component::slider::SliderState::new()
+                .max(12.0)
+                .min(0.0)
+                .step(0.5)
+                .default_value(0.0)
+        });
+        let sub = cx.subscribe_in(&slider, window, {
+            move |this: &mut Workspace,
+                  _,
+                  event: &gpui_component::slider::SliderEvent,
+                  _window,
+                  cx| {
+                let gpui_component::slider::SliderEvent::Change(value) = event
+                else {
+                    return;
+                };
+                this.preview_blur = value.start();
+                cx.notify();
+            }
+        });
+        self._subscriptions.push(sub);
+        self.preview_blur_slider = Some(slider);
+    }
+
+    fn ensure_sidebar_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_slider.is_some() {
+            return;
+        }
+        let slider = cx.new(|_| {
+            gpui_component::slider::SliderState::new()
+                .max(120.0)
+                .min(24.0)
+                .step(2.0)
+                .default_value(MINI_CELL)
+        });
+        let sub = cx.subscribe_in(&slider, window, {
+            move |this: &mut Workspace,
+                  _,
+                  event: &gpui_component::slider::SliderEvent,
+                  _window,
+                  cx| {
+                let gpui_component::slider::SliderEvent::Change(value) = event
+                else {
+                    return;
+                };
+                this.sidebar_cell_size = value.start();
+                this.sidebar_scroll_row = 0;
+                cx.notify();
+            }
+        });
+        self._subscriptions.push(sub);
+        self.sidebar_slider = Some(slider);
+    }
+
     fn ensure_cell_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.cell_slider.is_some() {
             return;
@@ -9755,14 +10314,26 @@ impl Workspace {
             }
         };
         div()
-            .px_4()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
             .py_1()
             .bg(t::panel_bg())
             .border_t_1()
             .border_color(t::cell_border())
-            .text_sm()
-            .text_color(t::text_muted())
-            .child(text)
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .text_sm()
+                    .text_color(t::text_muted())
+                    .child(text),
+            )
+            .children(
+                matches!(self.mode, Mode::Editor(_))
+                    .then(|| self.preview_controls(cx)),
+            )
     }
 
     /// Watch every master's UFO directory; external changes reload
@@ -10305,6 +10876,8 @@ impl Render for Workspace {
 
         self.ensure_axis_sliders(window, cx);
         self.ensure_cell_slider(window, cx);
+        self.ensure_sidebar_slider(window, cx);
+        self.ensure_preview_slider(window, cx);
         if self.sidebar_counts.is_none() && self.project.is_some() {
             self.rebuild_sidebar_cache();
         }
@@ -10326,13 +10899,21 @@ impl Render for Workspace {
                     .size_full()
                     .min_h(px(0.0))
                     .child(self.editor_view(index, cx).into_any_element())
+                    // The preview and the bottom bar belong to the
+                    // canvas column, so the side panels keep the
+                    // window's full height and the dividers between
+                    // the three columns run all the way down.
+                    .child(self.preview_strip(cx))
+                    .child(self.status_bar(cx))
                     .into_any_element(),
             ),
             _ => {
                 let query = self.search_query.clone();
                 let matches = self.sidebar_matches.clone();
                 let sort_unicode = self.sort_unicode;
-                let (cell_w, cell_h) = self.grid_cell_metrics();
+                let fit = self.grid_cell_metrics();
+                let (cell_w, cell_h) = (fit.cell_w, fit.cell_h);
+                let mut rows_total = 0usize;
                 let grid: Vec<_> = match self.font() {
                     Some(font) => {
                         let mut indices: Vec<usize> = (0..font.glyphs.len())
@@ -10353,8 +10934,19 @@ impl Render for Workspace {
                             indices
                                 .sort_by_key(|&i| font.glyphs[i].name.clone());
                         }
+                        rows_total = indices.len().div_ceil(fit.cols);
+                        // Only the rows on screen are built: the view
+                        // starts at a row boundary and holds exactly
+                        // the rows that fit, so nothing is ever half
+                        // drawn at either edge.
+                        let start = self
+                            .grid_scroll_row
+                            .min(rows_total.saturating_sub(1))
+                            * fit.cols;
                         indices
                             .into_iter()
+                            .skip(start)
+                            .take(fit.cols * fit.rows)
                             .map(|i| {
                                 self.glyph_cell_sized(
                                     i, cell_w, cell_h, false, cx,
@@ -10388,24 +10980,58 @@ impl Render for Workspace {
                     div()
                         .size_full()
                         .min_h(px(0.0))
-                        .relative()
-                        .child(probe)
+                        .flex()
+                        .flex_col()
                         .child(
                             div()
                                 .id("glyph-grid")
-                                .size_full()
+                                .flex_1()
                                 .min_h(px(0.0))
-                                .overflow_y_scroll()
+                                .relative()
+                                .overflow_hidden()
+                                .child(probe)
                                 .child(
+                                    // The block is sized to exactly
+                                    // cols x rows and centred, so the
+                                    // pixels left over by rounding the
+                                    // cell size split evenly between
+                                    // the margins instead of piling up
+                                    // on the right and bottom.
                                     div()
+                                        .size_full()
                                         .flex()
-                                        .flex_wrap()
-                                        .gap(px(GRID_GAP))
-                                        .px(px(GRID_PAD))
-                                        .py(px(GRID_PAD_Y))
-                                        .children(grid),
-                                ),
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            div()
+                                                .w(px(fit.content_w()))
+                                                .flex()
+                                                .flex_wrap()
+                                                .gap(px(GRID_GAP))
+                                                .children(grid),
+                                        ),
+                                )
+                                .on_scroll_wheel(cx.listener(
+                                    move |this, ev: &gpui::ScrollWheelEvent, _, cx| {
+                                        let dy = match ev.delta {
+                                            gpui::ScrollDelta::Pixels(p) => f32::from(p.y),
+                                            gpui::ScrollDelta::Lines(p) => p.y * 24.0,
+                                        };
+                                        if Self::scroll_grid_rows(
+                                            &mut this.grid_scroll_row,
+                                            dy,
+                                            fit.cell_h + GRID_GAP,
+                                            fit.rows,
+                                            rows_total,
+                                        ) {
+                                            cx.notify();
+                                        }
+                                    },
+                                )),
                         )
+                        // One bar per column bottom: the grid's lives
+                        // here so the sidebars run past it.
+                        .child(self.status_bar(cx))
                         .into_any_element(),
                 )
             }
@@ -10513,6 +11139,18 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CopySelectedGlyphs, _, cx| {
                 this.command_copy_selection_text(cx);
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SetThemeDark, window, cx| {
+                this.command_set_theme("dark", window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SetThemeMidnight, window, cx| {
+                this.command_set_theme("midnight", window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SetThemeGray, window, cx| {
+                this.command_set_theme("gray", window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SetThemeLight, window, cx| {
+                this.command_set_theme("light", window, cx);
             }))
             .on_action(cx.listener(|this, _: &RemoveOverlap, _, cx| {
                 this.command_remove_overlap();
@@ -10659,11 +11297,6 @@ impl Render for Workspace {
             }))
             .child(self.header(cx))
             .child(content)
-            .children(
-                matches!(self.mode, Mode::Editor(_))
-                    .then(|| self.preview_strip(cx)),
-            )
-            .child(self.status_bar(cx))
     }
 }
 
@@ -10999,6 +11632,10 @@ fn main() {
                             if matches!(ev, gpui_component::input::InputEvent::Change) {
                                 this.search_query =
                                     search.read(cx).value().to_string().to_lowercase();
+                                // Fewer matches: start both grids at
+                                // the top rather than past the end.
+                                this.grid_scroll_row = 0;
+                                this.sidebar_scroll_row = 0;
                                 cx.notify();
                             }
                         }
@@ -11017,8 +11654,19 @@ fn main() {
                         expanded_categories: std::collections::HashSet::new(),
                         sort_unicode: true,
                         nudging: false,
+                        preview_visible: true,
+                        preview_size: 96.0,
+                        preview_blur: 0.0,
+                        preview_invert: false,
+                        preview_align: 1,
+                        preview_blur_slider: None,
                         grid_cell_size: CELL,
                         grid_viewport: gpui::size(px(0.0), px(0.0)),
+                        sidebar_viewport: gpui::size(px(0.0), px(0.0)),
+                        grid_scroll_row: 0,
+                        sidebar_scroll_row: 0,
+                        sidebar_cell_size: MINI_CELL,
+                        sidebar_slider: None,
                         cell_slider: None,
                         mode: start_mode,
                         editor: EditorState::new(),
