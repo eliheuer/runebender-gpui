@@ -6473,6 +6473,30 @@ impl Workspace {
                                 }
                             };
                             let zero = gpui::point(px(0.0), px(0.0));
+                            // Colours are the batch key: an Rgba is not
+                            // hashable, so its bytes stand in.
+                            let color_key = |c: gpui::Rgba| -> u32 {
+                                u32::from_be_bytes([
+                                    (c.r * 255.0) as u8,
+                                    (c.g * 255.0) as u8,
+                                    (c.b * 255.0) as u8,
+                                    (c.a * 255.0) as u8,
+                                ])
+                            };
+                            let mut halo_batch = BezPath::new();
+                            let mut fill_batch: std::collections::BTreeMap<
+                                u32,
+                                (gpui::Rgba, BezPath),
+                            > = std::collections::BTreeMap::new();
+                            let mut ring_batch: std::collections::BTreeMap<
+                                u32,
+                                (gpui::Rgba, BezPath),
+                            > = std::collections::BTreeMap::new();
+                            #[allow(clippy::type_complexity)]
+                            let mut chord_batch: std::collections::BTreeMap<
+                                u32,
+                                (gpui::Rgba, Vec<(f32, BezPath)>),
+                            > = std::collections::BTreeMap::new();
                             for p in points.iter() {
                                 if preview_mode || text_mode {
                                     break;
@@ -6502,19 +6526,12 @@ impl Workspace {
                                     4.5
                                 } * ps;
                                 let path = shape(center, r, is_square);
-                                if let Some(p) = build_path(
-                                    &path,
-                                    Affine::IDENTITY,
-                                    zero,
-                                    PathBuilder::stroke(px(halo_w)),
-                                ) {
-                                    window.paint_path(p, t::halo());
-                                }
-                                if let Some(p) =
-                                    build_fill_path(&path, Affine::IDENTITY, zero)
-                                {
-                                    window.paint_path(p, inner);
-                                }
+                                halo_batch.extend(path.iter());
+                                fill_batch
+                                    .entry(color_key(inner))
+                                    .or_insert_with(|| (inner, BezPath::new()))
+                                    .1
+                                    .extend(path.iter());
                                 // The point is a window onto the design
                                 // grid: the gridlines that cross it are
                                 // redrawn inside, tinted with the
@@ -6540,8 +6557,7 @@ impl Workspace {
                                         }
                                         let mut tint = ring;
                                         tint.a = alpha as f32;
-                                        let mut lines = PathBuilder::stroke(px(wide));
-                                        let mut any = false;
+                                        let mut lines = BezPath::new();
                                         // Vertical gridlines: the chord
                                         // is the circle's half-height at
                                         // that offset (the full radius
@@ -6567,15 +6583,8 @@ impl Workspace {
                                             if half <= 0.2 {
                                                 continue;
                                             }
-                                            lines.move_to(gpui::point(
-                                                px(sx as f32),
-                                                px((cy_ - half) as f32),
-                                            ));
-                                            lines.line_to(gpui::point(
-                                                px(sx as f32),
-                                                px((cy_ + half) as f32),
-                                            ));
-                                            any = true;
+                                            lines.move_to((sx, cy_ - half));
+                                            lines.line_to((sx, cy_ + half));
                                         }
                                         let a = (inv * kurbo::Point::new(cx_, cy_ - r)).y;
                                         let b = (inv * kurbo::Point::new(cx_, cy_ + r)).y;
@@ -6598,28 +6607,72 @@ impl Workspace {
                                             if half <= 0.2 {
                                                 continue;
                                             }
-                                            lines.move_to(gpui::point(
-                                                px((cx_ - half) as f32),
-                                                px(sy as f32),
-                                            ));
-                                            lines.line_to(gpui::point(
-                                                px((cx_ + half) as f32),
-                                                px(sy as f32),
-                                            ));
-                                            any = true;
+                                            lines.move_to((cx_ - half, sy));
+                                            lines.line_to((cx_ + half, sy));
                                         }
-                                        if any && let Ok(p) = lines.build() {
-                                            window.paint_path(p, tint);
+                                        if !lines.is_empty() {
+                                            let entry = chord_batch
+                                                .entry(color_key(tint))
+                                                .or_insert_with(|| {
+                                                    (tint, Vec::new())
+                                                });
+                                            match entry
+                                                .1
+                                                .iter_mut()
+                                                .find(|(w, _)| *w == wide)
+                                            {
+                                                Some((_, acc)) => {
+                                                    acc.extend(lines.iter())
+                                                }
+                                                None => entry.1.push((wide, lines)),
+                                            }
                                         }
                                     }
                                 }
+                                ring_batch
+                                    .entry(color_key(ring))
+                                    .or_insert_with(|| (ring, BezPath::new()))
+                                    .1
+                                    .extend(path.iter());
+                            }
+                            // Three path draws for every point on the
+                            // glyph, plus the gridlines, collapse into
+                            // one per colour.
+                            if let Some(p) = build_path(
+                                &halo_batch,
+                                Affine::IDENTITY,
+                                zero,
+                                PathBuilder::stroke(px(halo_w)),
+                            ) {
+                                window.paint_path(p, t::halo());
+                            }
+                            for (color, path) in fill_batch.values() {
+                                if let Some(p) =
+                                    build_fill_path(path, Affine::IDENTITY, zero)
+                                {
+                                    window.paint_path(p, *color);
+                                }
+                            }
+                            for (color, path) in chord_batch.values() {
+                                for (width, path) in path {
+                                    if let Some(p) = build_path(
+                                        path,
+                                        Affine::IDENTITY,
+                                        zero,
+                                        PathBuilder::stroke(px(*width)),
+                                    ) {
+                                        window.paint_path(p, *color);
+                                    }
+                                }
+                            }
+                            for (color, path) in ring_batch.values() {
                                 if let Some(p) = build_path(
-                                    &path,
+                                    path,
                                     Affine::IDENTITY,
                                     zero,
                                     PathBuilder::stroke(px(ring_w)),
                                 ) {
-                                    window.paint_path(p, ring);
+                                    window.paint_path(p, *color);
                                 }
                             }
                             // Start-of-contour arrow: which point a closed
@@ -6682,6 +6735,15 @@ impl Workspace {
                             // off the smooth-point radius and widened a
                             // little so a rotated square reads as the
                             // same size (web ANCHOR_DIAMOND_SCALE).
+                            let mut anchor_halo = BezPath::new();
+                            let mut anchor_fill: std::collections::BTreeMap<
+                                u32,
+                                (gpui::Rgba, BezPath),
+                            > = std::collections::BTreeMap::new();
+                            let mut anchor_ring: std::collections::BTreeMap<
+                                u32,
+                                (gpui::Rgba, BezPath),
+                            > = std::collections::BTreeMap::new();
                             for (ai, (_, ax, ay)) in anchors.iter().enumerate() {
                                 if preview_mode || text_mode {
                                     break;
@@ -6705,26 +6767,41 @@ impl Workspace {
                                 } else {
                                     (t::anchor(), t::point_inner())
                                 };
-                                if let Some(p) = build_path(
-                                    &diamond,
-                                    Affine::IDENTITY,
-                                    zero,
-                                    PathBuilder::stroke(px(halo_w)),
-                                ) {
-                                    window.paint_path(p, t::halo());
-                                }
+                                anchor_halo.extend(diamond.iter());
+                                anchor_fill
+                                    .entry(color_key(inner))
+                                    .or_insert_with(|| (inner, BezPath::new()))
+                                    .1
+                                    .extend(diamond.iter());
+                                anchor_ring
+                                    .entry(color_key(ring))
+                                    .or_insert_with(|| (ring, BezPath::new()))
+                                    .1
+                                    .extend(diamond.iter());
+                            }
+                            if let Some(p) = build_path(
+                                &anchor_halo,
+                                Affine::IDENTITY,
+                                zero,
+                                PathBuilder::stroke(px(halo_w)),
+                            ) {
+                                window.paint_path(p, t::halo());
+                            }
+                            for (color, path) in anchor_fill.values() {
                                 if let Some(p) =
-                                    build_fill_path(&diamond, Affine::IDENTITY, zero)
+                                    build_fill_path(path, Affine::IDENTITY, zero)
                                 {
-                                    window.paint_path(p, inner);
+                                    window.paint_path(p, *color);
                                 }
+                            }
+                            for (color, path) in anchor_ring.values() {
                                 if let Some(p) = build_path(
-                                    &diamond,
+                                    path,
                                     Affine::IDENTITY,
                                     zero,
                                     PathBuilder::stroke(px(ring_w)),
                                 ) {
-                                    window.paint_path(p, ring);
+                                    window.paint_path(p, *color);
                                 }
                             }
 
@@ -11256,24 +11333,9 @@ impl Workspace {
         // right.
         if !matches!(self.mode, Mode::Editor(_)) && self.project.is_some() {
             let total = self.font().map(|f| f.glyphs.len()).unwrap_or(0);
-            let _query = self.search_query.clone();
-            let shown = self
-                .font()
-                .map(|f| {
-                    f.glyphs
-                        .iter()
-                        .filter(|entry| {
-                            self.sidebar_matches
-                                .as_ref()
-                                .is_none_or(|m| m.contains(entry.name.as_ref()))
-                                && self.search_matches(
-                                    entry.name.as_ref(),
-                                    entry.codepoint,
-                                )
-                        })
-                        .count()
-                })
-                .unwrap_or(0);
+            // The same list the grid draws, already filtered: counting
+            // it again meant another pass over the whole font per frame.
+            let shown = self.glyph_order().len();
             let center: SharedString = match &self.status_note {
                 Some(note) => note.clone(),
                 None => format!(
