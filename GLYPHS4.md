@@ -29,9 +29,10 @@ Deliberate non-goals are in the last section.
 - [x] Nudge with grid steps, numeric move/scale with a
       reference point
 - [x] Curvature comb and continuity display
-- [~] On-canvas transform: we have flips and fixed rotations, but
-      not free rotate or scale from the bounding box
-      (Glyphs 4 added Illustrator-style corner rotation)
+- [x] On-canvas transform: a multi-point selection shows its box
+      with handles; corners scale about the opposite corner, edges
+      scale one axis, the ring outside a corner rotates about the
+      centre; Shift constrains. (Glyphs 4's corner rotation)
 - [ ] Star nodes as a stored node attribute (we harmonize on
       demand instead; no G2-locked node type)
 - [ ] Pencil / freehand drawing (web has the sketch tool; parked)
