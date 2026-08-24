@@ -1505,6 +1505,62 @@ fn expand_stroke_contours(
     any
 }
 
+/// Offset every contour outward (positive `delta`, bolder) or inward
+/// (negative, lighter): the whole glyph is unioned with — or cut by —
+/// a stroke band of width 2·delta around its own outline, which moves
+/// counters the opposite way automatically. The bolder/lighter half
+/// of Glyphs' Offset Curve. Returns false when nothing changed.
+fn offset_glyph_contours(glyph: &mut norad::Glyph, delta: f64) -> bool {
+    if delta == 0.0 || glyph.contours.is_empty() {
+        return false;
+    }
+    let mut combined = BezPath::new();
+    let mut band = BezPath::new();
+    let style = kurbo::Stroke::new(delta.abs() * 2.0);
+    let opts = kurbo::StrokeOpts::default();
+    for contour in &glyph.contours {
+        let path = runebender_core::glyph_paths::contour_to_bezpath(contour);
+        band.extend(
+            kurbo::stroke(path.elements().iter().copied(), &style, &opts, 0.25)
+                .elements()
+                .iter()
+                .copied(),
+        );
+        combined.extend(path.elements().iter().copied());
+    }
+    let op = if delta > 0.0 {
+        linesweeper::BinaryOp::Union
+    } else {
+        linesweeper::BinaryOp::Difference
+    };
+    let Ok(result) =
+        linesweeper::binary_op(&combined, &band, linesweeper::FillRule::NonZero, op)
+    else {
+        return false;
+    };
+    let smooth_at: std::collections::HashMap<(i64, i64), bool> = glyph
+        .contours
+        .iter()
+        .flat_map(|c| c.points.iter())
+        .filter(|p| p.typ != norad::PointType::OffCurve)
+        .map(|p| ((p.x.round() as i64, p.y.round() as i64), p.smooth))
+        .collect();
+    let mut contours: Vec<norad::Contour> = Vec::new();
+    for contour in result.contours() {
+        if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(
+            &contour.path,
+            &smooth_at,
+        ) {
+            contours.push(c);
+        }
+    }
+    if contours.is_empty() {
+        return false;
+    }
+    glyph.contours = contours;
+    true
+}
+
 // ============================================================================
 // EDITOR VIEWPORT
 // ============================================================================
@@ -1917,6 +1973,8 @@ struct Workspace {
     slant_input: gpui::Entity<gpui_component::input::InputState>,
     /// Stroke width field in the Transformations section (units).
     stroke_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Offset field: bolder (positive) or lighter (negative) units.
+    offset_input: gpui::Entity<gpui_component::input::InputState>,
     /// The Instances editor field under the axis sliders: Enter
     /// renames the instance at the preview location, or adds one.
     instance_name_input: gpui::Entity<gpui_component::input::InputState>,
@@ -5406,6 +5464,22 @@ impl Workspace {
                         )
                         .child(div().w(px(64.0)).child(
                             gpui_component::input::Input::new(&self.stroke_input),
+                        )),
+                )
+                // Offset: the whole glyph bolder (+) or lighter (−).
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(t::text_muted())
+                                .child("Offset"),
+                        )
+                        .child(div().w(px(64.0)).child(
+                            gpui_component::input::Input::new(&self.offset_input),
                         )),
                 ),
         )
@@ -12321,6 +12395,24 @@ impl Workspace {
         }
     }
 
+    /// Offset the whole glyph bolder (positive) or lighter
+    /// (negative) by the typed number of units.
+    fn command_offset(&mut self, delta: f64) {
+        let Mode::Editor(index) = self.mode else { return };
+        self.push_undo_snapshot(index);
+        let changed = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| offset_glyph_contours(g, delta))
+            })
+            .unwrap_or(false);
+        if !changed {
+            self.editor.undo.pop();
+        } else {
+            self.editor.selected.clear();
+        }
+    }
+
     fn command_boolean(&mut self, op: linesweeper::BinaryOp) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -15401,6 +15493,33 @@ fn main() {
                             }
                         }
                     });
+                    let offset_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("±Units")
+                    });
+                    let sub_offset = cx.subscribe_in(&offset_input, window, {
+                        let state = offset_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                if let Ok(delta) = state
+                                    .read(cx)
+                                    .value()
+                                    .trim()
+                                    .parse::<f64>()
+                                {
+                                    this.command_offset(delta);
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    });
                     let instance_name_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Instance name")
@@ -15794,6 +15913,7 @@ fn main() {
                         },
                         slant_input,
                         stroke_input,
+                        offset_input,
                         instance_name_input,
                         features_input,
                         features_edited: false,
@@ -15815,6 +15935,7 @@ fn main() {
                             sub_kern_filter, sub_kern_first,
                             sub_kern_second, sub_kern_value, sub_slant,
                             sub_features, sub_instance_name, sub_stroke,
+                            sub_offset,
                         ],
                     };
                     workspace.rebuild_text_models();
@@ -16017,6 +16138,42 @@ mod tests {
             "glyph image reference round-trips"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn offset_bolder_and_lighter() {
+        use norad::{Contour, ContourPoint, PointType};
+        // A closed 100x100 square, counter-clockwise (postscript
+        // outer direction).
+        let square = |pts: &[(f64, f64)]| {
+            Contour::new(
+                pts.iter()
+                    .map(|&(x, y)| {
+                        ContourPoint::new(x, y, PointType::Line, false, None, None)
+                    })
+                    .collect(),
+                None,
+            )
+        };
+        let outer = square(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
+        let mut glyph = norad::Glyph::new("offset-test");
+        glyph.contours = vec![outer.clone()];
+        assert!(offset_glyph_contours(&mut glyph, 10.0));
+        let bbox = |g: &norad::Glyph| {
+            let (mut min, mut max) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+            for p in g.contours.iter().flat_map(|c| c.points.iter()) {
+                min = (min.0.min(p.x), min.1.min(p.y));
+                max = (max.0.max(p.x), max.1.max(p.y));
+            }
+            (max.0 - min.0, max.1 - min.1)
+        };
+        let (w, h) = bbox(&glyph);
+        assert!((w - 120.0).abs() <= 2.0 && (h - 120.0).abs() <= 2.0, "bolder grows: {w}x{h}");
+        let mut glyph2 = norad::Glyph::new("offset-test-2");
+        glyph2.contours = vec![outer];
+        assert!(offset_glyph_contours(&mut glyph2, -10.0));
+        let (w2, h2) = bbox(&glyph2);
+        assert!((w2 - 80.0).abs() <= 2.0 && (h2 - 80.0).abs() <= 2.0, "lighter shrinks: {w2}x{h2}");
     }
 
     #[test]
