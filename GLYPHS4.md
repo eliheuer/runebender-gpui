@@ -37,7 +37,8 @@ Deliberate non-goals are in the last section.
       demand instead; no G2-locked node type)
 - [ ] Pencil / freehand drawing (web has the sketch tool; parked)
 - [ ] Pixel tool for pixel fonts
-- [ ] Fit Curve panel (set both handles to a percentage)
+- [x] Fit Curve (Curves section): handles set to a percentage of
+      the tangent-intersection maximum, Glyphs' scale
 - [ ] Node corner radius stored on the node
 
 ## Shape reuse
@@ -108,8 +109,9 @@ Deliberate non-goals are in the last section.
 - [~] Instance list: designspace instances show under the axis
       sliders; clicking one parks the preview (and the strip) on
       it, × deletes, and the name field adds or renames at the
-      preview location, saved back into the designspace. Weight
-      class, style linking, and reordering come later
+      preview location with Google Fonts style linking filled in,
+      saved back into the designspace. Weight class and
+      reordering come later
 - [ ] Axis mappings (avar) editing
 - [ ] Reinterpolate a layer from the other masters
 - [ ] Axis particles: generate master and instance grids from
@@ -139,7 +141,9 @@ Deliberate non-goals are in the last section.
       (fea-rs), live into the shaping preview. The prefix/class/
       feature rail and syntax colors come later
 - [~] Automatic feature generation: kern, mark, and mkmk come
-      from fontc at export; liga and ccmp writers come later
+      from fontc at export; the Features section's Generate button
+      writes init/medi/fina from name suffixes and liga from
+      underscore names. ccmp comes later
 - [ ] Feature preview toggles in the editor
 - [ ] Classes and prefixes management
 - [ ] Tokens / feature variations
@@ -204,9 +208,10 @@ Deliberate non-goals are in the last section.
 
 - [x] Round corners
 - [x] Remove overlap
-- [~] Offset curve: the Stroke field expands skeleton contours
-      into stroked outlines (round joins and caps). The
-      bolder/lighter closed-contour offset comes later
+- [x] Offset curve: the Stroke field expands skeleton contours
+      into stroked outlines, and the Offset field makes the whole
+      glyph bolder or lighter (counters move the right way). Cap
+      and position options come later
 - [~] Slanter: the Transformations section shears the selection
       by typed degrees. Contrast and weight corrections come later
 - [ ] Simplify: redraw with fewer points (new in 4; our image
