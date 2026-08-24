@@ -11208,6 +11208,105 @@ impl Workspace {
         }
     }
 
+    /// Measured stem and bar of a glyph: the narrowest horizontal
+    /// and vertical black spans between facing straight edges.
+    /// (Counters are white spans; the midpoint containment test
+    /// keeps only ink.)
+    fn measured_dimensions(&self, name: &str) -> (Option<i64>, Option<i64>) {
+        use kurbo::Shape as _;
+        use runebender_core::measure::{self, MeasureKind};
+        use runebender_core::model::workspace::Contour as WContour;
+        let Some(font) = self.font() else { return (None, None) };
+        let Some(g) = font.font.get_glyph(name) else { return (None, None) };
+        if g.contours.is_empty() {
+            return (None, None);
+        }
+        let paths: Vec<runebender_core::path::Path> = g
+            .contours
+            .iter()
+            .map(|c| {
+                runebender_core::path::Path::from_contour(&WContour::from_norad(c))
+            })
+            .collect();
+        let filled = runebender_core::glyph_paths::glyph_to_bezpath(g, &font.font);
+        let black = |m: &measure::Measurement| {
+            let mid = kurbo::Point::new(
+                (m.a.x + m.b.x) / 2.0,
+                (m.a.y + m.b.y) / 2.0,
+            );
+            filled.contains(mid)
+        };
+        let measurements = measure::glyph_measurements(&paths);
+        let narrowest = |kind: MeasureKind| {
+            measurements
+                .iter()
+                .filter(|m| m.kind == kind)
+                .filter(|m| black(m))
+                .map(|m| m.length)
+                .min()
+        };
+        (
+            narrowest(MeasureKind::Horizontal),
+            narrowest(MeasureKind::Vertical),
+        )
+    }
+
+    /// Dimensions section (grid mode): measured stems and bars for
+    /// the reference glyphs, per master. Glyphs' Dimensions palette
+    /// is hand-typed; these are measured from the outlines.
+    fn dimensions_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        if self.project.is_none() {
+            return self.section(cx, "Dimensions", div());
+        }
+        let mut rows = div().flex().flex_col().gap_0p5();
+        let mut shown = 0usize;
+        for name in ["H", "O", "n", "o", "t", "v"] {
+            let (stem, bar) = self.measured_dimensions(name);
+            if stem.is_none() && bar.is_none() {
+                continue;
+            }
+            shown += 1;
+            let fmt = |v: Option<i64>| {
+                v.map(|v| v.to_string()).unwrap_or_else(|| "–".into())
+            };
+            rows = rows.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_xs()
+                    .child(
+                        div()
+                            .w(px(16.0))
+                            .text_sm()
+                            .text_color(t::text())
+                            .child(name),
+                    )
+                    .child(
+                        div()
+                            .text_color(t::text_muted())
+                            .child(format!("stem {}", fmt(stem))),
+                    )
+                    .child(
+                        div()
+                            .text_color(t::text_muted())
+                            .child(format!("bar {}", fmt(bar))),
+                    ),
+            );
+        }
+        if shown == 0 {
+            return self.section(
+                cx,
+                "Dimensions",
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("No reference glyphs with straight stems"),
+            );
+        }
+        self.section(cx, "Dimensions", rows)
+    }
+
     /// Font Info section (grid mode): names and vertical metrics of
     /// the active master, saved to fontinfo.plist. The first slice of
     /// Glyphs' Font Info window; axes and instances come later.
@@ -15286,6 +15385,7 @@ impl Render for Workspace {
             .when(!in_editor, |el| {
                 el.child(self.glyph_info_panel(cx))
                     .child(self.font_info_section(cx))
+                    .child(self.dimensions_section(cx))
                     .child(self.kerning_section(cx))
                     .child(self.features_section(cx))
                     .child(self.layers_section(cx))
@@ -16607,6 +16707,35 @@ mod tests {
             "glyph image reference round-trips"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn measures_reference_stems() {
+        use runebender_core::measure::{self, MeasureKind};
+        use runebender_core::model::workspace::Contour as WContour;
+        // Measured straight from the test font's H, the same path the
+        // Dimensions section walks.
+        let project = Project::load(&default_font_path()).expect("loads");
+        let font = project.active_font();
+        let g = font.font.get_glyph("H").expect("has H");
+        let paths: Vec<runebender_core::path::Path> = g
+            .contours
+            .iter()
+            .map(|c| {
+                runebender_core::path::Path::from_contour(&WContour::from_norad(c))
+            })
+            .collect();
+        let stems: Vec<i64> = measure::glyph_measurements(&paths)
+            .into_iter()
+            .filter(|m| m.kind == MeasureKind::Horizontal)
+            .map(|m| m.length)
+            .collect();
+        assert!(!stems.is_empty(), "H yields horizontal spans");
+        let narrowest = stems.iter().min().copied().unwrap();
+        assert!(
+            (10..400).contains(&narrowest),
+            "stem in a plausible range: {narrowest}"
+        );
     }
 
     #[test]
