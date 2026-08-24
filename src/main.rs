@@ -841,6 +841,20 @@ struct Project {
     ds_doc: Option<norad::designspace::DesignSpaceDocument>,
     /// Instance edits not yet written to the designspace file.
     ds_dirty: bool,
+    /// Sparse "brace" sources: per-glyph intermediate masters living
+    /// in a named layer of a master UFO at their own location
+    /// (designspace sources with a `layer` attribute).
+    brace: Vec<BraceSource>,
+}
+
+/// One sparse intermediate source (a Glyphs brace layer).
+struct BraceSource {
+    /// Index into `masters`: the UFO holding the layer.
+    master: usize,
+    /// The UFO layer name (Glyphs writes "{500}").
+    layer: String,
+    /// Normalized location.
+    location: runebender_core::var_model::Location,
 }
 
 impl Project {
@@ -895,6 +909,7 @@ impl Project {
             instances: Vec::new(),
             ds_doc: None,
             ds_dirty: false,
+            brace: Vec::new(),
         };
         project.compute_compat();
         project
@@ -977,6 +992,7 @@ impl Project {
                 instances: Vec::new(),
                 ds_doc: None,
                 ds_dirty: false,
+                brace: Vec::new(),
             })
         }
     }
@@ -1013,9 +1029,40 @@ impl Project {
                 })
                 .collect();
             let mut master_locations = Vec::new();
+            let mut master_files: Vec<String> = Vec::new();
+            // Sparse sources (a `layer` attribute) are brace layers:
+            // per-glyph intermediates, resolved after the masters.
+            let normalize_loc = |dims: &[norad::designspace::Dimension]| {
+                let mut location = runebender_core::var_model::Location::new();
+                for axis in &axes {
+                    let raw = dims
+                        .iter()
+                        .find(|d| d.name == axis.name)
+                        .and_then(|d| d.xvalue.or(d.uservalue))
+                        .map(|v| v as f64)
+                        .unwrap_or(axis.default);
+                    location.insert(
+                        axis.name.clone(),
+                        runebender_core::var_model::normalize_value(
+                            raw, axis.min, axis.default, axis.max,
+                        ),
+                    );
+                }
+                location
+            };
+            let mut layer_sources: Vec<(String, String, runebender_core::var_model::Location)> =
+                Vec::new();
             for source in &doc.sources {
+                if let Some(layer) = &source.layer {
+                    layer_sources.push((
+                        source.filename.clone(),
+                        layer.clone(),
+                        normalize_loc(&source.location),
+                    ));
+                    continue;
+                }
                 if !seen.insert(source.filename.clone()) {
-                    continue; // per-layer duplicate source entries
+                    continue; // duplicate full-source entries
                 }
                 let model = load_master(&source.filename)?;
                 let is_default = source.location.iter().all(|d| {
@@ -1051,6 +1098,7 @@ impl Project {
                     .unwrap_or_else(|| source.filename.clone());
                 masters.push(model);
                 master_names.push(name.into());
+                master_files.push(source.filename.clone());
             }
             if masters.is_empty() {
                 return Err("designspace has no sources".into());
@@ -1060,6 +1108,18 @@ impl Project {
             let location = axes
                 .iter()
                 .map(|a| (a.name.clone(), 0.0))
+                .collect();
+            let brace: Vec<BraceSource> = layer_sources
+                .into_iter()
+                .filter_map(|(filename, layer, location)| {
+                    let master =
+                        master_files.iter().position(|f| *f == filename)?;
+                    Some(BraceSource {
+                        master,
+                        layer,
+                        location,
+                    })
+                })
                 .collect();
             let mut project = Self {
                 active: default_index,
@@ -1074,6 +1134,7 @@ impl Project {
                 instances: Vec::new(),
                 ds_doc: Some(doc),
                 ds_dirty: false,
+                brace,
             };
             project.refresh_instances_from_doc();
             Ok(project)
@@ -1145,6 +1206,7 @@ impl Project {
                 instances: Vec::new(),
                 ds_doc: None,
                 ds_dirty: false,
+                brace: Vec::new(),
             }
         };
         let mut project = project;
@@ -1310,14 +1372,21 @@ impl Project {
     /// location. None when at the default location, when masters are
     /// point-incompatible, or when there is no model.
     fn interpolated_glyph(&self, glyph_name: &str) -> Option<(BezPath, f64)> {
-        let model = self.model.as_ref()?;
+        let glyph = self.interpolated_norad_glyph(glyph_name)?;
+        let advance = glyph.width;
+        let base = &self.masters[self.active];
+        Some((glyph_path::glyph_to_bezpath(&glyph, &base.font), advance))
+    }
+
+    /// The interpolation at the current location as a norad glyph
+    /// (point structure kept): the working form for the ghost, the
+    /// strip, and for freezing into a brace layer.
+    fn interpolated_norad_glyph(&self, glyph_name: &str) -> Option<norad::Glyph> {
+        self.model.as_ref()?;
         if self.location.values().all(|v| v.abs() < 1e-9) {
             return None;
         }
-        // Flatten [advance, x0, y0, x1, y1, ...] per master.
-        let mut values: Vec<Vec<f64>> = Vec::with_capacity(self.masters.len());
-        for master in &self.masters {
-            let glyph = master.font.get_glyph(glyph_name)?;
+        let flatten = |glyph: &norad::Glyph| {
             let mut v = vec![glyph.width];
             for contour in &glyph.contours {
                 for p in &contour.points {
@@ -1325,13 +1394,44 @@ impl Project {
                     v.push(p.y);
                 }
             }
-            values.push(v);
+            v
+        };
+        // Flatten [advance, x0, y0, x1, y1, ...] per master.
+        let mut values: Vec<Vec<f64>> = Vec::with_capacity(self.masters.len());
+        for master in &self.masters {
+            values.push(flatten(master.font.get_glyph(glyph_name)?));
+        }
+        // Brace layers holding this glyph join the master set: the
+        // model grows their locations, per glyph (Glyphs' intermediate
+        // layers).
+        let mut brace_locations: Vec<runebender_core::var_model::Location> =
+            Vec::new();
+        for b in &self.brace {
+            let Some(glyph) = self
+                .masters
+                .get(b.master)
+                .and_then(|m| m.font.layers.get(&b.layer))
+                .and_then(|l| l.get_glyph(glyph_name))
+            else {
+                continue;
+            };
+            values.push(flatten(glyph));
+            brace_locations.push(b.location.clone());
         }
         let len = values[0].len();
         if values.iter().any(|v| v.len() != len) {
-            return None; // point-incompatible masters
+            return None; // point-incompatible sources
         }
-        let out = model.interpolate(&values, &self.location);
+        let out = if brace_locations.is_empty() {
+            self.model
+                .as_ref()?
+                .interpolate(&values, &self.location)
+        } else {
+            let mut locations = self.master_locations.clone();
+            locations.extend(brace_locations);
+            runebender_core::var_model::VariationModel::new(&locations)
+                .interpolate(&values, &self.location)
+        };
         // Rebuild on the default master's structure.
         let base = &self.masters[self.active];
         let mut glyph = base.font.get_glyph(glyph_name)?.clone();
@@ -1344,7 +1444,53 @@ impl Project {
             }
         }
         glyph.width = advance;
-        Some((glyph_path::glyph_to_bezpath(&glyph, &base.font), advance))
+        Some(glyph)
+    }
+
+    /// The glyph a designspace rule shows at the current preview
+    /// location, if any (bracket layers / shape switches). Rules
+    /// apply when every condition of any condition set holds; an
+    /// empty condition set always holds.
+    fn rule_substitute(&self, glyph_name: &str) -> Option<String> {
+        let doc = self.ds_doc.as_ref()?;
+        // Current location in design coordinates.
+        let design: std::collections::HashMap<&str, f64> = self
+            .axes
+            .iter()
+            .map(|axis| {
+                let normalized =
+                    self.location.get(&axis.name).copied().unwrap_or(0.0);
+                (
+                    axis.name.as_str(),
+                    runebender_core::var_model::denormalize_value(
+                        normalized, axis.min, axis.default, axis.max,
+                    ),
+                )
+            })
+            .collect();
+        for rule in &doc.rules.rules {
+            let applies = rule.condition_sets.is_empty()
+                || rule.condition_sets.iter().any(|set| {
+                    set.conditions.iter().all(|c| {
+                        let Some(&value) = design.get(c.name.as_str()) else {
+                            return false;
+                        };
+                        c.minimum.is_none_or(|min| value >= min as f64 - 1e-6)
+                            && c
+                                .maximum
+                                .is_none_or(|max| value <= max as f64 + 1e-6)
+                    })
+                });
+            if !applies {
+                continue;
+            }
+            for sub in &rule.substitutions {
+                if sub.name.as_str() == glyph_name {
+                    return Some(sub.with.to_string());
+                }
+            }
+        }
+        None
     }
 
     fn active_font(&self) -> &FontModel {
@@ -2187,6 +2333,9 @@ struct GlyphInputs {
     /// Free-text glyph note (UFO glif note element), like Glyphs'
     /// note field; shows as a tooltip in its font view.
     note: gpui::Entity<gpui_component::input::InputState>,
+    /// Shape-switch point: Enter creates the .bold alternate and the
+    /// designspace rule at this axis value (bracket layer).
+    switch_at: gpui::Entity<gpui_component::input::InputState>,
 }
 
 struct MetricInputs {
@@ -4449,7 +4598,69 @@ impl Workspace {
                     )
                 },
             )
-            .child(input_row("Note", &self.glyph_inputs.note));
+            .child(input_row("Note", &self.glyph_inputs.note))
+            // Bracket layers: the shape switch on this glyph, or the
+            // field that creates one at a typed axis value.
+            .child({
+                let switch = self.project.as_ref().and_then(|p| {
+                    p.ds_doc.as_ref()?.rules.rules.iter().find_map(|rule| {
+                        let sub = rule
+                            .substitutions
+                            .iter()
+                            .find(|sub| sub.name.as_ref() == entry.name.as_ref())?;
+                        let cond = rule
+                            .condition_sets
+                            .first()
+                            .and_then(|set| set.conditions.first());
+                        Some((
+                            sub.with.to_string(),
+                            cond.and_then(|c| c.minimum),
+                            cond.map(|c| c.name.clone()),
+                        ))
+                    })
+                });
+                match switch {
+                    Some((with, min, axis)) => div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .text_xs()
+                        .child(div().text_color(t::text_muted()).child(
+                            format!(
+                                "→ {with} at {} ≥ {}",
+                                axis.unwrap_or_else(|| "axis".into()),
+                                min.map(|v| format!("{v:.0}"))
+                                    .unwrap_or_else(|| "?".into()),
+                            ),
+                        ))
+                        .child(
+                            div()
+                                .id("switch-remove")
+                                .px_1()
+                                .cursor_pointer()
+                                .text_color(t::text_muted())
+                                .hover(|el| el.text_color(t::text()))
+                                .child("×")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.command_remove_shape_switch();
+                                    cx.notify();
+                                })),
+                        ),
+                    None => div()
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(t::text_muted())
+                                .child("Switch At (axis value)"),
+                        )
+                        .child(gpui_component::input::Input::new(
+                            &self.glyph_inputs.switch_at,
+                        )),
+                }
+            });
         self.section(cx, "Glyph", panel)
     }
 
@@ -5743,6 +5954,213 @@ impl Workspace {
         }
     }
 
+    /// "+ Intermediate" in the layers block: freeze the current
+    /// interpolation of the open glyph into a brace layer at the
+    /// preview location — a named UFO layer plus a sparse designspace
+    /// source, Glyphs' intermediate layer. Edit it via the swap
+    /// arrows; the interpolation ghost and strip pick it up live.
+    fn command_brace_layer(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(project) = self.project.as_ref() else { return };
+        if project.ds_doc.is_none() {
+            self.status_note =
+                Some("Intermediate layers need a designspace project".into());
+            return;
+        }
+        if project.master_at_location().is_some() {
+            self.status_note = Some(
+                "Move the axes off a master first: the intermediate freezes that location"
+                    .into(),
+            );
+            return;
+        }
+        let name = project.active_font().glyphs[index].name.to_string();
+        // Design coordinates and the "{500}" layer name.
+        let coords: Vec<(String, f64)> = project
+            .axes
+            .iter()
+            .map(|axis| {
+                let normalized =
+                    project.location.get(&axis.name).copied().unwrap_or(0.0);
+                (
+                    axis.name.clone(),
+                    runebender_core::var_model::denormalize_value(
+                        normalized, axis.min, axis.default, axis.max,
+                    )
+                    .round(),
+                )
+            })
+            .collect();
+        let layer_name = format!(
+            "{{{}}}",
+            coords
+                .iter()
+                .map(|(_, v)| format!("{v:.0}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let normalized_location = project.location.clone();
+        let active = project.active;
+        let frozen = project
+            .interpolated_norad_glyph(&name)
+            .or_else(|| project.active_font().font.get_glyph(&name).cloned());
+        let Some(frozen) = frozen else { return };
+        let filename = project.active_font().source_path.file_name()
+            .map(|f| f.to_string_lossy().to_string());
+        let Some(filename) = filename else { return };
+        if let Some(font) = self.font_mut() {
+            if let Ok(layer) = font.font.layers.get_or_create_layer(&layer_name)
+            {
+                let mut copy = norad::Glyph::new(name.as_str());
+                copy.width = frozen.width;
+                copy.contours = frozen.contours.clone();
+                copy.components = frozen.components.clone();
+                copy.anchors = frozen.anchors.clone();
+                layer.insert_glyph(copy);
+                font.dirty = true;
+                font.modified_glyphs.insert(name.clone());
+            }
+        }
+        let Some(project) = self.project.as_mut() else { return };
+        let Some(doc) = project.ds_doc.as_mut() else { return };
+        let already = doc.sources.iter().any(|src| {
+            src.layer.as_deref() == Some(layer_name.as_str())
+                && src.filename == filename
+        });
+        if !already {
+            doc.sources.push(norad::designspace::Source {
+                name: Some(format!("brace {layer_name}")),
+                filename: filename.clone(),
+                layer: Some(layer_name.clone()),
+                location: coords
+                    .iter()
+                    .map(|(axis, value)| norad::designspace::Dimension {
+                        name: axis.clone(),
+                        xvalue: Some(*value as f32),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+            project.brace.push(BraceSource {
+                master: active,
+                layer: layer_name.clone(),
+                location: normalized_location,
+            });
+            project.ds_dirty = true;
+        }
+        self.visible_glyph_layers.insert(layer_name.clone());
+        self.status_note =
+            Some(format!("Intermediate {layer_name} added for {name}").into());
+    }
+
+    /// Add a shape switch (bracket layer): an unencoded `.bold`
+    /// alternate copied into every master, plus a designspace rule
+    /// substituting it from `at` up to the end of the first axis.
+    /// The repo convention (DESIGN.md): design the alternate in the
+    /// Regular master; the copies start red.
+    fn command_add_shape_switch(&mut self, at: f64) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(project) = self.project.as_mut() else { return };
+        if project.ds_doc.is_none() {
+            self.status_note =
+                Some("Shape switches need a designspace project".into());
+            return;
+        }
+        let Some(axis) = project.axes.first().cloned() else { return };
+        if !(axis.min..=axis.max).contains(&at) {
+            self.status_note = Some(
+                format!("Switch point outside {} {}–{}", axis.tag, axis.min, axis.max)
+                    .into(),
+            );
+            return;
+        }
+        let name = project.active_font().glyphs[index].name.to_string();
+        let alt = format!("{name}.bold");
+        let (Ok(sub_name), Ok(sub_with)) =
+            (norad::Name::new(&name), norad::Name::new(&alt))
+        else {
+            return;
+        };
+        for master in project.masters.iter_mut() {
+            if master.name_map.contains_key(&alt) {
+                continue;
+            }
+            let Some(source) = master.font.get_glyph(name.as_str()).cloned()
+            else {
+                continue;
+            };
+            let mut copy = norad::Glyph::new(alt.as_str());
+            copy.width = source.width;
+            copy.contours = source.contours.clone();
+            copy.components = source.components.clone();
+            copy.anchors = source.anchors.clone();
+            // Unencoded, and red: a placeholder awaiting its design
+            // (the repo's lane-2 convention).
+            runebender_core::theme_oklch::set_glyph_mark(&mut copy, Some("red"));
+            master.font.default_layer_mut().insert_glyph(copy);
+            master.dirty = true;
+            master.modified_glyphs.insert(alt.clone());
+            master.refresh_from_font();
+        }
+        let doc = project.ds_doc.as_mut().expect("checked above");
+        doc.rules.processing = norad::designspace::RuleProcessing::Last;
+        let exists = doc.rules.rules.iter().any(|rule| {
+            rule.substitutions
+                .iter()
+                .any(|sub| sub.name.as_str() == name)
+        });
+        if !exists {
+            doc.rules.rules.push(norad::designspace::Rule {
+                name: Some(format!("{name} bold")),
+                condition_sets: vec![norad::designspace::ConditionSet {
+                    conditions: vec![norad::designspace::Condition {
+                        name: axis.name.clone(),
+                        minimum: Some(at as f32),
+                        maximum: Some(axis.max as f32),
+                    }],
+                }],
+                substitutions: vec![norad::designspace::Substitution {
+                    name: sub_name,
+                    with: sub_with,
+                }],
+            });
+        }
+        project.ds_dirty = true;
+        project.compute_compat();
+        self.sidebar_counts = None;
+        self.status_note = Some(
+            format!("{name} switches to {alt} at {} ≥ {at:.0}", axis.tag).into(),
+        );
+    }
+
+    /// Drop the rule that substitutes this glyph (the alternates
+    /// stay; delete them like any glyph).
+    fn command_remove_shape_switch(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(project) = self.project.as_mut() else { return };
+        let Some(name) = project
+            .active_font()
+            .glyphs
+            .get(index)
+            .map(|g| g.name.to_string())
+        else {
+            return;
+        };
+        let Some(doc) = project.ds_doc.as_mut() else { return };
+        let before = doc.rules.rules.len();
+        doc.rules.rules.retain(|rule| {
+            !rule
+                .substitutions
+                .iter()
+                .any(|sub| sub.name.as_str() == name)
+        });
+        if doc.rules.rules.len() != before {
+            project.ds_dirty = true;
+            self.status_note = Some(format!("Shape switch removed for {name}").into());
+        }
+    }
+
     /// Exchange the drawing with a named layer's copy (editor only,
     /// so the swap is undoable like the background swap).
     fn command_swap_layer(&mut self, layer_name: &str) {
@@ -6178,21 +6596,46 @@ impl Workspace {
             }
             body = body.child(
                 div()
-                    .id("glyph-layer-backup")
-                    .mt_1()
-                    .px_2()
-                    .py_0p5()
-                    .rounded_sm()
-                    .text_sm()
-                    .cursor_pointer()
-                    .border_1()
-                    .border_color(t::cell_border())
-                    .text_color(t::text())
-                    .child("+ Backup Layer")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.command_backup_layer();
-                        cx.notify();
-                    })),
+                    .flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id("glyph-layer-backup")
+                            .mt_1()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .text_sm()
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(t::cell_border())
+                            .text_color(t::text())
+                            .child("+ Backup")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.command_backup_layer();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        // A brace layer: freeze the interpolation at
+                        // the preview location as a sparse master.
+                        div()
+                            .id("glyph-layer-brace")
+                            .mt_1()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .text_sm()
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(t::cell_border())
+                            .text_color(t::text())
+                            .child("+ Intermediate")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.command_brace_layer();
+                                cx.notify();
+                            })),
+                    ),
             );
         }
         self.section(cx, "Masters", body)
@@ -14115,6 +14558,13 @@ impl Workspace {
                     return None;
                 }
                 let name = sort.glyph_name()?;
+                // Bracket rules preview: past a shape switch the strip
+                // shows the substitute, like an exported instance.
+                let subbed = self
+                    .project
+                    .as_ref()
+                    .and_then(|p| p.rule_substitute(name));
+                let name: &str = subbed.as_deref().unwrap_or(name);
                 let glyph = *font.name_map.get(name)?;
                 // Off the masters the strip shows the interpolation,
                 // like the canvas ghost (and the Instances rows park
@@ -16276,6 +16726,13 @@ fn main() {
                                         1 => this.apply_glyph_unicode(&text),
                                         2 => this.apply_kern_group(true, &text),
                                         4 => this.apply_glyph_note(&text),
+                                        5 => {
+                                            if let Ok(at) =
+                                                text.trim().parse::<f64>()
+                                            {
+                                                this.command_add_shape_switch(at);
+                                            }
+                                        }
                                         _ => this.apply_kern_group(false, &text),
                                     }
                                     this.refresh_glyph_inputs(true, window, cx);
@@ -16353,11 +16810,13 @@ fn main() {
                         }
                     });
                     let note_input = metric(cx, window);
+                    let switch_input = metric(cx, window);
                     let sub_gn = glyph_sub(cx, window, &name_input, 0);
                     let sub_gu = glyph_sub(cx, window, &unicode_input, 1);
                     let sub_gl = glyph_sub(cx, window, &group_l_input, 2);
                     let sub_gr = glyph_sub(cx, window, &group_r_input, 3);
                     let sub_gnote = glyph_sub(cx, window, &note_input, 4);
+                    let sub_gswitch = glyph_sub(cx, window, &switch_input, 5);
                     let subscription = cx.subscribe_in(&search, window, {
                         let search = search.clone();
                         move |this: &mut Workspace,
@@ -16443,6 +16902,7 @@ fn main() {
                             group_l: group_l_input,
                             group_r: group_r_input,
                             note: note_input,
+                            switch_at: switch_input,
                         },
                         metric_inputs: MetricInputs {
                             width: width_input,
@@ -16494,7 +16954,7 @@ fn main() {
                         _subscriptions: vec![
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_gnote,
-                            sub_comp,
+                            sub_gswitch, sub_comp,
                             sub_sw, sub_sh, sub_anchor, sub_ref,
                             sub_fi_family, sub_fi_style, sub_fi_upm,
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
@@ -16707,6 +17167,92 @@ mod tests {
             "glyph image reference round-trips"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn brace_layer_refines_interpolation() {
+        let mut project = Project::load(&default_font_path()).expect("loads");
+        // Freeze n's Regular outline into a {500} brace layer, then
+        // nudge its first point +40: at wght 500 the interpolation
+        // must hit the brace exactly, not the linear blend.
+        let name = "n";
+        let loc_500 = {
+            let axis = &project.axes[0];
+            let mut l = runebender_core::var_model::Location::new();
+            l.insert(
+                axis.name.clone(),
+                runebender_core::var_model::normalize_value(
+                    500.0, axis.min, axis.default, axis.max,
+                ),
+            );
+            l
+        };
+        let mut frozen = project.masters[0]
+            .font
+            .get_glyph(name)
+            .expect("has n")
+            .clone();
+        let orig = frozen.contours[0].points[0].x;
+        frozen.contours[0].points[0].x = orig + 40.0;
+        project.masters[0]
+            .font
+            .layers
+            .get_or_create_layer("{500}")
+            .unwrap()
+            .insert_glyph(frozen);
+        project.brace.push(BraceSource {
+            master: 0,
+            layer: "{500}".into(),
+            location: loc_500.clone(),
+        });
+        project.location = loc_500;
+        let refined = project
+            .interpolated_norad_glyph(name)
+            .expect("interpolates");
+        assert!(
+            (refined.contours[0].points[0].x - (orig + 40.0)).abs() < 0.6,
+            "brace layer pins the outline at its location: {} vs {}",
+            refined.contours[0].points[0].x,
+            orig + 40.0,
+        );
+    }
+
+    #[test]
+    fn rule_substitute_switches_past_the_condition() {
+        let mut project = Project::load(&default_font_path()).expect("loads");
+        let axis = project.axes[0].clone();
+        let doc = project.ds_doc.as_mut().expect("doc kept");
+        doc.rules.rules.push(norad::designspace::Rule {
+            name: Some("a bold".into()),
+            condition_sets: vec![norad::designspace::ConditionSet {
+                conditions: vec![norad::designspace::Condition {
+                    name: axis.name.clone(),
+                    minimum: Some(500.0),
+                    maximum: Some(axis.max as f32),
+                }],
+            }],
+            substitutions: vec![norad::designspace::Substitution {
+                name: norad::Name::new("a").unwrap(),
+                with: norad::Name::new("a.bold").unwrap(),
+            }],
+        });
+        let at = |project: &mut Project, design: f64| {
+            let axis = &project.axes[0];
+            let normalized = runebender_core::var_model::normalize_value(
+                design, axis.min, axis.default, axis.max,
+            );
+            let name = axis.name.clone();
+            project.location.insert(name, normalized);
+        };
+        at(&mut project, 450.0);
+        assert_eq!(project.rule_substitute("a"), None, "below the switch");
+        at(&mut project, 600.0);
+        assert_eq!(
+            project.rule_substitute("a").as_deref(),
+            Some("a.bold"),
+            "past the switch"
+        );
+        assert_eq!(project.rule_substitute("b"), None, "other glyphs untouched");
     }
 
     #[test]
