@@ -829,6 +829,9 @@ struct Project {
     /// project was opened from, or the single UFO. `None` until the
     /// project has a home on disk (File > New before Save As).
     export_source: Option<PathBuf>,
+    /// Named designspace instances: style name and normalized
+    /// location, for the Instances rows under the axis sliders.
+    instances: Vec<(SharedString, runebender_core::var_model::Location)>,
 }
 
 impl Project {
@@ -880,6 +883,7 @@ impl Project {
             location: runebender_core::var_model::Location::new(),
             compat: std::collections::HashMap::new(),
             export_source: None,
+            instances: Vec::new(),
         };
         project.compute_compat();
         project
@@ -959,6 +963,7 @@ impl Project {
                 location: runebender_core::var_model::Location::new(),
                 compat: std::collections::HashMap::new(),
                 export_source: None,
+                instances: Vec::new(),
             })
         }
     }
@@ -1043,6 +1048,38 @@ impl Project {
                 .iter()
                 .map(|a| (a.name.clone(), 0.0))
                 .collect();
+            // Named instances, normalized like the master locations,
+            // for the Instances rows under the axis sliders.
+            let instances: Vec<(SharedString, runebender_core::var_model::Location)> =
+                doc.instances
+                    .iter()
+                    .map(|inst| {
+                        let name: SharedString = inst
+                            .stylename
+                            .clone()
+                            .or_else(|| inst.name.clone())
+                            .unwrap_or_else(|| "Instance".into())
+                            .into();
+                        let mut location =
+                            runebender_core::var_model::Location::new();
+                        for axis in &axes {
+                            let raw = inst
+                                .location
+                                .iter()
+                                .find(|d| d.name == axis.name)
+                                .and_then(|d| d.xvalue.or(d.uservalue))
+                                .map(|v| v as f64)
+                                .unwrap_or(axis.default);
+                            location.insert(
+                                axis.name.clone(),
+                                runebender_core::var_model::normalize_value(
+                                    raw, axis.min, axis.default, axis.max,
+                                ),
+                            );
+                        }
+                        (name, location)
+                    })
+                    .collect();
             Ok(Self {
                 active: default_index,
                 masters,
@@ -1053,6 +1090,7 @@ impl Project {
                 location,
                 compat: std::collections::HashMap::new(),
                 export_source: None,
+                instances,
             })
         }
     }
@@ -1119,6 +1157,7 @@ impl Project {
                 location: runebender_core::var_model::Location::new(),
                 compat: std::collections::HashMap::new(),
                 export_source: None,
+                instances: Vec::new(),
             }
         };
         let mut project = project;
@@ -11422,7 +11461,92 @@ impl Workspace {
                     ),
             );
         }
-        Some(self.section(cx, "Axes", rows))
+        let mut body = div().flex().flex_col().gap_2().child(rows);
+        if !project.instances.is_empty() {
+            // Named designspace instances: one row each; clicking
+            // parks the sliders and the preview on that instance.
+            let mut list = div().flex().flex_col();
+            let here = &project.location;
+            for (i, (name, location)) in project.instances.iter().enumerate() {
+                let at_instance = project.axes.iter().all(|a| {
+                    let want = location.get(&a.name).copied().unwrap_or(0.0);
+                    let got = here.get(&a.name).copied().unwrap_or(0.0);
+                    (want - got).abs() < 1e-6
+                });
+                let target = location.clone();
+                list = list.child(
+                    div()
+                        .id(("instance-row", i))
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_1()
+                        .py_0p5()
+                        .text_sm()
+                        .cursor_pointer()
+                        .text_color(if at_instance {
+                            t::accent()
+                        } else {
+                            t::text()
+                        })
+                        .hover(|el| el.bg(t::cell_selected_bg()))
+                        .child(name.clone())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.go_to_location(&target, window, cx);
+                        })),
+                );
+            }
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("Instances"),
+            );
+            body = body.child(list);
+        }
+        Some(self.section(cx, "Axes", body))
+    }
+
+    /// Park the preview (and the sliders) on a normalized location.
+    /// Landing exactly on a master switches to it, the same contract
+    /// as dragging a slider there.
+    fn go_to_location(
+        &mut self,
+        target: &runebender_core::var_model::Location,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let landed = {
+            let Some(project) = self.project.as_mut() else { return };
+            project.location = target.clone();
+            project.master_at_location()
+        };
+        // Sliders show design coordinates; the location is normalized.
+        let slider_values: Vec<(gpui::Entity<gpui_component::slider::SliderState>, f32)> =
+            {
+                let Some(project) = self.project.as_ref() else { return };
+                self.axis_sliders
+                    .iter()
+                    .filter_map(|(axis_index, slider)| {
+                        let axis = project.axes.get(*axis_index)?;
+                        let normalized =
+                            target.get(&axis.name).copied().unwrap_or(0.0);
+                        let raw = runebender_core::var_model::denormalize_value(
+                            normalized, axis.min, axis.default, axis.max,
+                        );
+                        Some((slider.clone(), raw as f32))
+                    })
+                    .collect()
+            };
+        for (slider, value) in slider_values {
+            slider.update(cx, |st, cx| {
+                st.set_value(value, window, cx);
+            });
+        }
+        if let Some(master) = landed {
+            self.switch_master(master);
+        }
+        cx.notify();
     }
 
     /// Bottom bar in editor mode: Width / LSB / RSB fields.
@@ -14091,6 +14215,16 @@ mod tests {
         assert!(project.master_names.iter().any(|n| n.contains("Bold")));
         // Active master is the default location (Regular).
         assert!(!project.master_names[project.active].contains("Bold"));
+        // Named instances come along, normalized: the extremes sit on
+        // the axis ends.
+        assert_eq!(project.instances.len(), 4, "four named instances");
+        let bold = project
+            .instances
+            .iter()
+            .find(|(name, _)| name.as_ref() == "Bold")
+            .expect("a Bold instance");
+        let weight = bold.1.values().next().copied().unwrap_or(0.0);
+        assert!((weight - 1.0).abs() < 1e-6, "Bold sits at the axis max");
     }
 
     #[test]
