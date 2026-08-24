@@ -71,7 +71,10 @@ Deliberate non-goals are in the last section.
       snap, hover highlight, grab knobs, add and delete from the
       context menu; two hues tell the scopes apart). Locking and
       angled-guide editing come later
-- [ ] Images placed in a layer as a tracing template
+- [x] Images as tracing templates: Glyph > Place Image copies the
+      picture into the UFO images store and draws it grayscale
+      under the drawing (Show Background toggles; Remove Image
+      unlinks). Dragging the image and shear come later
 - [x] Glyph notes (Note field in the Glyph panel, UFO glif note)
 
 ## Spacing and kerning
