@@ -1573,6 +1573,8 @@ struct EditorState {
     selected_component: Option<usize>,
     /// Sidebearing edge under the cursor (false = left, true = right).
     sidebearing_hover: Option<bool>,
+    /// Global guide under the cursor (fontinfo guidelines index).
+    guide_hover: Option<usize>,
     /// Mouse position in window coords, for pen previews.
     pointer: Option<Point<gpui::Pixels>>,
     viewport: ViewPort,
@@ -1612,6 +1614,7 @@ impl EditorState {
             last_transform: None,
             selected_component: None,
             sidebearing_hover: None,
+            guide_hover: None,
             pointer: None,
             viewport: ViewPort::new(),
             initialized: false,
@@ -6207,7 +6210,12 @@ impl Workspace {
         let x_height = font.x_height;
         let cap_height = font.cap_height;
         // Global guides (fontinfo guidelines), drawn across the whole
-        // canvas under the outline.
+        // canvas under the outline. The hot one (hovered or mid-drag)
+        // draws brighter, with its knob grown.
+        let guide_hot: Option<usize> = match &self.editor.drag {
+            Some(Drag::Guide { index }) => Some(*index),
+            _ => self.editor.guide_hover,
+        };
         let guides: Vec<norad::Line> = font
             .font
             .font_info
@@ -6644,7 +6652,21 @@ impl Workspace {
                                 for y in ys {
                                     hline(y, window);
                                 }
-                                for line in &guides {
+                                for (gi, line) in guides.iter().enumerate() {
+                                    let hot = guide_hot == Some(gi);
+                                    let color = if hot {
+                                        let mut c = t::guide_line();
+                                        c.a = 1.0;
+                                        c
+                                    } else {
+                                        t::guide_line()
+                                    };
+                                    let thick = if hot { 2.0 } else { 1.0 };
+                                    // The knob sits on the guide's
+                                    // anchor: its stored point, or the
+                                    // origin axis for plain H/V lines
+                                    // (UFO stores only the offset).
+                                    let knob;
                                     match *line {
                                         norad::Line::Horizontal(y) => {
                                             let p = to_screen(0.0, y);
@@ -6653,11 +6675,12 @@ impl Workspace {
                                                     gpui::point(bounds.origin.x, p.y),
                                                     gpui::point(
                                                         bounds.origin.x + bounds.size.width,
-                                                        p.y + px(1.0),
+                                                        p.y + px(thick),
                                                     ),
                                                 ),
-                                                t::guide_line(),
+                                                color,
                                             ));
+                                            knob = p;
                                         }
                                         norad::Line::Vertical(x) => {
                                             let p = to_screen(x, 0.0);
@@ -6665,12 +6688,13 @@ impl Workspace {
                                                 Bounds::from_corners(
                                                     gpui::point(p.x, bounds.origin.y),
                                                     gpui::point(
-                                                        p.x + px(1.0),
+                                                        p.x + px(thick),
                                                         bounds.origin.y + bounds.size.height,
                                                     ),
                                                 ),
-                                                t::guide_line(),
+                                                color,
                                             ));
+                                            knob = p;
                                         }
                                         norad::Line::Angle { x, y, degrees } => {
                                             // A segment far longer than
@@ -6681,14 +6705,35 @@ impl Workspace {
                                             const R: f64 = 1.0e5;
                                             let a = to_screen(x - R * cos, y - R * sin);
                                             let b = to_screen(x + R * cos, y + R * sin);
-                                            let mut pb = PathBuilder::stroke(px(1.0));
+                                            let mut pb =
+                                                PathBuilder::stroke(px(thick));
                                             pb.move_to(a);
                                             pb.line_to(b);
                                             if let Ok(path) = pb.build() {
-                                                window
-                                                    .paint_path(path, t::guide_line());
+                                                window.paint_path(path, color);
                                             }
+                                            knob = to_screen(x, y);
                                         }
+                                    }
+                                    // The grab knob, Glyphs-style.
+                                    let r = if hot { 5.0 } else { 4.0 };
+                                    let circle = {
+                                        use kurbo::Shape as _;
+                                        kurbo::Circle::new(
+                                            (
+                                                f32::from(knob.x) as f64,
+                                                f32::from(knob.y) as f64,
+                                            ),
+                                            r,
+                                        )
+                                        .to_path(0.25)
+                                    };
+                                    if let Some(path) = build_fill_path(
+                                        &circle,
+                                        Affine::IDENTITY,
+                                        gpui::point(px(0.0), px(0.0)),
+                                    ) {
+                                        window.paint_path(path, color);
                                     }
                                 }
                                 for (right, x) in [(false, 0.0), (true, advance)] {
@@ -9178,6 +9223,13 @@ impl Workspace {
             };
             if self.editor.sidebearing_hover != edge {
                 self.editor.sidebearing_hover = edge;
+                changed = true;
+            }
+            // Guides light up under the cursor so their knob reads
+            // as grabbable before anything is clicked.
+            let guide = self.guide_hit(dx, dy, tolerance);
+            if self.editor.guide_hover != guide {
+                self.editor.guide_hover = guide;
                 changed = true;
             }
         }
