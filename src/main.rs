@@ -1953,6 +1953,9 @@ struct GlyphInputs {
     unicode: gpui::Entity<gpui_component::input::InputState>,
     group_l: gpui::Entity<gpui_component::input::InputState>,
     group_r: gpui::Entity<gpui_component::input::InputState>,
+    /// Free-text glyph note (UFO glif note element), like Glyphs'
+    /// note field; shows as a tooltip in its font view.
+    note: gpui::Entity<gpui_component::input::InputState>,
 }
 
 struct MetricInputs {
@@ -4180,7 +4183,8 @@ impl Workspace {
                 &self.glyph_inputs.group_l,
                 &self.glyph_inputs.group_r,
             ))
-            .child(input_row("Unicode", &self.glyph_inputs.unicode));
+            .child(input_row("Unicode", &self.glyph_inputs.unicode))
+            .child(input_row("Note", &self.glyph_inputs.note));
         self.section(cx, "Glyph", panel)
     }
 
@@ -9669,6 +9673,26 @@ impl Workspace {
         }
     }
 
+    /// Set (or clear) the selected glyph's note in the active master.
+    fn apply_glyph_note(&mut self, text: &str) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        let text = text.trim();
+        if let Some(font) = self.font_mut()
+            && let Some(glyph) = font.font.get_glyph_mut(name.as_str())
+        {
+            let new = (!text.is_empty()).then(|| text.to_string());
+            if glyph.note != new {
+                glyph.note = new;
+                font.dirty = true;
+                font.modified_glyphs.insert(name);
+            }
+        }
+    }
+
     /// Rename the selected glyph in every master, updating components,
     /// groups, kerning, and the open text session.
     fn apply_glyph_rename(&mut self, new_name: &str) {
@@ -9836,14 +9860,21 @@ impl Workspace {
                 }
             });
         };
+        let note = font
+            .font
+            .get_glyph(name.as_str())
+            .and_then(|g| g.note.clone())
+            .unwrap_or_default();
         let name_input = self.glyph_inputs.name.clone();
         let unicode_input = self.glyph_inputs.unicode.clone();
         let l_input = self.glyph_inputs.group_l.clone();
         let r_input = self.glyph_inputs.group_r.clone();
+        let note_input = self.glyph_inputs.note.clone();
         set(&name_input, name, window, cx);
         set(&unicode_input, unicode, window, cx);
         set(&l_input, group_l, window, cx);
         set(&r_input, group_r, window, cx);
+        set(&note_input, note, window, cx);
     }
 
     /// Compile-check a features.fea against the active master's
@@ -14853,6 +14884,7 @@ fn main() {
                                         0 => this.apply_glyph_rename(&text),
                                         1 => this.apply_glyph_unicode(&text),
                                         2 => this.apply_kern_group(true, &text),
+                                        4 => this.apply_glyph_note(&text),
                                         _ => this.apply_kern_group(false, &text),
                                     }
                                     this.refresh_glyph_inputs(true, window, cx);
@@ -14929,10 +14961,12 @@ fn main() {
                             }
                         }
                     });
+                    let note_input = metric(cx, window);
                     let sub_gn = glyph_sub(cx, window, &name_input, 0);
                     let sub_gu = glyph_sub(cx, window, &unicode_input, 1);
                     let sub_gl = glyph_sub(cx, window, &group_l_input, 2);
                     let sub_gr = glyph_sub(cx, window, &group_r_input, 3);
+                    let sub_gnote = glyph_sub(cx, window, &note_input, 4);
                     let subscription = cx.subscribe_in(&search, window, {
                         let search = search.clone();
                         move |this: &mut Workspace,
@@ -15016,6 +15050,7 @@ fn main() {
                             unicode: unicode_input,
                             group_l: group_l_input,
                             group_r: group_r_input,
+                            note: note_input,
                         },
                         metric_inputs: MetricInputs {
                             width: width_input,
@@ -15055,7 +15090,8 @@ fn main() {
                         last_save: Arc::new(Mutex::new(web_time::Instant::now())),
                         _subscriptions: vec![
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
-                            sub_gn, sub_gu, sub_gl, sub_gr, sub_comp,
+                            sub_gn, sub_gu, sub_gl, sub_gr, sub_gnote,
+                            sub_comp,
                             sub_sw, sub_sh, sub_anchor, sub_ref,
                             sub_fi_family, sub_fi_style, sub_fi_upm,
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
