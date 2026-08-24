@@ -1409,6 +1409,10 @@ enum Drag {
         applied: f64,
         start_width: f64,
     },
+    /// Dragging a global guide: index into the active master's
+    /// fontinfo guidelines. Guides move live; the master is marked
+    /// dirty as they move.
+    Guide { index: usize },
     /// Dragging the selected component.
     Component {
         index: usize,
@@ -1456,6 +1460,8 @@ struct ContextMenu {
     component: Option<(usize, bool)>,
     has_components: bool,
     adding_component: bool,
+    /// Global guide under the click (fontinfo guidelines index).
+    guide: Option<usize>,
 }
 
 struct EditorState {
@@ -5622,6 +5628,27 @@ impl Workspace {
                 cx,
             ));
         }
+        if menu.guide.is_some() {
+            list = list.child(item(
+                ("cm", 10),
+                "Delete Guide".into(),
+                "guide-delete",
+                cx,
+            ));
+        } else {
+            list = list.child(item(
+                ("cm", 10),
+                "Add Guide Here".into(),
+                "guide-add-h",
+                cx,
+            ));
+            list = list.child(item(
+                ("cm", 11),
+                "Add Vertical Guide Here".into(),
+                "guide-add-v",
+                cx,
+            ));
+        }
         Some(
             div()
                 .id("context-menu")
@@ -5788,6 +5815,15 @@ impl Workspace {
         let upm = font.units_per_em;
         let x_height = font.x_height;
         let cap_height = font.cap_height;
+        // Global guides (fontinfo guidelines), drawn across the whole
+        // canvas under the outline.
+        let guides: Vec<norad::Line> = font
+            .font
+            .font_info
+            .guidelines
+            .as_ref()
+            .map(|gs| gs.iter().map(|g| g.line).collect())
+            .unwrap_or_default();
         // The metric box runs to the upm when that is higher than the
         // ascender, so an icon font's full em still reads as its space
         // (web `glyph_metric_bounds`).
@@ -6202,6 +6238,53 @@ impl Workspace {
                                 ys.dedup_by(|a, b| (*a - *b).abs() < 0.001);
                                 for y in ys {
                                     hline(y, window);
+                                }
+                                for line in &guides {
+                                    match *line {
+                                        norad::Line::Horizontal(y) => {
+                                            let p = to_screen(0.0, y);
+                                            window.paint_quad(gpui::fill(
+                                                Bounds::from_corners(
+                                                    gpui::point(bounds.origin.x, p.y),
+                                                    gpui::point(
+                                                        bounds.origin.x + bounds.size.width,
+                                                        p.y + px(1.0),
+                                                    ),
+                                                ),
+                                                t::guide_line(),
+                                            ));
+                                        }
+                                        norad::Line::Vertical(x) => {
+                                            let p = to_screen(x, 0.0);
+                                            window.paint_quad(gpui::fill(
+                                                Bounds::from_corners(
+                                                    gpui::point(p.x, bounds.origin.y),
+                                                    gpui::point(
+                                                        p.x + px(1.0),
+                                                        bounds.origin.y + bounds.size.height,
+                                                    ),
+                                                ),
+                                                t::guide_line(),
+                                            ));
+                                        }
+                                        norad::Line::Angle { x, y, degrees } => {
+                                            // A segment far longer than
+                                            // any canvas; the editor
+                                            // clips to its bounds.
+                                            let (sin, cos) =
+                                                degrees.to_radians().sin_cos();
+                                            const R: f64 = 1.0e5;
+                                            let a = to_screen(x - R * cos, y - R * sin);
+                                            let b = to_screen(x + R * cos, y + R * sin);
+                                            let mut pb = PathBuilder::stroke(px(1.0));
+                                            pb.move_to(a);
+                                            pb.line_to(b);
+                                            if let Ok(path) = pb.build() {
+                                                window
+                                                    .paint_path(path, t::guide_line());
+                                            }
+                                        }
+                                    }
                                 }
                                 for (right, x) in [(false, 0.0), (true, advance)] {
                                     let hovered = sidebearing_hover == Some(right);
@@ -7802,6 +7885,7 @@ impl Workspace {
             component,
             has_components,
             adding_component: false,
+            guide: self.guide_hit(dx, dy, tolerance),
         });
     }
 
@@ -7810,6 +7894,34 @@ impl Workspace {
         let Some(menu) = self.context_menu.take() else { return };
         let Mode::Editor(index) = self.mode else { return };
         match action {
+            "guide-delete" => {
+                if let Some(gi) = menu.guide {
+                    if let Some(f) = self.font_mut() {
+                        if let Some(gs) = f.font.font_info.guidelines.as_mut() {
+                            if gi < gs.len() {
+                                gs.remove(gi);
+                                f.dirty = true;
+                            }
+                        }
+                    }
+                }
+            }
+            "guide-add-h" | "guide-add-v" => {
+                let (dx, dy) = menu.design;
+                let line = if action == "guide-add-v" {
+                    norad::Line::Vertical(dx.round())
+                } else {
+                    norad::Line::Horizontal(dy.round())
+                };
+                if let Some(f) = self.font_mut() {
+                    f.font
+                        .font_info
+                        .guidelines
+                        .get_or_insert_with(Vec::new)
+                        .push(norad::Guideline::new(line, None, None, None));
+                    f.dirty = true;
+                }
+            }
             "lock-component" | "unlock-component" => {
                 if let Some((ci, _)) = menu.component {
                     self.toggle_component_alignment(index, ci);
@@ -8297,6 +8409,16 @@ impl Workspace {
                     });
                     return;
                 }
+                // Guides underlie everything: a guide drag starts
+                // only when no point, segment, or component claimed
+                // the click.
+                if let Some(gi) = self.guide_hit(dx, dy, tolerance) {
+                    self.editor.selected_component = None;
+                    self.editor.selected.clear();
+                    self.editor.selected_anchors.clear();
+                    self.editor.drag = Some(Drag::Guide { index: gi });
+                    return;
+                }
                 self.editor.selected_component = None;
                 if !shift {
                     self.editor.selected.clear();
@@ -8316,6 +8438,32 @@ impl Workspace {
                 });
             }
         }
+    }
+
+    /// The nearest global guide within `tolerance` design units of
+    /// (dx, dy): an index into the active master's fontinfo
+    /// guidelines.
+    fn guide_hit(&self, dx: f64, dy: f64, tolerance: f64) -> Option<usize> {
+        let font = self.font()?;
+        let guides = font.font.font_info.guidelines.as_ref()?;
+        guides
+            .iter()
+            .enumerate()
+            .map(|(i, g)| {
+                let dist = match g.line {
+                    norad::Line::Vertical(x) => (dx - x).abs(),
+                    norad::Line::Horizontal(y) => (dy - y).abs(),
+                    norad::Line::Angle { x, y, degrees } => {
+                        // Distance to the infinite line through (x, y).
+                        let (sin, cos) = degrees.to_radians().sin_cos();
+                        ((dy - y) * cos - (dx - x) * sin).abs()
+                    }
+                };
+                (dist, i)
+            })
+            .filter(|(dist, _)| *dist <= tolerance)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, i)| i)
     }
 
     /// Every selected anchor's index and current position, for drags
@@ -8388,6 +8536,43 @@ impl Workspace {
                     self.sync_sort_offset();
                 }
                 changed
+            }
+            Some(Drag::Guide { index: gi }) => {
+                let gi = *gi;
+                self.font_mut().is_some_and(|f| {
+                    let Some(guides) = f.font.font_info.guidelines.as_mut()
+                    else {
+                        return false;
+                    };
+                    let Some(guide) = guides.get_mut(gi) else {
+                        return false;
+                    };
+                    let moved = match &mut guide.line {
+                        norad::Line::Vertical(x) => {
+                            let nx = dx.round();
+                            let changed = *x != nx;
+                            *x = nx;
+                            changed
+                        }
+                        norad::Line::Horizontal(y) => {
+                            let ny = dy.round();
+                            let changed = *y != ny;
+                            *y = ny;
+                            changed
+                        }
+                        norad::Line::Angle { x, y, .. } => {
+                            let (nx, ny) = (dx.round(), dy.round());
+                            let changed = *x != nx || *y != ny;
+                            *x = nx;
+                            *y = ny;
+                            changed
+                        }
+                    };
+                    if moved {
+                        f.dirty = true;
+                    }
+                    moved
+                })
             }
             Some(Drag::Sidebearing {
                 right,

@@ -296,6 +296,13 @@ pub fn text_cursor() -> Rgba {
 pub fn metric_quiet() -> Rgba {
     c(theme().role("metricQuiet"))
 }
+/// Global guides from fontinfo: the status yellow, thinned so the
+/// metric lines stay the louder of the two.
+pub fn guide_line() -> Rgba {
+    let mut color = status_yellow();
+    color.a = 0.75;
+    color
+}
 /// The sort being manually kerned.
 pub fn kern_active() -> Rgba {
     c(theme().role("kernActive"))
