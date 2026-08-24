@@ -1806,6 +1806,8 @@ struct Workspace {
     metric_inputs: MetricInputs,
     font_info_inputs: FontInfoInputs,
     kern_inputs: KernInputs,
+    /// Slant angle field in the Transformations section (degrees).
+    slant_input: gpui::Entity<gpui_component::input::InputState>,
     glyph_inputs: GlyphInputs,
     context_menu: Option<ContextMenu>,
     /// The Selection panel's 9-point reference for numeric move and
@@ -5234,6 +5236,24 @@ impl Workspace {
                                 cx.notify();
                             },
                         ))),
+                )
+                // Slanter: shear the selection (or the whole glyph)
+                // by an angle typed in degrees. Enter applies;
+                // positive leans right, the italic convention.
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(t::text_muted())
+                                .child("Slant"),
+                        )
+                        .child(div().w(px(80.0)).child(
+                            gpui_component::input::Input::new(&self.slant_input),
+                        )),
                 ),
         )
     }
@@ -13827,6 +13847,42 @@ fn main() {
                     let sub_kern_first = kern_commit(cx, window, &kern_first);
                     let sub_kern_second = kern_commit(cx, window, &kern_second);
                     let sub_kern_value = kern_commit(cx, window, &kern_value);
+                    let slant_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("Angle°")
+                    });
+                    let sub_slant = cx.subscribe_in(&slant_input, window, {
+                        let state = slant_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let Ok(angle) = state
+                                    .read(cx)
+                                    .value()
+                                    .trim()
+                                    .parse::<f64>()
+                                else {
+                                    return;
+                                };
+                                if angle == 0.0 || angle.abs() >= 89.0 {
+                                    return;
+                                }
+                                // Positive leans right, the italic
+                                // convention (Glyphs' Slant filter).
+                                this.apply_transform(Affine::skew(
+                                    angle.to_radians().tan(),
+                                    0.0,
+                                ));
+                                cx.notify();
+                            }
+                        }
+                    });
                     let metric_sub = |cx: &mut Context<Workspace>,
                                       window: &mut Window,
                                       state: &gpui::Entity<gpui_component::input::InputState>,
@@ -14132,6 +14188,7 @@ fn main() {
                             second: kern_second,
                             value: kern_value,
                         },
+                        slant_input,
                         axis_sliders: Vec::new(),
                         clipboard: Vec::new(),
                         #[cfg(target_family = "wasm")]
@@ -14146,7 +14203,7 @@ fn main() {
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
                             sub_fi_xh, sub_fi_ch,
                             sub_kern_filter, sub_kern_first,
-                            sub_kern_second, sub_kern_value,
+                            sub_kern_second, sub_kern_value, sub_slant,
                         ],
                     };
                     workspace.rebuild_text_models();
