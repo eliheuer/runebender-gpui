@@ -1561,6 +1561,89 @@ fn offset_glyph_contours(glyph: &mut norad::Glyph, delta: f64) -> bool {
     true
 }
 
+/// Set curve handles to a fraction of their maximum: 100% puts each
+/// handle at the intersection of the segment's end tangents (the
+/// longest the curve can be without a kink), Glyphs' Fit Curve
+/// scale. Applies to segments with a selected point, or the whole
+/// glyph when the selection is empty. Tangent directions are kept;
+/// only lengths change. Returns true if anything moved.
+fn fit_curve_handles(
+    glyph: &mut norad::Glyph,
+    selected: &std::collections::HashSet<(usize, usize)>,
+    fraction: f64,
+) -> bool {
+    use kurbo::{Point, Vec2};
+    if !(0.01..=1.5).contains(&fraction) {
+        return false;
+    }
+    let all = selected.is_empty();
+    let mut changed = false;
+    for (ci, contour) in glyph.contours.iter_mut().enumerate() {
+        let pts = &mut contour.points;
+        let n = pts.len();
+        if n < 4 {
+            continue;
+        }
+        // Walk cubic segments: offcurve, offcurve, curve on-point,
+        // with the previous on-point before them.
+        for i in 0..n {
+            if pts[i].typ != norad::PointType::Curve {
+                continue;
+            }
+            let c2i = (i + n - 1) % n;
+            let c1i = (i + n - 2) % n;
+            let p0i = (i + n - 3) % n;
+            if pts[c1i].typ != norad::PointType::OffCurve
+                || pts[c2i].typ != norad::PointType::OffCurve
+                || pts[p0i].typ == norad::PointType::OffCurve
+            {
+                continue;
+            }
+            let in_scope = all
+                || [p0i, c1i, c2i, i]
+                    .iter()
+                    .any(|&k| selected.contains(&(ci, k)));
+            if !in_scope {
+                continue;
+            }
+            let p0 = Point::new(pts[p0i].x, pts[p0i].y);
+            let c1 = Point::new(pts[c1i].x, pts[c1i].y);
+            let c2 = Point::new(pts[c2i].x, pts[c2i].y);
+            let p3 = Point::new(pts[i].x, pts[i].y);
+            let d0 = c1 - p0;
+            let d3 = c2 - p3;
+            if d0.hypot() < 1e-9 || d3.hypot() < 1e-9 {
+                continue;
+            }
+            let (d0, d3) = (d0 / d0.hypot(), d3 / d3.hypot());
+            // Ray intersection p0 + s·d0 = p3 + u·d3.
+            let cross = |a: Vec2, b: Vec2| a.x * b.y - a.y * b.x;
+            let denom = cross(d0, d3);
+            if denom.abs() < 1e-9 {
+                continue; // parallel tangents: no finite maximum
+            }
+            let w = p3 - p0;
+            let s_max = cross(w, d3) / denom;
+            let u_max = cross(w, d0) / denom;
+            if s_max <= 0.0 || u_max <= 0.0 {
+                continue; // tangents meet behind the points
+            }
+            let nc1 = p0 + d0 * (s_max * fraction);
+            let nc2 = p3 + d3 * (u_max * fraction);
+            let write = |pt: &mut norad::ContourPoint, p: Point| {
+                let (nx, ny) = (p.x.round(), p.y.round());
+                let moved = pt.x != nx || pt.y != ny;
+                pt.x = nx;
+                pt.y = ny;
+                moved
+            };
+            changed |= write(&mut pts[c1i], nc1);
+            changed |= write(&mut pts[c2i], nc2);
+        }
+    }
+    changed
+}
+
 // ============================================================================
 // EDITOR VIEWPORT
 // ============================================================================
@@ -1975,6 +2058,8 @@ struct Workspace {
     stroke_input: gpui::Entity<gpui_component::input::InputState>,
     /// Offset field: bolder (positive) or lighter (negative) units.
     offset_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Fit Curve percentage field in the Curves section.
+    fit_input: gpui::Entity<gpui_component::input::InputState>,
     /// The Instances editor field under the axis sliders: Enter
     /// renames the instance at the preview location, or adds one.
     instance_name_input: gpui::Entity<gpui_component::input::InputState>,
@@ -5755,6 +5840,24 @@ impl Workspace {
                 cx,
                 |this| this.curve_continuity = !this.curve_continuity,
             ));
+        // Fit Curve: type a percentage, Enter sets the selected
+        // segments' handles to that fraction of their maximum (100 =
+        // handles at the tangent intersection), Glyphs' scale.
+        let body = div().flex().flex_col().gap_2().child(body).child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(t::text_muted())
+                        .child("Fit Curve"),
+                )
+                .child(div().w(px(64.0)).child(
+                    gpui_component::input::Input::new(&self.fit_input),
+                )),
+        );
         self.section(cx, "Curves", body)
     }
 
@@ -12413,6 +12516,25 @@ impl Workspace {
         }
     }
 
+    /// Fit Curve: set selected segments' handles to a percentage of
+    /// their tangent-intersection maximum.
+    fn command_fit_curve(&mut self, fraction: f64) {
+        let Mode::Editor(index) = self.mode else { return };
+        self.push_undo_snapshot(index);
+        let selected = self.editor.selected.clone();
+        let changed = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    fit_curve_handles(g, &selected, fraction)
+                })
+            })
+            .unwrap_or(false);
+        if !changed {
+            self.editor.undo.pop();
+        }
+    }
+
     fn command_boolean(&mut self, op: linesweeper::BinaryOp) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -15520,6 +15642,34 @@ fn main() {
                             }
                         }
                     });
+                    let fit_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("%")
+                    });
+                    let sub_fit = cx.subscribe_in(&fit_input, window, {
+                        let state = fit_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                if let Ok(pct) = state
+                                    .read(cx)
+                                    .value()
+                                    .trim()
+                                    .trim_end_matches('%')
+                                    .parse::<f64>()
+                                {
+                                    this.command_fit_curve(pct / 100.0);
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    });
                     let instance_name_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Instance name")
@@ -15914,6 +16064,7 @@ fn main() {
                         slant_input,
                         stroke_input,
                         offset_input,
+                        fit_input,
                         instance_name_input,
                         features_input,
                         features_edited: false,
@@ -15935,7 +16086,7 @@ fn main() {
                             sub_kern_filter, sub_kern_first,
                             sub_kern_second, sub_kern_value, sub_slant,
                             sub_features, sub_instance_name, sub_stroke,
-                            sub_offset,
+                            sub_offset, sub_fit,
                         ],
                     };
                     workspace.rebuild_text_models();
@@ -16138,6 +16289,32 @@ mod tests {
             "glyph image reference round-trips"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fit_curve_sets_handle_fractions() {
+        use norad::{Contour, ContourPoint, PointType};
+        // A quarter arc: on-point (0,0) tangent up-ish, on-point
+        // (100,100) tangent right-ish; tangents meet at (0,100).
+        let pt = |x, y, typ, smooth| ContourPoint::new(x, y, typ, smooth, None, None);
+        let contour = Contour::new(
+            vec![
+                pt(0.0, 0.0, PointType::Move, false),
+                pt(0.0, 10.0, PointType::OffCurve, false),
+                pt(50.0, 100.0, PointType::OffCurve, false),
+                pt(100.0, 100.0, PointType::Curve, false),
+            ],
+            None,
+        );
+        let mut glyph = norad::Glyph::new("fit-test");
+        glyph.contours = vec![contour];
+        let all = std::collections::HashSet::new();
+        assert!(fit_curve_handles(&mut glyph, &all, 0.5));
+        let pts = &glyph.contours[0].points;
+        // First handle: from (0,0) toward (0,100), half way = (0,50).
+        assert_eq!((pts[1].x, pts[1].y), (0.0, 50.0));
+        // Second handle: from (100,100) toward (0,100), half = (50,100).
+        assert_eq!((pts[2].x, pts[2].y), (50.0, 100.0));
     }
 
     #[test]
