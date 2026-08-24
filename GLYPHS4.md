@@ -101,7 +101,9 @@ Deliberate non-goals are in the last section.
 - [ ] Add or delete a master from inside the editor
 - [~] Instance list: designspace instances show under the axis
       sliders; clicking one parks the preview (and the strip) on
-      it. Defining and reordering instances comes later
+      it, × deletes, and the name field adds or renames at the
+      preview location, saved back into the designspace. Weight
+      class, style linking, and reordering come later
 - [ ] Axis mappings (avar) editing
 - [ ] Reinterpolate a layer from the other masters
 - [ ] Axis particles: generate master and instance grids from
