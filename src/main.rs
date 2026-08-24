@@ -1519,10 +1519,10 @@ enum Drag {
         /// Every point's position when the gesture began.
         originals: std::collections::HashMap<(usize, usize), (f64, f64)>,
     },
-    /// Dragging a global guide: index into the active master's
-    /// fontinfo guidelines. Guides move live; the master is marked
-    /// dirty as they move.
-    Guide { index: usize },
+    /// Dragging a guide: `local` picks the open glyph's guidelines
+    /// over the master's fontinfo ones. Guides move live; the
+    /// master is marked dirty as they move.
+    Guide { local: bool, index: usize },
     /// Dragging the selected component.
     Component {
         index: usize,
@@ -1570,8 +1570,8 @@ struct ContextMenu {
     component: Option<(usize, bool)>,
     has_components: bool,
     adding_component: bool,
-    /// Global guide under the click (fontinfo guidelines index).
-    guide: Option<usize>,
+    /// Guide under the click: (local, index).
+    guide: Option<(bool, usize)>,
 }
 
 struct EditorState {
@@ -1590,8 +1590,8 @@ struct EditorState {
     selected_component: Option<usize>,
     /// Sidebearing edge under the cursor (false = left, true = right).
     sidebearing_hover: Option<bool>,
-    /// Global guide under the cursor (fontinfo guidelines index).
-    guide_hover: Option<usize>,
+    /// Guide under the cursor: (local, index).
+    guide_hover: Option<(bool, usize)>,
     /// Mouse position in window coords, for pen previews.
     pointer: Option<Point<gpui::Pixels>>,
     viewport: ViewPort,
@@ -6043,26 +6043,49 @@ impl Workspace {
                 cx,
             ));
         }
-        if menu.guide.is_some() {
-            list = list.child(item(
-                ("cm", 10),
-                "Delete Guide".into(),
-                "guide-delete",
-                cx,
-            ));
-        } else {
-            list = list.child(item(
-                ("cm", 10),
-                "Add Guide Here".into(),
-                "guide-add-h",
-                cx,
-            ));
-            list = list.child(item(
-                ("cm", 11),
-                "Add Vertical Guide Here".into(),
-                "guide-add-v",
-                cx,
-            ));
+        match menu.guide {
+            Some((true, _)) => {
+                list = list.child(item(
+                    ("cm", 10),
+                    "Delete Local Guide".into(),
+                    "guide-delete",
+                    cx,
+                ));
+            }
+            Some((false, _)) => {
+                list = list.child(item(
+                    ("cm", 10),
+                    "Delete Guide".into(),
+                    "guide-delete",
+                    cx,
+                ));
+            }
+            None => {
+                list = list.child(item(
+                    ("cm", 10),
+                    "Add Guide Here".into(),
+                    "guide-add-h",
+                    cx,
+                ));
+                list = list.child(item(
+                    ("cm", 11),
+                    "Add Vertical Guide Here".into(),
+                    "guide-add-v",
+                    cx,
+                ));
+                list = list.child(item(
+                    ("cm", 12),
+                    "Add Local Guide Here".into(),
+                    "guide-add-local-h",
+                    cx,
+                ));
+                list = list.child(item(
+                    ("cm", 13),
+                    "Add Local Vertical Guide Here".into(),
+                    "guide-add-local-v",
+                    cx,
+                ));
+            }
         }
         Some(
             div()
@@ -6230,20 +6253,29 @@ impl Workspace {
         let upm = font.units_per_em;
         let x_height = font.x_height;
         let cap_height = font.cap_height;
-        // Global guides (fontinfo guidelines), drawn across the whole
-        // canvas under the outline. The hot one (hovered or mid-drag)
-        // draws brighter, with its knob grown.
-        let guide_hot: Option<usize> = match &self.editor.drag {
-            Some(Drag::Guide { index }) => Some(*index),
+        // Guides, drawn across the whole canvas under the outline:
+        // the master's global fontinfo guidelines plus the open
+        // glyph's own. The hot one (hovered or mid-drag) draws
+        // brighter, with its knob grown.
+        let guide_hot: Option<(bool, usize)> = match &self.editor.drag {
+            Some(Drag::Guide { local, index }) => Some((*local, *index)),
             _ => self.editor.guide_hover,
         };
-        let guides: Vec<norad::Line> = font
+        let guides: Vec<(bool, norad::Line)> = font
             .font
             .font_info
             .guidelines
-            .as_ref()
-            .map(|gs| gs.iter().map(|g| g.line).collect())
-            .unwrap_or_default();
+            .iter()
+            .flatten()
+            .map(|g| (false, g.line))
+            .chain(
+                font.font
+                    .get_glyph(entry.name.as_ref())
+                    .into_iter()
+                    .flat_map(|g| g.guidelines.iter())
+                    .map(|g| (true, g.line)),
+            )
+            .collect();
         // The metric box runs to the upm when that is higher than the
         // ascender, so an icon font's full em still reads as its space
         // (web `glyph_metric_bounds`).
@@ -6680,14 +6712,30 @@ impl Workspace {
                                 for y in ys {
                                     hline(y, window);
                                 }
-                                for (gi, line) in guides.iter().enumerate() {
-                                    let hot = guide_hot == Some(gi);
+                                let mut counts = (0usize, 0usize);
+                                for (local, line) in guides.iter() {
+                                    let (local, line) = (*local, line);
+                                    let gi = if local {
+                                        let i = counts.1;
+                                        counts.1 += 1;
+                                        i
+                                    } else {
+                                        let i = counts.0;
+                                        counts.0 += 1;
+                                        i
+                                    };
+                                    let hot = guide_hot == Some((local, gi));
+                                    let base = if local {
+                                        t::guide_local()
+                                    } else {
+                                        t::guide_line()
+                                    };
                                     let color = if hot {
-                                        let mut c = t::guide_line();
+                                        let mut c = base;
                                         c.a = 1.0;
                                         c
                                     } else {
-                                        t::guide_line()
+                                        base
                                     };
                                     let thick = if hot { 2.0 } else { 1.0 };
                                     // The knob sits on the guide's
@@ -8431,8 +8479,22 @@ impl Workspace {
         let Mode::Editor(index) = self.mode else { return };
         match action {
             "guide-delete" => {
-                if let Some(gi) = menu.guide {
-                    if let Some(f) = self.font_mut() {
+                if let Some((local, gi)) = menu.guide {
+                    if local {
+                        let name = self
+                            .font()
+                            .map(|f| f.glyphs[index].name.to_string());
+                        if let (Some(name), Some(f)) = (name, self.font_mut()) {
+                            if let Some(g) = f.font.get_glyph_mut(name.as_str())
+                            {
+                                if gi < g.guidelines.len() {
+                                    g.guidelines.remove(gi);
+                                    f.dirty = true;
+                                    f.modified_glyphs.insert(name);
+                                }
+                            }
+                        }
+                    } else if let Some(f) = self.font_mut() {
                         if let Some(gs) = f.font.font_info.guidelines.as_mut() {
                             if gi < gs.len() {
                                 gs.remove(gi);
@@ -8442,19 +8504,34 @@ impl Workspace {
                     }
                 }
             }
-            "guide-add-h" | "guide-add-v" => {
+            "guide-add-h" | "guide-add-v" | "guide-add-local-h"
+            | "guide-add-local-v" => {
                 let (dx, dy) = menu.design;
-                let line = if action == "guide-add-v" {
+                let vertical = action.ends_with("-v");
+                let line = if vertical {
                     norad::Line::Vertical(dx.round())
                 } else {
                     norad::Line::Horizontal(dy.round())
                 };
-                if let Some(f) = self.font_mut() {
+                let guide = norad::Guideline::new(line, None, None, None);
+                if action.contains("local") {
+                    // A local guide belongs to the open glyph.
+                    let name = self
+                        .font()
+                        .map(|f| f.glyphs[index].name.to_string());
+                    if let (Some(name), Some(f)) = (name, self.font_mut()) {
+                        if let Some(g) = f.font.get_glyph_mut(name.as_str()) {
+                            g.guidelines.push(guide);
+                            f.dirty = true;
+                            f.modified_glyphs.insert(name);
+                        }
+                    }
+                } else if let Some(f) = self.font_mut() {
                     f.font
                         .font_info
                         .guidelines
                         .get_or_insert_with(Vec::new)
-                        .push(norad::Guideline::new(line, None, None, None));
+                        .push(guide);
                     f.dirty = true;
                 }
             }
@@ -9017,11 +9094,11 @@ impl Workspace {
                 // Guides underlie everything: a guide drag starts
                 // only when no point, segment, or component claimed
                 // the click.
-                if let Some(gi) = self.guide_hit(dx, dy, tolerance) {
+                if let Some((local, gi)) = self.guide_hit(dx, dy, tolerance) {
                     self.editor.selected_component = None;
                     self.editor.selected.clear();
                     self.editor.selected_anchors.clear();
-                    self.editor.drag = Some(Drag::Guide { index: gi });
+                    self.editor.drag = Some(Drag::Guide { local, index: gi });
                     return;
                 }
                 self.editor.selected_component = None;
@@ -9066,30 +9143,43 @@ impl Workspace {
             .then(|| kurbo::Rect::new(min.0, min.1, max.0, max.1))
     }
 
-    /// The nearest global guide within `tolerance` design units of
-    /// (dx, dy): an index into the active master's fontinfo
-    /// guidelines.
-    fn guide_hit(&self, dx: f64, dy: f64, tolerance: f64) -> Option<usize> {
+    /// Distance from (dx, dy) to a guideline.
+    fn guide_distance(line: &norad::Line, dx: f64, dy: f64) -> f64 {
+        match *line {
+            norad::Line::Vertical(x) => (dx - x).abs(),
+            norad::Line::Horizontal(y) => (dy - y).abs(),
+            norad::Line::Angle { x, y, degrees } => {
+                // Distance to the infinite line through (x, y).
+                let (sin, cos) = degrees.to_radians().sin_cos();
+                ((dy - y) * cos - (dx - x) * sin).abs()
+            }
+        }
+    }
+
+    /// The nearest guide within `tolerance` design units of (dx, dy):
+    /// (local, index). Local guides (the open glyph's own) win ties
+    /// over the master's global fontinfo guidelines.
+    fn guide_hit(&self, dx: f64, dy: f64, tolerance: f64) -> Option<(bool, usize)> {
         let font = self.font()?;
-        let guides = font.font.font_info.guidelines.as_ref()?;
-        guides
+        let local = self
+            .current_glyph_index()
+            .and_then(|i| font.font.get_glyph(font.glyphs[i].name.as_ref()))
+            .into_iter()
+            .flat_map(|g| g.guidelines.iter().enumerate())
+            .map(|(i, g)| (Self::guide_distance(&g.line, dx, dy), (true, i)));
+        let global = font
+            .font
+            .font_info
+            .guidelines
             .iter()
+            .flatten()
             .enumerate()
-            .map(|(i, g)| {
-                let dist = match g.line {
-                    norad::Line::Vertical(x) => (dx - x).abs(),
-                    norad::Line::Horizontal(y) => (dy - y).abs(),
-                    norad::Line::Angle { x, y, degrees } => {
-                        // Distance to the infinite line through (x, y).
-                        let (sin, cos) = degrees.to_radians().sin_cos();
-                        ((dy - y) * cos - (dx - x) * sin).abs()
-                    }
-                };
-                (dist, i)
-            })
+            .map(|(i, g)| (Self::guide_distance(&g.line, dx, dy), (false, i)));
+        local
+            .chain(global)
             .filter(|(dist, _)| *dist <= tolerance)
             .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, i)| i)
+            .map(|(_, id)| id)
     }
 
     /// Every selected anchor's index and current position, for drags
@@ -9236,42 +9326,63 @@ impl Workspace {
                     .unwrap_or(false)
                 })
             }
-            Some(Drag::Guide { index: gi }) => {
-                let gi = *gi;
-                self.font_mut().is_some_and(|f| {
-                    let Some(guides) = f.font.font_info.guidelines.as_mut()
-                    else {
-                        return false;
-                    };
-                    let Some(guide) = guides.get_mut(gi) else {
-                        return false;
-                    };
-                    let moved = match &mut guide.line {
-                        norad::Line::Vertical(x) => {
-                            let nx = dx.round();
-                            let changed = *x != nx;
-                            *x = nx;
-                            changed
-                        }
-                        norad::Line::Horizontal(y) => {
-                            let ny = dy.round();
-                            let changed = *y != ny;
-                            *y = ny;
-                            changed
-                        }
-                        norad::Line::Angle { x, y, .. } => {
-                            let (nx, ny) = (dx.round(), dy.round());
-                            let changed = *x != nx || *y != ny;
-                            *x = nx;
-                            *y = ny;
-                            changed
-                        }
-                    };
-                    if moved {
-                        f.dirty = true;
+            Some(Drag::Guide { local, index: gi }) => {
+                let (local, gi) = (*local, *gi);
+                let move_line = |line: &mut norad::Line| match line {
+                    norad::Line::Vertical(x) => {
+                        let nx = dx.round();
+                        let changed = *x != nx;
+                        *x = nx;
+                        changed
                     }
-                    moved
-                })
+                    norad::Line::Horizontal(y) => {
+                        let ny = dy.round();
+                        let changed = *y != ny;
+                        *y = ny;
+                        changed
+                    }
+                    norad::Line::Angle { x, y, .. } => {
+                        let (nx, ny) = (dx.round(), dy.round());
+                        let changed = *x != nx || *y != ny;
+                        *x = nx;
+                        *y = ny;
+                        changed
+                    }
+                };
+                if local {
+                    let name = self
+                        .font()
+                        .map(|f| f.glyphs[index].name.to_string());
+                    let Some(name) = name else { return false };
+                    self.font_mut().is_some_and(|f| {
+                        let moved = f
+                            .font
+                            .get_glyph_mut(name.as_str())
+                            .and_then(|g| g.guidelines.get_mut(gi))
+                            .map(|guide| move_line(&mut guide.line))
+                            .unwrap_or(false);
+                        if moved {
+                            f.dirty = true;
+                            f.modified_glyphs.insert(name);
+                        }
+                        moved
+                    })
+                } else {
+                    self.font_mut().is_some_and(|f| {
+                        let moved = f
+                            .font
+                            .font_info
+                            .guidelines
+                            .as_mut()
+                            .and_then(|gs| gs.get_mut(gi))
+                            .map(|guide| move_line(&mut guide.line))
+                            .unwrap_or(false);
+                        if moved {
+                            f.dirty = true;
+                        }
+                        moved
+                    })
+                }
             }
             Some(Drag::Sidebearing {
                 right,

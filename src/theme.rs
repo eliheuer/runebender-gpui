@@ -303,6 +303,13 @@ pub fn guide_line() -> Rgba {
     color.a = 0.75;
     color
 }
+/// Local (per-glyph) guides: the accent hue, thinned the same way,
+/// so the two guide scopes read apart at a glance.
+pub fn guide_local() -> Rgba {
+    let mut color = accent();
+    color.a = 0.75;
+    color
+}
 /// The sort being manually kerned.
 pub fn kern_active() -> Rgba {
     c(theme().role("kernActive"))
