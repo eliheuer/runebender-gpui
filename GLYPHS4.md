@@ -121,8 +121,12 @@ Deliberate non-goals are in the last section.
 
 - [~] Font Info editing: the grid's Font Info section edits the
       family name, style name, UPM, italic angle, ascender,
-      descender, x-height, and cap height per master. Versioning,
-      copyright, designer, and license fields come later
+      descender, x-height, cap height, and the typo/hhea/win
+      vertical metrics per master. Versioning, copyright,
+      designer, and license fields come later
+- [x] Dimensions: measured stems and bars for the reference
+      glyphs (H O n o t v), from the outlines — Glyphs' palette
+      is hand-typed
 - [ ] Custom parameters / lib editing
 - [ ] Grid spacing and subdivision settings
 - [x] New font from template
