@@ -2211,6 +2211,16 @@ struct FontInfoInputs {
     descender: gpui::Entity<gpui_component::input::InputState>,
     x_height: gpui::Entity<gpui_component::input::InputState>,
     cap_height: gpui::Entity<gpui_component::input::InputState>,
+    /// The OS/2 and hhea vertical metrics (typo/hhea/win), the
+    /// parameters the Google Fonts vertical-metrics checks read.
+    typo_asc: gpui::Entity<gpui_component::input::InputState>,
+    typo_desc: gpui::Entity<gpui_component::input::InputState>,
+    typo_gap: gpui::Entity<gpui_component::input::InputState>,
+    hhea_asc: gpui::Entity<gpui_component::input::InputState>,
+    hhea_desc: gpui::Entity<gpui_component::input::InputState>,
+    hhea_gap: gpui::Entity<gpui_component::input::InputState>,
+    win_asc: gpui::Entity<gpui_component::input::InputState>,
+    win_desc: gpui::Entity<gpui_component::input::InputState>,
 }
 
 /// The Kerning section's inputs: a live filter over the pair list,
@@ -2233,6 +2243,14 @@ enum FontInfoField {
     Descender,
     XHeight,
     CapHeight,
+    TypoAscender,
+    TypoDescender,
+    TypoLineGap,
+    HheaAscender,
+    HheaDescender,
+    HheaLineGap,
+    WinAscent,
+    WinDescent,
 }
 
 /// A flat slider: a thin, evenly colored track (the library's own
@@ -11049,6 +11067,35 @@ impl Workspace {
                         info.cap_height = Some(v);
                         master.cap_height = Some(v);
                     }
+                    FontInfoField::TypoAscender => {
+                        info.open_type_os2_typo_ascender = Some(v as i32)
+                    }
+                    FontInfoField::TypoDescender => {
+                        info.open_type_os2_typo_descender = Some(v as i32)
+                    }
+                    FontInfoField::TypoLineGap => {
+                        info.open_type_os2_typo_line_gap = Some(v as i32)
+                    }
+                    FontInfoField::HheaAscender => {
+                        info.open_type_hhea_ascender = Some(v as i32)
+                    }
+                    FontInfoField::HheaDescender => {
+                        info.open_type_hhea_descender = Some(v as i32)
+                    }
+                    FontInfoField::HheaLineGap => {
+                        info.open_type_hhea_line_gap = Some(v as i32)
+                    }
+                    FontInfoField::WinAscent => {
+                        if v >= 0.0 {
+                            info.open_type_os2_win_ascent = Some(v as u32)
+                        }
+                    }
+                    FontInfoField::WinDescent => {
+                        // winDescent is stored positive.
+                        if v >= 0.0 {
+                            info.open_type_os2_win_descent = Some(v as u32)
+                        }
+                    }
                     FontInfoField::Family | FontInfoField::Style => unreachable!(),
                 }
                 master.dirty = true;
@@ -11103,6 +11150,54 @@ impl Workspace {
             ),
             (&self.font_info_inputs.x_height, opt(master.x_height)),
             (&self.font_info_inputs.cap_height, opt(master.cap_height)),
+            (
+                &self.font_info_inputs.typo_asc,
+                info.open_type_os2_typo_ascender
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.typo_desc,
+                info.open_type_os2_typo_descender
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.typo_gap,
+                info.open_type_os2_typo_line_gap
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.hhea_asc,
+                info.open_type_hhea_ascender
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.hhea_desc,
+                info.open_type_hhea_descender
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.hhea_gap,
+                info.open_type_hhea_line_gap
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.win_asc,
+                info.open_type_os2_win_ascent
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.win_desc,
+                info.open_type_os2_win_descent
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            ),
         ];
         for (entity, value) in values {
             entity.update(cx, |st, cx| {
@@ -11156,6 +11251,37 @@ impl Workspace {
                     .gap_1()
                     .child(field("x-Height", &self.font_info_inputs.x_height))
                     .child(field("Cap Height", &self.font_info_inputs.cap_height)),
+            )
+            // The vertical-metrics parameters (typo/hhea/win), kept
+            // together the way the Glyphs Masters tab carries them.
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("Vertical Metrics"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(field("typoAsc", &self.font_info_inputs.typo_asc))
+                    .child(field("typoDesc", &self.font_info_inputs.typo_desc))
+                    .child(field("typoGap", &self.font_info_inputs.typo_gap)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(field("hheaAsc", &self.font_info_inputs.hhea_asc))
+                    .child(field("hheaDesc", &self.font_info_inputs.hhea_desc))
+                    .child(field("hheaGap", &self.font_info_inputs.hhea_gap)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(field("winAsc", &self.font_info_inputs.win_asc))
+                    .child(field("winDesc", &self.font_info_inputs.win_desc)),
             );
         self.section(cx, "Font Info", body)
     }
@@ -15650,6 +15776,38 @@ fn main() {
                         font_info_sub(cx, window, &fi_xh, FontInfoField::XHeight);
                     let sub_fi_ch =
                         font_info_sub(cx, window, &fi_ch, FontInfoField::CapHeight);
+                    let fi_typo_asc = metric(cx, window);
+                    let fi_typo_desc = metric(cx, window);
+                    let fi_typo_gap = metric(cx, window);
+                    let fi_hhea_asc = metric(cx, window);
+                    let fi_hhea_desc = metric(cx, window);
+                    let fi_hhea_gap = metric(cx, window);
+                    let fi_win_asc = metric(cx, window);
+                    let fi_win_desc = metric(cx, window);
+                    let sub_fi_ta = font_info_sub(
+                        cx, window, &fi_typo_asc, FontInfoField::TypoAscender,
+                    );
+                    let sub_fi_td = font_info_sub(
+                        cx, window, &fi_typo_desc, FontInfoField::TypoDescender,
+                    );
+                    let sub_fi_tg = font_info_sub(
+                        cx, window, &fi_typo_gap, FontInfoField::TypoLineGap,
+                    );
+                    let sub_fi_ha = font_info_sub(
+                        cx, window, &fi_hhea_asc, FontInfoField::HheaAscender,
+                    );
+                    let sub_fi_hd = font_info_sub(
+                        cx, window, &fi_hhea_desc, FontInfoField::HheaDescender,
+                    );
+                    let sub_fi_hg = font_info_sub(
+                        cx, window, &fi_hhea_gap, FontInfoField::HheaLineGap,
+                    );
+                    let sub_fi_wa = font_info_sub(
+                        cx, window, &fi_win_asc, FontInfoField::WinAscent,
+                    );
+                    let sub_fi_wd = font_info_sub(
+                        cx, window, &fi_win_desc, FontInfoField::WinDescent,
+                    );
                     let kern_filter = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Filter pairs")
@@ -16204,6 +16362,14 @@ fn main() {
                             descender: fi_desc,
                             x_height: fi_xh,
                             cap_height: fi_ch,
+                            typo_asc: fi_typo_asc,
+                            typo_desc: fi_typo_desc,
+                            typo_gap: fi_typo_gap,
+                            hhea_asc: fi_hhea_asc,
+                            hhea_desc: fi_hhea_desc,
+                            hhea_gap: fi_hhea_gap,
+                            win_asc: fi_win_asc,
+                            win_desc: fi_win_desc,
                         },
                         kern_inputs: KernInputs {
                             filter: kern_filter,
@@ -16232,7 +16398,9 @@ fn main() {
                             sub_sw, sub_sh, sub_anchor, sub_ref,
                             sub_fi_family, sub_fi_style, sub_fi_upm,
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
-                            sub_fi_xh, sub_fi_ch,
+                            sub_fi_xh, sub_fi_ch, sub_fi_ta, sub_fi_td,
+                            sub_fi_tg, sub_fi_ha, sub_fi_hd, sub_fi_hg,
+                            sub_fi_wa, sub_fi_wd,
                             sub_kern_filter, sub_kern_first,
                             sub_kern_second, sub_kern_value, sub_slant,
                             sub_features, sub_instance_name, sub_stroke,
