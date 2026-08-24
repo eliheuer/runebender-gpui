@@ -10547,6 +10547,115 @@ impl Workspace {
         set(&note_input, note, window, cx);
     }
 
+    /// Auto-generated feature blocks from glyph names, the Glyphs
+    /// conventions: `.init`/`.medi`/`.fina` suffixes feed the
+    /// positional features, and underscore names (f_i, beh-ar_lam-ar)
+    /// whose parts all exist feed liga. Returns (tag, body) pairs;
+    /// tags with nothing to say are omitted.
+    fn generated_feature_blocks(font: &norad::Font) -> Vec<(String, String)> {
+        let names: std::collections::BTreeSet<&str> = font
+            .default_layer()
+            .iter()
+            .map(|g| g.name().as_str())
+            .collect();
+        let mut blocks: Vec<(String, String)> = Vec::new();
+        for tag in ["init", "medi", "fina"] {
+            let suffix = format!(".{tag}");
+            let mut rules = String::new();
+            for name in &names {
+                let Some(base) = name.strip_suffix(suffix.as_str()) else {
+                    continue;
+                };
+                if names.contains(base) {
+                    rules.push_str(&format!("    sub {base} by {name};\n"));
+                }
+            }
+            if !rules.is_empty() {
+                blocks.push((tag.to_string(), rules));
+            }
+        }
+        // Ligatures: longest first, so f_f_i wins over f_f.
+        let mut ligatures: Vec<(&str, Vec<&str>)> = names
+            .iter()
+            .filter(|name| name.contains('_') && !name.contains('.'))
+            .filter_map(|name| {
+                let parts: Vec<&str> = name.split('_').collect();
+                (parts.len() >= 2
+                    && parts.iter().all(|part| names.contains(part)))
+                .then(|| (*name, parts))
+            })
+            .collect();
+        ligatures.sort_by_key(|(_, parts)| std::cmp::Reverse(parts.len()));
+        if !ligatures.is_empty() {
+            let mut rules = String::new();
+            for (name, parts) in ligatures {
+                rules.push_str(&format!(
+                    "    sub {} by {name};\n",
+                    parts.join(" ")
+                ));
+            }
+            blocks.push(("liga".to_string(), rules));
+        }
+        blocks
+    }
+
+    /// Replace (or append) one `feature X { … } X;` block in a fea
+    /// source. The terminator `} X;` is required syntax, so the block
+    /// span is found textually.
+    fn replace_feature_block(fea: &str, tag: &str, body: &str) -> String {
+        let block = format!("feature {tag} {{\n{body}}} {tag};\n");
+        let open = format!("feature {tag} ");
+        let close = format!("}} {tag};");
+        if let (Some(start), Some(end)) =
+            (fea.find(&open), fea.find(&close))
+        {
+            if end > start {
+                let mut out = String::with_capacity(fea.len());
+                out.push_str(&fea[..start]);
+                out.push_str(block.trim_end());
+                out.push_str(&fea[end + close.len()..]);
+                return out;
+            }
+        }
+        let mut out = fea.trim_end().to_string();
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(&block);
+        out
+    }
+
+    /// The Features section's Generate button: rewrite the automatic
+    /// blocks (init/medi/fina from name suffixes, liga from
+    /// underscore names) into the editor text for review; Apply
+    /// commits. Hand-written blocks with other tags are untouched.
+    fn command_generate_features(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(font) = self.font() else { return };
+        let blocks = Self::generated_feature_blocks(&font.font);
+        if blocks.is_empty() {
+            self.features_status =
+                Some("Nothing to generate from glyph names".into());
+            return;
+        }
+        let mut fea = self.features_input.read(cx).value().to_string();
+        let mut tags: Vec<String> = Vec::new();
+        for (tag, body) in blocks {
+            fea = Self::replace_feature_block(&fea, &tag, &body);
+            tags.push(tag);
+        }
+        self.features_input.update(cx, |st, cx| {
+            st.set_value(fea, window, cx);
+        });
+        self.features_edited = true;
+        self.features_status = Some(
+            format!("Generated {} · review and Apply", tags.join(", ")).into(),
+        );
+    }
+
     /// Compile-check a features.fea against the active master's
     /// glyph set, the same build the text engine shapes with.
     fn check_features_compile(font: &FontModel, fea: &str) -> Result<(), String> {
@@ -10652,6 +10761,12 @@ impl Workspace {
                             this.features_edited = false;
                             this.features_status = None;
                             this.refresh_features_input(true, window, cx);
+                            cx.notify();
+                        }),
+                    ))
+                    .child(button("features-generate", "Generate").on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.command_generate_features(window, cx);
                             cx.notify();
                         }),
                     ))
@@ -13202,6 +13317,31 @@ impl Workspace {
         Some(self.section(cx, "Axes", body))
     }
 
+    /// Google Fonts style linking for an instance name: RIBBI styles
+    /// link inside the family; anything else becomes its own
+    /// stylemap family with regular/italic, the shape gftools
+    /// expects (Medium → "Family Medium" + regular).
+    fn style_linking(family: &str, style: &str) -> (String, String) {
+        match style.to_lowercase().as_str() {
+            "regular" | "bold" | "italic" | "bold italic" => {
+                (family.to_string(), style.to_lowercase())
+            }
+            lower => {
+                if let Some(base) = lower
+                    .strip_suffix(" italic")
+                    .map(|b| b.len())
+                {
+                    (
+                        format!("{family} {}", style[..base].trim()),
+                        "italic".to_string(),
+                    )
+                } else {
+                    (format!("{family} {style}"), "regular".to_string())
+                }
+            }
+        }
+    }
+
     /// Enter in the Instances field: rename the instance sitting at
     /// the preview location, or add a new one there. The name is the
     /// style name; the full name follows the family.
@@ -13259,14 +13399,24 @@ impl Workspace {
                 inst.stylename = Some(name.to_string());
                 if let Some(fam) = &family {
                     inst.name = Some(format!("{fam} {name}"));
+                    let (map_family, map_style) = Self::style_linking(fam, name);
+                    inst.stylemapfamilyname = Some(map_family);
+                    inst.stylemapstylename = Some(map_style);
                 }
                 format!("Renamed instance to {name}")
             }
             None => {
+                let stylemap = family
+                    .as_ref()
+                    .map(|fam| Self::style_linking(fam, name));
                 doc.instances.push(norad::designspace::Instance {
                     familyname: family.clone(),
                     stylename: Some(name.to_string()),
                     name: family.as_ref().map(|f| format!("{f} {name}")),
+                    stylemapfamilyname:
+                        stylemap.as_ref().map(|(f, _)| f.clone()),
+                    stylemapstylename:
+                        stylemap.as_ref().map(|(_, st)| st.clone()),
                     location: wants
                         .iter()
                         .map(|(axis, value)| norad::designspace::Dimension {
@@ -16289,6 +16439,34 @@ mod tests {
             "glyph image reference round-trips"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn generates_positional_and_liga_features() {
+        let mut font = runebender_core::new_font::new_font("Gen", "Regular", 400);
+        for name in ["beh", "beh.init", "beh.medi", "f", "i", "f_i"] {
+            font.default_layer_mut()
+                .insert_glyph(norad::Glyph::new(name));
+        }
+        let blocks = Workspace::generated_feature_blocks(&font);
+        let tags: Vec<&str> = blocks.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(tags.contains(&"init") && tags.contains(&"medi"));
+        assert!(!tags.contains(&"fina"), "no .fina names, no fina block");
+        assert!(tags.contains(&"liga"));
+        let init = &blocks.iter().find(|(t, _)| t == "init").unwrap().1;
+        assert!(init.contains("sub beh by beh.init;"));
+        let liga = &blocks.iter().find(|(t, _)| t == "liga").unwrap().1;
+        assert!(liga.contains("sub f i by f_i;"));
+
+        // Block replacement: an existing init block is rewritten in
+        // place, an absent liga block is appended.
+        let fea = "feature init {\n    sub old by old.init;\n} init;\n";
+        let out = Workspace::replace_feature_block(fea, "init", init);
+        assert!(out.contains("sub beh by beh.init;"));
+        assert!(!out.contains("old.init"));
+        let out2 = Workspace::replace_feature_block(&out, "liga", liga);
+        assert!(out2.contains("feature liga {"));
+        assert!(out2.ends_with("} liga;\n"));
     }
 
     #[test]
