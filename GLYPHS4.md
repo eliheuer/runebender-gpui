@@ -65,8 +65,9 @@ Deliberate non-goals are in the last section.
       panel; UFO supports this, we only touch two layers)
 - [ ] Intermediate ("brace") layers per glyph
 - [ ] Alternate ("bracket") layers for shape switching
-- [ ] Guides: local per glyph and global per master, editable
-      and lockable (we only draw metric lines from fontinfo)
+- [~] Guides: global guides land (draw, drag with snap, add and
+      delete from the context menu; fontinfo guidelines). Local
+      per-glyph guides and locking come later
 - [ ] Images placed in a layer as a tracing template
 - [ ] Glyph notes
 
@@ -76,8 +77,8 @@ Deliberate non-goals are in the last section.
 - [x] Metrics fields (native; browser blocked by the focus bug)
 - [x] Kerning by drag in text mode, per master
 - [x] Kerning group editing on the glyph
-- [ ] Kerning panel: list all pairs, search, edit, delete,
-      per-master view
+- [x] Kerning panel: the grid's Kerning section lists the active
+      master's pairs with filter, edit, and delete
 - [ ] Visual kerning groups: drag glyphs onto group shelves
       (new in 4)
 - [ ] Batch sidebearing editing across many glyphs
@@ -102,11 +103,10 @@ Deliberate non-goals are in the last section.
 
 ## Font-level data
 
-- [~] Metric lines from fontinfo are drawn; nothing is editable
-- [ ] Font Info editing: family name, style names, versioning,
-      copyright, designer, license
-- [ ] Vertical metrics editing (ascender, descender, x-height,
-      cap height, per master)
+- [~] Font Info editing: the grid's Font Info section edits the
+      family name, style name, UPM, italic angle, ascender,
+      descender, x-height, and cap height per master. Versioning,
+      copyright, designer, and license fields come later
 - [ ] Custom parameters / lib editing
 - [ ] Grid spacing and subdivision settings
 - [x] New font from template
@@ -128,8 +128,9 @@ Deliberate non-goals are in the last section.
 
 ## Export
 
-- [ ] Static OTF and TTF export
-- [ ] Variable font export (TTF and CFF2)
+- [~] TTF export through fontc (File > Export, Cmd+E): variable
+      from a designspace, static from a single UFO. CFF outlines
+      and per-instance statics come later
 - [ ] WOFF and WOFF2
 - [ ] Instance export from the instance list
 - [ ] PostScript autohinting at export
@@ -203,20 +204,18 @@ These stay out of scope. Do not add them to the gap list.
 
 Ordered by leverage. Each step is small enough to land on its own.
 
-1. **Export through fontc.** One menu item closes the largest
-   gap: File > Export runs fontc on the open source and reports
-   the result. Static and variable TTF land at once because
-   fontc does both. This makes the editor produce fonts, which
-   is the whole point of Glyphs. Later: bundle fontc as a
-   library instead of a binary on PATH.
-2. **Font Info editing.** A font info panel that writes
-   fontinfo.plist: names, metrics, per-master values. This is
-   also flagged in PARITY.md as a daily-driver need.
-3. **Guides.** Editable global guides per master (UFO
-   fontinfo guidelines) and local guides per glyph. Drawing
-   support half exists.
-4. **Kerning panel.** List pairs per master, search, edit,
-   delete. The data model already round-trips kerning.plist.
+1. **Export through fontc.** Done 2026-08-24: File > Export
+   (Cmd+E) saves, runs fontc in the background, and reports
+   through the status note. Later: bundle fontc as a library
+   instead of a binary on PATH.
+2. **Font Info editing.** First slice done 2026-08-24: names and
+   vertical metrics in the grid's Font Info section. Remaining:
+   versioning, copyright, designer, license, custom parameters.
+3. **Guides.** Global guides done 2026-08-24 (draw, drag, add,
+   delete). Remaining: local per-glyph guides, locking, angled
+   guide editing.
+4. **Kerning panel.** Done 2026-08-24 in the grid's Kerning
+   section. Remaining: visual kerning groups, batch operations.
 5. **Free per-glyph layers.** Norad already models UFO layers.
    A layers panel unlocks brace layers later.
 6. **Instances.** Read and edit designspace instances, preview
