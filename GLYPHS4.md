@@ -61,8 +61,9 @@ Deliberate non-goals are in the last section.
 - [x] Mark colors, tags on glyphs
 - [x] Rename glyph with reference fixup
 - [x] Unicode assignment editing
-- [ ] Free per-glyph layers (any number, named, with a layers
-      panel; UFO supports this, we only touch two layers)
+- [~] Free per-glyph layers: backup to a named layer, draw any
+      layer as an underlay, swap with the drawing, delete (Masters
+      section). Editing directly on a non-default layer comes later
 - [ ] Intermediate ("brace") layers per glyph
 - [ ] Alternate ("bracket") layers for shape switching
 - [~] Guides: global guides land (draw, drag with snap, add and
@@ -84,7 +85,8 @@ Deliberate non-goals are in the last section.
 - [ ] Batch sidebearing editing across many glyphs
 - [ ] Metrics keys (side bearings linked by formula, "=n+10")
 - [ ] Contextual kerning
-- [ ] Auto "kern" feature generation at export
+- [x] Auto "kern" feature generation at export (fontc writes
+      kern, mark, and mkmk from UFO kerning, groups, and anchors)
 
 ## Masters, interpolation, variable fonts
 
@@ -92,10 +94,14 @@ Deliberate non-goals are in the last section.
 - [x] Axis sliders with live interpolation preview
 - [x] Interpolation ghost in the edit view
 - [x] Master thumbnails in the sidebar
-- [ ] Master compatibility report (mismatched points, order,
-      start points) with visual diff
+- [~] Master compatibility: grid dots, an Incompatible filter,
+      and the Glyph panel names the first disagreeing master pair
+      with contour and point counts. A point-level visual diff
+      comes later
 - [ ] Add or delete a master from inside the editor
-- [ ] Instance list: define, name, preview, reorder
+- [~] Instance list: designspace instances show under the axis
+      sliders; clicking one parks the preview (and the strip) on
+      it. Defining and reordering instances comes later
 - [ ] Axis mappings (avar) editing
 - [ ] Reinterpolate a layer from the other masters
 - [ ] Axis particles: generate master and instance grids from
@@ -121,7 +127,8 @@ Deliberate non-goals are in the last section.
 
 - [x] Shaping preview in text mode (the shared text engine)
 - [ ] Feature code editing (.fea) with syntax check
-- [ ] Automatic feature generation (kern, mark, mkmk, liga, ccmp)
+- [~] Automatic feature generation: kern, mark, and mkmk come
+      from fontc at export; liga and ccmp writers come later
 - [ ] Feature preview toggles in the editor
 - [ ] Classes and prefixes management
 - [ ] Tokens / feature variations
@@ -144,9 +151,12 @@ Deliberate non-goals are in the last section.
 - [x] Preview mode (filled, in-editor)
 - [x] Text mode: type real words around the glyph, bidi, shaping
 - [x] Multiple edit tabs
-- [ ] Text Preview window: long texts, tracking, line height,
-      alignment, feature toggles, instance switching
-- [ ] Interpolation preview strip across all instances
+- [~] Preview strip: the editor's bottom strip previews the text
+      line filled, with blur and invert, and follows the
+      interpolation location (so instance rows switch it).
+      A separate long-text window with tracking, line height, and
+      feature toggles comes later
+- [ ] Interpolation preview strip across all instances at once
 
 ## Hinting
 
@@ -180,8 +190,8 @@ Deliberate non-goals are in the last section.
 - [x] Round corners
 - [x] Remove overlap
 - [ ] Offset curve (bolder or lighter, open-path stroke expand)
-- [ ] Slanter: oblique with contrast and weight correction
-      (new in 4)
+- [~] Slanter: the Transformations section shears the selection
+      by typed degrees. Contrast and weight corrections come later
 - [ ] Simplify: redraw with fewer points (new in 4; our image
       trace covers part of this)
 - [ ] Transformations panel as one place for all of these
