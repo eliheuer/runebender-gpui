@@ -1808,6 +1808,13 @@ struct Workspace {
     kern_inputs: KernInputs,
     /// Slant angle field in the Transformations section (degrees).
     slant_input: gpui::Entity<gpui_component::input::InputState>,
+    /// The Features section's features.fea editor (grid mode).
+    features_input: gpui::Entity<gpui_component::input::TextareaState>,
+    /// Unapplied edits in the features editor: the refresh keeps its
+    /// hands off until Apply or Revert.
+    features_edited: bool,
+    /// The last Apply's compile verdict, shown under the editor.
+    features_status: Option<SharedString>,
     glyph_inputs: GlyphInputs,
     context_menu: Option<ContextMenu>,
     /// The Selection panel's 9-point reference for numeric move and
@@ -9736,6 +9743,157 @@ impl Workspace {
         set(&r_input, group_r, window, cx);
     }
 
+    /// Compile-check a features.fea against the active master's
+    /// glyph set, the same build the text engine shapes with.
+    fn check_features_compile(font: &FontModel, fea: &str) -> Result<(), String> {
+        use runebender_core::shape::{ShapingFont, ShapingGlyph, ShapingSource};
+        let glyphs: Vec<ShapingGlyph> = std::iter::once(ShapingGlyph {
+            name: ".notdef".into(),
+            advance: 0.0,
+            unicodes: Vec::new(),
+        })
+        .chain(
+            font.glyphs
+                .iter()
+                .filter(|g| g.name.as_ref() != ".notdef")
+                .map(|g| ShapingGlyph {
+                    name: g.name.to_string(),
+                    advance: g.advance,
+                    unicodes: g.codepoint.map(|c| c as u32).into_iter().collect(),
+                }),
+        )
+        .collect();
+        ShapingFont::build(&ShapingSource {
+            units_per_em: font.units_per_em,
+            glyphs,
+            features: fea.to_string(),
+        })
+        .map(|_| ())
+    }
+
+    /// Apply the features editor to the active master: write
+    /// features.fea, recompile the shaping models, and report the
+    /// compile verdict. A file that does not compile is still saved
+    /// (the old joining rules carry on), the way Glyphs lets you keep
+    /// a broken feature file open while you fix it.
+    fn command_apply_features(&mut self, cx: &mut Context<Self>) {
+        let fea = self.features_input.read(cx).value().to_string();
+        let verdict = self
+            .font()
+            .map(|f| Self::check_features_compile(f, &fea));
+        if let Some(font) = self.font_mut() {
+            if font.font.features != fea {
+                font.font.features = fea;
+                font.dirty = true;
+            }
+        } else {
+            return;
+        }
+        self.features_edited = false;
+        self.features_status = Some(match verdict {
+            Some(Ok(())) => "Compiled clean · shaping updated".into(),
+            Some(Err(e)) => {
+                let first = e.lines().find(|l| !l.trim().is_empty()).unwrap_or("error");
+                format!("Saved, but does not compile: {first}").into()
+            }
+            None => "Applied".into(),
+        });
+        self.rebuild_text_models();
+    }
+
+    /// The Features section (grid mode): the active master's
+    /// features.fea in a plain editor, Apply and Revert below, and
+    /// the compile verdict. Glyphs' Features tab, one file at a time
+    /// (UFO keeps prefixes, classes, and features in features.fea).
+    fn features_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        if self.project.is_none() {
+            return self.section(cx, "Features", div());
+        }
+        let button = |id: &'static str, label: &'static str| {
+            div()
+                .id(id)
+                .px_2()
+                .py_0p5()
+                .rounded_sm()
+                .text_sm()
+                .cursor_pointer()
+                .border_1()
+                .border_color(t::cell_border())
+                .text_color(t::text())
+                .child(label)
+        };
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div().h(px(260.0)).child(
+                    gpui_component::input::Textarea::new(&self.features_input)
+                        .h_full(),
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .items_center()
+                    .child(button("features-apply", "Apply").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.command_apply_features(cx);
+                            cx.notify();
+                        }),
+                    ))
+                    .child(button("features-revert", "Revert").on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.features_edited = false;
+                            this.features_status = None;
+                            this.refresh_features_input(true, window, cx);
+                            cx.notify();
+                        }),
+                    ))
+                    .when(self.features_edited, |el| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .text_color(t::status_yellow())
+                                .child("edited"),
+                        )
+                    }),
+            )
+            .children(self.features_status.clone().map(|status| {
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child(status)
+            }));
+        self.section(cx, "Features", body)
+    }
+
+    /// Push the active master's features.fea into the editor. Hands
+    /// off while it holds unapplied edits or focus, unless forced.
+    fn refresh_features_input(
+        &mut self,
+        force: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !force
+            && (self.features_edited
+                || window
+                    .focused(cx)
+                    .is_some_and(|f| f != self.focus_handle))
+        {
+            return;
+        }
+        let Some(font) = self.font() else { return };
+        let value = font.font.features.clone();
+        self.features_input.update(cx, |st, cx| {
+            if st.value() != value.as_str() {
+                st.set_value(value, window, cx);
+            }
+        });
+    }
+
     /// Commit the Kerning section's editor row: set (or update) the
     /// pair on the active master. First and second may be glyph names
     /// or group names (public.kern1./public.kern2.).
@@ -13481,6 +13639,7 @@ impl Render for Workspace {
         self.visible_glyphs();
         self.refresh_metric_inputs(false, window, cx);
         self.refresh_font_info_inputs(false, window, cx);
+        self.refresh_features_input(false, window, cx);
         if matches!(self.mode, Mode::Editor(_)) {
             self.refresh_coord_inputs(false, window, cx);
         }
@@ -13695,6 +13854,7 @@ impl Render for Workspace {
                 el.child(self.glyph_info_panel(cx))
                     .child(self.font_info_section(cx))
                     .child(self.kerning_section(cx))
+                    .child(self.features_section(cx))
                     .child(self.layers_section(cx))
                     .child(self.glyph_preview_panel())
             });
@@ -14264,6 +14424,26 @@ fn main() {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Angle°")
                     });
+                    let features_input = cx.new(|cx| {
+                        gpui_component::input::TextareaState::new(window, cx)
+                    });
+                    let sub_features = cx.subscribe_in(
+                        &features_input,
+                        window,
+                        |this: &mut Workspace,
+                         _,
+                         ev: &gpui_component::input::InputEvent,
+                         _,
+                         cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::Change
+                            ) {
+                                this.features_edited = true;
+                                cx.notify();
+                            }
+                        },
+                    );
                     let sub_slant = cx.subscribe_in(&slant_input, window, {
                         let state = slant_input.clone();
                         move |this: &mut Workspace,
@@ -14603,6 +14783,9 @@ fn main() {
                             value: kern_value,
                         },
                         slant_input,
+                        features_input,
+                        features_edited: false,
+                        features_status: None,
                         axis_sliders: Vec::new(),
                         clipboard: Vec::new(),
                         #[cfg(target_family = "wasm")]
@@ -14618,6 +14801,7 @@ fn main() {
                             sub_fi_xh, sub_fi_ch,
                             sub_kern_filter, sub_kern_first,
                             sub_kern_second, sub_kern_value, sub_slant,
+                            sub_features,
                         ],
                     };
                     workspace.rebuild_text_models();
@@ -14747,6 +14931,19 @@ mod tests {
             .expect("a Bold instance");
         let weight = bold.1.values().next().copied().unwrap_or(0.0);
         assert!((weight - 1.0).abs() < 1e-6, "Bold sits at the axis max");
+    }
+
+    #[test]
+    fn features_compile_check() {
+        let project = Project::load(&default_font_path()).expect("designspace loads");
+        let font = project.active_font();
+        // The font's own features.fea compiles.
+        let own = font.font.features.clone();
+        assert!(Workspace::check_features_compile(font, &own).is_ok());
+        // Garbage does not, and the error says something.
+        let err = Workspace::check_features_compile(font, "feature liga { nonsense ; } liga;");
+        assert!(err.is_err());
+        assert!(!err.unwrap_err().is_empty());
     }
 
     #[test]
