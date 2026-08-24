@@ -4262,6 +4262,22 @@ impl Workspace {
                 &self.glyph_inputs.group_r,
             ))
             .child(input_row("Unicode", &self.glyph_inputs.unicode))
+            // The character's Unicode name, the Glyph Info window's
+            // headline fact, quietly under the code point.
+            .when_some(
+                entry
+                    .codepoint
+                    .and_then(unicode_names2::name)
+                    .map(|n| n.to_string()),
+                |el, uni_name| {
+                    el.child(
+                        div()
+                            .text_xs()
+                            .text_color(t::text_muted())
+                            .child(uni_name),
+                    )
+                },
+            )
             .child(input_row("Note", &self.glyph_inputs.note));
         self.section(cx, "Glyph", panel)
     }
