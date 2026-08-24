@@ -10978,10 +10978,57 @@ impl Workspace {
         }
     }
 
-    /// File > Export: compile the open source with fontc. Dirty
-    /// masters are saved first because fontc reads from disk. The
-    /// build runs in the background and reports through the status
-    /// note, so the editor stays live while it compiles.
+    /// The repo's own Google Fonts build script above the source
+    /// (build-fontc.sh preferred, then build.sh), with the directory
+    /// to run it from. A repo pipeline carries the gftools fixes,
+    /// STAT, and statics that a raw compile does not.
+    #[cfg(not(target_family = "wasm"))]
+    fn gf_build_script(source: &std::path::Path) -> Option<(PathBuf, PathBuf)> {
+        let mut dir = source.parent()?;
+        for _ in 0..4 {
+            for name in ["build-fontc.sh", "build.sh"] {
+                let candidate = dir.join(name);
+                if candidate.is_file() {
+                    return Some((candidate, dir.to_path_buf()));
+                }
+            }
+            if dir.join(".git").exists() {
+                break;
+            }
+            dir = dir.parent()?;
+        }
+        None
+    }
+
+    /// PATH for export child processes. The app may have been
+    /// launched from the Dock with the minimal system PATH, so the
+    /// places build scripts expect (cargo bin, Homebrew, the repo
+    /// venv) are put back in front.
+    #[cfg(not(target_family = "wasm"))]
+    fn export_path_env(workdir: Option<&std::path::Path>) -> std::ffi::OsString {
+        let mut parts: Vec<PathBuf> = Vec::new();
+        if let Some(workdir) = workdir {
+            parts.push(workdir.join(".venv/bin"));
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            parts.push(PathBuf::from(&home).join(".cargo/bin"));
+        }
+        parts.push(PathBuf::from("/opt/homebrew/bin"));
+        parts.push(PathBuf::from("/usr/local/bin"));
+        if let Some(path) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&path));
+        }
+        std::env::join_paths(parts.into_iter().filter(|p| p.exists()))
+            .unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+    }
+
+    /// File > Export. Dirty masters are saved first because the
+    /// build reads from disk. With a Google Fonts build script above
+    /// the source, that script is the export — the repo pipeline is
+    /// the compatibility authority. Otherwise fontc compiles the
+    /// source directly, with a gftools-fix-font pass when the tool
+    /// can be found. Runs in the background; reports through the
+    /// status note.
     #[cfg(not(target_family = "wasm"))]
     fn command_export(&mut self, cx: &mut Context<Self>) {
         if self
@@ -11000,6 +11047,58 @@ impl Workspace {
             self.status_note = Some("Save the font before exporting".into());
             return;
         }
+        if let Some((script, workdir)) = Self::gf_build_script(&source) {
+            let label = script
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "build script".into());
+            self.status_note =
+                Some(format!("Exporting through {label}…").into());
+            cx.spawn(async move |this, cx| {
+                let result: Result<String, String> = cx
+                    .background_executor()
+                    .spawn({
+                        let label = label.clone();
+                        async move {
+                            let path_env =
+                                Workspace::export_path_env(Some(&workdir));
+                            let output =
+                                std::process::Command::new("/bin/bash")
+                                    .arg(&script)
+                                    .current_dir(&workdir)
+                                    .env("PATH", path_env)
+                                    .output()
+                                    .map_err(|e| format!("{e}"))?;
+                            if output.status.success() {
+                                Ok(format!(
+                                    "Exported through {label} → {}",
+                                    workdir.join("fonts").display()
+                                ))
+                            } else {
+                                let stderr =
+                                    String::from_utf8_lossy(&output.stderr);
+                                Err(stderr
+                                    .lines()
+                                    .rev()
+                                    .find(|l| !l.trim().is_empty())
+                                    .unwrap_or("build script failed")
+                                    .to_string())
+                            }
+                        }
+                    })
+                    .await;
+                this.update(cx, |workspace, cx| {
+                    workspace.status_note = Some(match result {
+                        Ok(note) => note.into(),
+                        Err(e) => format!("Export failed: {e}").into(),
+                    });
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
         let Some(fontc) = fontc_binary() else {
             self.status_note =
                 Some("fontc not found: cargo install fontc".into());
@@ -11016,7 +11115,7 @@ impl Workspace {
         let out_file = out_dir.join(format!("{stem}.ttf"));
         self.status_note = Some(format!("Exporting {stem}.ttf…").into());
         cx.spawn(async move |this, cx| {
-            let result: Result<PathBuf, String> = cx
+            let result: Result<(PathBuf, bool), String> = cx
                 .background_executor()
                 .spawn(async move {
                     std::fs::create_dir_all(&out_dir)
@@ -11035,7 +11134,21 @@ impl Workspace {
                         .output()
                         .map_err(|e| format!("{e}"))?;
                     if output.status.success() {
-                        Ok(out_file)
+                        // Google Fonts spec fixes when gftools is
+                        // around (PATH after export_path_env, which
+                        // includes any repo venv above the source).
+                        let path_env =
+                            Workspace::export_path_env(source.parent());
+                        let fixed = std::process::Command::new(
+                            "gftools-fix-font",
+                        )
+                        .arg("-o")
+                        .arg(&out_file)
+                        .arg(&out_file)
+                        .env("PATH", path_env)
+                        .output()
+                        .is_ok_and(|o| o.status.success());
+                        Ok((out_file, fixed))
                     } else {
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         Err(stderr
@@ -11049,7 +11162,15 @@ impl Workspace {
                 .await;
             this.update(cx, |workspace, cx| {
                 workspace.status_note = Some(match result {
-                    Ok(path) => format!("Exported {}", path.display()).into(),
+                    Ok((path, fixed)) => if fixed {
+                        format!("Exported {} (gftools fixes applied)", path.display())
+                    } else {
+                        format!(
+                            "Exported {} (no gftools on PATH: skipped GF fixes)",
+                            path.display()
+                        )
+                    }
+                    .into(),
                     Err(e) => format!("Export failed: {e}").into(),
                 });
                 cx.notify();
