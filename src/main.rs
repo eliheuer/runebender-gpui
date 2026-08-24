@@ -12023,8 +12023,18 @@ impl Workspace {
                 }
                 let name = sort.glyph_name()?;
                 let glyph = *font.name_map.get(name)?;
+                // Off the masters the strip shows the interpolation,
+                // like the canvas ghost (and the Instances rows park
+                // the location, so clicking Medium previews Medium).
+                // Pen positions stay the buffer's: master metrics.
+                let path = self
+                    .project
+                    .as_ref()
+                    .and_then(|p| p.interpolated_glyph(name))
+                    .map(|(path, _)| Arc::new(path))
+                    .unwrap_or_else(|| font.glyphs[glyph].path.clone());
                 Some((
-                    font.glyphs[glyph].path.clone(),
+                    path,
                     item.x,
                     item.y,
                     font.glyphs[glyph].advance,
