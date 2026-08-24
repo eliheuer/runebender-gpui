@@ -126,7 +126,10 @@ Deliberate non-goals are in the last section.
 ## OpenType features
 
 - [x] Shaping preview in text mode (the shared text engine)
-- [ ] Feature code editing (.fea) with syntax check
+- [~] Feature code editing: the Features section edits
+      features.fea with Apply/Revert and a real compile check
+      (fea-rs), live into the shaping preview. The prefix/class/
+      feature rail and syntax colors come later
 - [~] Automatic feature generation: kern, mark, and mkmk come
       from fontc at export; liga and ccmp writers come later
 - [ ] Feature preview toggles in the editor
