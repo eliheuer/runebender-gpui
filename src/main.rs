@@ -1442,6 +1442,65 @@ fn build_fill_path(
     build_path(outline, transform, origin, PathBuilder::fill())
 }
 
+/// Replace targeted contours with the outline of a stroke of the
+/// given width (round joins and caps), the Make Stroke half of
+/// Glyphs' Offset Curve. An empty `selected` set targets every
+/// contour. Returns false when nothing changed.
+fn expand_stroke_contours(
+    glyph: &mut norad::Glyph,
+    selected: &std::collections::HashSet<usize>,
+    width: f64,
+) -> bool {
+    let style = kurbo::Stroke::new(width);
+    let opts = kurbo::StrokeOpts::default();
+    let empty = std::collections::HashMap::new();
+    let mut out: Vec<norad::Contour> = Vec::new();
+    let mut any = false;
+    for (ci, contour) in glyph.contours.iter().enumerate() {
+        let targeted = selected.is_empty() || selected.contains(&ci);
+        if !targeted {
+            out.push(contour.clone());
+            continue;
+        }
+        let path = runebender_core::glyph_paths::contour_to_bezpath(contour);
+        let stroked =
+            kurbo::stroke(path.elements().iter().copied(), &style, &opts, 0.25);
+        // One stroked outline can be several subpaths (a closed
+        // skeleton keeps its counter).
+        let mut sub = BezPath::new();
+        let mut made = false;
+        for el in stroked.elements() {
+            if matches!(el, PathEl::MoveTo(_)) && !sub.elements().is_empty() {
+                if let Some(c) =
+                    runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty)
+                {
+                    out.push(c);
+                    made = true;
+                }
+                sub = BezPath::new();
+            }
+            sub.push(*el);
+        }
+        if !sub.elements().is_empty() {
+            if let Some(c) =
+                runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty)
+            {
+                out.push(c);
+                made = true;
+            }
+        }
+        if made {
+            any = true;
+        } else {
+            out.push(contour.clone());
+        }
+    }
+    if any {
+        glyph.contours = out;
+    }
+    any
+}
+
 // ============================================================================
 // EDITOR VIEWPORT
 // ============================================================================
@@ -1846,6 +1905,8 @@ struct Workspace {
     kern_inputs: KernInputs,
     /// Slant angle field in the Transformations section (degrees).
     slant_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Stroke width field in the Transformations section (units).
+    stroke_input: gpui::Entity<gpui_component::input::InputState>,
     /// The Instances editor field under the axis sliders: Enter
     /// renames the instance at the preview location, or adds one.
     instance_name_input: gpui::Entity<gpui_component::input::InputState>,
@@ -5295,6 +5356,8 @@ impl Workspace {
                 // Slanter: shear the selection (or the whole glyph)
                 // by an angle typed in degrees. Enter applies;
                 // positive leans right, the italic convention.
+                // Stroke: expand the selected contours (or all) into
+                // stroked outlines of the typed width.
                 .child(
                     div()
                         .flex()
@@ -5306,8 +5369,17 @@ impl Workspace {
                                 .text_color(t::text_muted())
                                 .child("Slant"),
                         )
-                        .child(div().w(px(80.0)).child(
+                        .child(div().w(px(64.0)).child(
                             gpui_component::input::Input::new(&self.slant_input),
+                        ))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(t::text_muted())
+                                .child("Stroke"),
+                        )
+                        .child(div().w(px(64.0)).child(
+                            gpui_component::input::Input::new(&self.stroke_input),
                         )),
                 ),
         )
@@ -11985,6 +12057,34 @@ impl Workspace {
     /// Boolean path op over the glyph's contours (web boolean tiles):
     /// union merges everything; the others apply first contour vs the
     /// rest combined.
+    /// Expand contours into stroked outlines (the Make Stroke half
+    /// of Glyphs' Offset Curve): each selected contour — all when
+    /// nothing is selected — becomes the outline of a stroke of the
+    /// typed width, round joins and caps. The monoline workflow: draw
+    /// open skeleton paths, type a weight, get letterforms.
+    fn command_expand_stroke(&mut self, width: f64) {
+        let Mode::Editor(index) = self.mode else { return };
+        if !(width > 0.0) {
+            return;
+        }
+        self.push_undo_snapshot(index);
+        let selected_contours: std::collections::HashSet<usize> =
+            self.editor.selected.iter().map(|(c, _)| *c).collect();
+        let changed = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    expand_stroke_contours(g, &selected_contours, width)
+                })
+            })
+            .unwrap_or(false);
+        if !changed {
+            self.editor.undo.pop();
+        } else {
+            self.editor.selected.clear();
+        }
+    }
+
     fn command_boolean(&mut self, op: linesweeper::BinaryOp) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -15031,6 +15131,33 @@ fn main() {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Angle°")
                     });
+                    let stroke_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("Width")
+                    });
+                    let sub_stroke = cx.subscribe_in(&stroke_input, window, {
+                        let state = stroke_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                if let Ok(width) = state
+                                    .read(cx)
+                                    .value()
+                                    .trim()
+                                    .parse::<f64>()
+                                {
+                                    this.command_expand_stroke(width);
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    });
                     let instance_name_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Instance name")
@@ -15422,6 +15549,7 @@ fn main() {
                             value: kern_value,
                         },
                         slant_input,
+                        stroke_input,
                         instance_name_input,
                         features_input,
                         features_edited: false,
@@ -15442,7 +15570,7 @@ fn main() {
                             sub_fi_xh, sub_fi_ch,
                             sub_kern_filter, sub_kern_first,
                             sub_kern_second, sub_kern_value, sub_slant,
-                            sub_features, sub_instance_name,
+                            sub_features, sub_instance_name, sub_stroke,
                         ],
                     };
                     workspace.rebuild_text_models();
@@ -15597,6 +15725,39 @@ mod tests {
         project.ds_dirty = true;
         project.refresh_instances_from_doc();
         assert_eq!(project.instances.len(), before - 1);
+    }
+
+    #[test]
+    fn expand_stroke_makes_outlines() {
+        use norad::{Contour, ContourPoint, PointType};
+        // An open two-point skeleton line from (0,0) to (100,0).
+        let line = Contour::new(
+            vec![
+                ContourPoint::new(0.0, 0.0, PointType::Move, false, None, None),
+                ContourPoint::new(100.0, 0.0, PointType::Line, false, None, None),
+            ],
+            None,
+        );
+        let mut glyph = norad::Glyph::new("stroke-test");
+        glyph.contours = vec![line];
+        let all = std::collections::HashSet::new();
+        assert!(expand_stroke_contours(&mut glyph, &all, 40.0));
+        // The skeleton became a closed outline that spans the stroke:
+        // 100 long plus round caps of radius 20 each side, 40 tall.
+        assert_eq!(glyph.contours.len(), 1);
+        let ys: Vec<f64> = glyph.contours[0].points.iter().map(|p| p.y).collect();
+        let xs: Vec<f64> = glyph.contours[0].points.iter().map(|p| p.x).collect();
+        let (min_y, max_y) = ys.iter().fold((f64::MAX, f64::MIN), |a, &v| {
+            (a.0.min(v), a.1.max(v))
+        });
+        let (min_x, max_x) = xs.iter().fold((f64::MAX, f64::MIN), |a, &v| {
+            (a.0.min(v), a.1.max(v))
+        });
+        assert!((max_y - min_y - 40.0).abs() <= 2.0, "stroke height ~40");
+        assert!((max_x - min_x - 140.0).abs() <= 2.0, "length plus caps ~140");
+        // Width zero refuses.
+        let mut untouched = norad::Glyph::new("no-op");
+        assert!(!expand_stroke_contours(&mut untouched, &all, 40.0));
     }
 
     #[test]
