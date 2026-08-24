@@ -1730,6 +1730,7 @@ struct Workspace {
     search_case: bool,
     metric_inputs: MetricInputs,
     font_info_inputs: FontInfoInputs,
+    kern_inputs: KernInputs,
     glyph_inputs: GlyphInputs,
     context_menu: Option<ContextMenu>,
     /// The Selection panel's 9-point reference for numeric move and
@@ -1865,6 +1866,15 @@ struct FontInfoInputs {
     descender: gpui::Entity<gpui_component::input::InputState>,
     x_height: gpui::Entity<gpui_component::input::InputState>,
     cap_height: gpui::Entity<gpui_component::input::InputState>,
+}
+
+/// The Kerning section's inputs: a live filter over the pair list,
+/// and a first/second/value editor that commits on Enter.
+struct KernInputs {
+    filter: gpui::Entity<gpui_component::input::InputState>,
+    first: gpui::Entity<gpui_component::input::InputState>,
+    second: gpui::Entity<gpui_component::input::InputState>,
+    value: gpui::Entity<gpui_component::input::InputState>,
 }
 
 /// Which Font Info field an input commits to.
@@ -9347,6 +9357,172 @@ impl Workspace {
         set(&r_input, group_r, window, cx);
     }
 
+    /// Commit the Kerning section's editor row: set (or update) the
+    /// pair on the active master. First and second may be glyph names
+    /// or group names (public.kern1./public.kern2.).
+    fn apply_kern_pair(&mut self, first: &str, second: &str, value: f64) {
+        let (Ok(first), Ok(second)) =
+            (norad::Name::new(first), norad::Name::new(second))
+        else {
+            self.status_note = Some("Kerning: invalid name".into());
+            return;
+        };
+        if let Some(font) = self.font_mut() {
+            font.font
+                .kerning
+                .entry(first)
+                .or_default()
+                .insert(second, value);
+            font.kerning_dirty = true;
+            font.dirty = true;
+        }
+        self.rebuild_text_models();
+    }
+
+    /// Remove one kerning pair from the active master.
+    fn delete_kern_pair(&mut self, first: &str, second: &str) {
+        if let Some(font) = self.font_mut() {
+            let mut emptied = false;
+            if let Some(seconds) = font.font.kerning.get_mut(first) {
+                seconds.retain(|name, _| name.as_str() != second);
+                emptied = seconds.is_empty();
+            }
+            if emptied {
+                font.font.kerning.retain(|name, _| name.as_str() != first);
+            }
+            font.kerning_dirty = true;
+            font.dirty = true;
+        }
+        self.rebuild_text_models();
+    }
+
+    /// Kerning section (grid mode): every pair on the active master,
+    /// filtered by the search field, with an editor row that commits
+    /// on Enter. Glyphs keeps this in its kerning window; the drag
+    /// workflow in text mode stays the fast path.
+    fn kerning_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(font) = self.font() else {
+            return self.section(cx, "Kerning", div());
+        };
+        let filter = self
+            .kern_inputs
+            .filter
+            .read(cx)
+            .value()
+            .trim()
+            .to_lowercase();
+        let mut pairs: Vec<(String, String, f64)> = Vec::new();
+        let mut hidden = 0usize;
+        const CAP: usize = 200;
+        for (first, seconds) in font.font.kerning.iter() {
+            for (second, value) in seconds.iter() {
+                if !filter.is_empty()
+                    && !first.as_str().to_lowercase().contains(&filter)
+                    && !second.as_str().to_lowercase().contains(&filter)
+                {
+                    continue;
+                }
+                if pairs.len() >= CAP {
+                    hidden += 1;
+                    continue;
+                }
+                pairs.push((first.to_string(), second.to_string(), *value));
+            }
+        }
+        let total = pairs.len() + hidden;
+        let field = |input: &gpui::Entity<gpui_component::input::InputState>| {
+            div()
+                .flex_1()
+                .child(gpui_component::input::Input::new(input))
+        };
+        let editor_row = div()
+            .flex()
+            .gap_1()
+            .child(field(&self.kern_inputs.first))
+            .child(field(&self.kern_inputs.second))
+            .child(field(&self.kern_inputs.value));
+        let mut list = div()
+            .id("kerning-pairs")
+            .max_h(px(220.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        for (i, (first, second, value)) in pairs.iter().enumerate() {
+            let (f2, s2) = (first.clone(), second.clone());
+            let (f3, s3, v3) = (first.clone(), second.clone(), *value);
+            list = list.child(
+                div()
+                    .id(("kern-pair", i))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_1()
+                    .py_0p5()
+                    .text_xs()
+                    .cursor_pointer()
+                    .hover(|el| el.bg(t::cell_selected_bg()))
+                    // Clicking a row loads it into the editor row, so
+                    // adjusting an existing pair is click, type, Enter.
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let sets = [
+                            (&this.kern_inputs.first, f3.clone()),
+                            (&this.kern_inputs.second, s3.clone()),
+                            (&this.kern_inputs.value, format!("{v3}")),
+                        ];
+                        for (entity, value) in sets {
+                            entity.clone().update(cx, |st, cx| {
+                                st.set_value(value, window, cx);
+                            });
+                        }
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .text_color(t::text())
+                            .child(format!("{first} · {second}")),
+                    )
+                    .child(
+                        div()
+                            .text_color(t::text_muted())
+                            .child(format!("{value:.0}")),
+                    )
+                    .child(
+                        div()
+                            .id(("kern-del", i))
+                            .px_1()
+                            .text_color(t::text_muted())
+                            .cursor_pointer()
+                            .hover(|el| el.text_color(t::text()))
+                            .child("×")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.delete_kern_pair(&f2, &s2);
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(gpui_component::input::Input::new(&self.kern_inputs.filter))
+            .child(editor_row)
+            .child(list)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child(if hidden > 0 {
+                        format!("{total} pairs · showing {CAP}")
+                    } else {
+                        format!("{total} pairs")
+                    }),
+            );
+        self.section(cx, "Kerning", body)
+    }
+
     /// Commit one Font Info field (Enter in the Font Info section).
     /// The family name is font-wide and lands on every master; style
     /// and the metrics belong to the active master.
@@ -12910,6 +13086,7 @@ impl Render for Workspace {
             .when(!in_editor, |el| {
                 el.child(self.glyph_info_panel(cx))
                     .child(self.font_info_section(cx))
+                    .child(self.kerning_section(cx))
                     .child(self.layers_section(cx))
                     .child(self.glyph_preview_panel())
             });
@@ -13391,6 +13568,90 @@ fn main() {
                         font_info_sub(cx, window, &fi_xh, FontInfoField::XHeight);
                     let sub_fi_ch =
                         font_info_sub(cx, window, &fi_ch, FontInfoField::CapHeight);
+                    let kern_filter = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("Filter pairs")
+                    });
+                    let kern_first = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("First")
+                    });
+                    let kern_second = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("Second")
+                    });
+                    let kern_value = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("Value")
+                    });
+                    // The filter redraws the list as it changes; the
+                    // three editor fields commit together on Enter.
+                    let sub_kern_filter = cx.subscribe_in(
+                        &kern_filter,
+                        window,
+                        |_: &mut Workspace,
+                         _,
+                         ev: &gpui_component::input::InputEvent,
+                         _,
+                         cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::Change
+                            ) {
+                                cx.notify();
+                            }
+                        },
+                    );
+                    let kern_commit = |cx: &mut Context<Workspace>,
+                                       window: &mut Window,
+                                       state: &gpui::Entity<
+                        gpui_component::input::InputState,
+                    >| {
+                        let state = state.clone();
+                        cx.subscribe_in(&state, window, {
+                            move |this: &mut Workspace,
+                                  _,
+                                  ev: &gpui_component::input::InputEvent,
+                                  _,
+                                  cx| {
+                                if matches!(
+                                    ev,
+                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                ) {
+                                    let first = this
+                                        .kern_inputs
+                                        .first
+                                        .read(cx)
+                                        .value()
+                                        .trim()
+                                        .to_string();
+                                    let second = this
+                                        .kern_inputs
+                                        .second
+                                        .read(cx)
+                                        .value()
+                                        .trim()
+                                        .to_string();
+                                    let value = this
+                                        .kern_inputs
+                                        .value
+                                        .read(cx)
+                                        .value()
+                                        .trim()
+                                        .parse::<f64>();
+                                    if let (false, false, Ok(value)) =
+                                        (first.is_empty(), second.is_empty(), value)
+                                    {
+                                        this.apply_kern_pair(&first, &second, value);
+                                        cx.notify();
+                                    }
+                                }
+                            }
+                        })
+                    };
+                    let sub_kern_first = kern_commit(cx, window, &kern_first);
+                    let sub_kern_second = kern_commit(cx, window, &kern_second);
+                    let sub_kern_value = kern_commit(cx, window, &kern_value);
                     let metric_sub = |cx: &mut Context<Workspace>,
                                       window: &mut Window,
                                       state: &gpui::Entity<gpui_component::input::InputState>,
@@ -13690,6 +13951,12 @@ fn main() {
                             x_height: fi_xh,
                             cap_height: fi_ch,
                         },
+                        kern_inputs: KernInputs {
+                            filter: kern_filter,
+                            first: kern_first,
+                            second: kern_second,
+                            value: kern_value,
+                        },
                         axis_sliders: Vec::new(),
                         clipboard: Vec::new(),
                         #[cfg(target_family = "wasm")]
@@ -13703,6 +13970,8 @@ fn main() {
                             sub_fi_family, sub_fi_style, sub_fi_upm,
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
                             sub_fi_xh, sub_fi_ch,
+                            sub_kern_filter, sub_kern_first,
+                            sub_kern_second, sub_kern_value,
                         ],
                     };
                     workspace.rebuild_text_models();
