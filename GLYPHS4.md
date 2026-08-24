@@ -66,8 +66,14 @@ Deliberate non-goals are in the last section.
 - [~] Free per-glyph layers: backup to a named layer, draw any
       layer as an underlay, swap with the drawing, delete (Masters
       section). Editing directly on a non-default layer comes later
-- [ ] Intermediate ("brace") layers per glyph
-- [ ] Alternate ("bracket") layers for shape switching
+- [x] Intermediate ("brace") layers: sparse designspace sources
+      load into per-glyph interpolation models; "+ Intermediate"
+      freezes the preview location into a {500} layer and
+      registers the source. Edit via the swap arrows
+- [x] Alternate ("bracket") layers: "Switch At" in the Glyph
+      panel creates the unencoded .bold alternate in every master
+      plus the designspace rule; the panel shows and removes the
+      switch, and the preview strip substitutes past it
 - [~] Guides: global and local per-glyph guides (draw, drag with
       snap, hover highlight, grab knobs, add and delete from the
       context menu; two hues tell the scopes apart). Locking and
