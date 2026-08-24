@@ -90,6 +90,8 @@ gpui::actions!(
         RoundCorners,
         HyperToCubic,
         TraceImage,
+        PlaceImage,
+        RemoveImage,
         Harmonize,
         Balance,
         Optimize,
@@ -223,6 +225,8 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Exclude", BooleanExclude),
                 MenuItem::separator(),
                 MenuItem::action("Trace Image…", TraceImage),
+                MenuItem::action("Place Image…", PlaceImage),
+                MenuItem::action("Remove Image", RemoveImage),
                 MenuItem::separator(),
                 MenuItem::action("Harmonize", Harmonize),
                 MenuItem::action("Balance", Balance),
@@ -1838,6 +1842,12 @@ struct Workspace {
     /// The last blurred frame, kept so dragging a point does not
     /// re-rasterize the preview on every mouse move.
     preview_blur_cache: Arc<Mutex<Option<(u64, Arc<gpui::RenderImage>)>>>,
+    /// Decoded glyph background images from the UFO images store,
+    /// keyed by file name; None caches a failed decode. Behind a
+    /// mutex because rendering (which fills it) holds &self.
+    glyph_image_cache: Arc<
+        Mutex<std::collections::HashMap<String, Option<Arc<gpui::RenderImage>>>>,
+    >,
     preview_invert: bool,
     preview_blur_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
     /// Grid cell size in px, driven by the bottom bar's zoom slider.
@@ -6201,6 +6211,33 @@ impl Workspace {
     }
 
     fn editor_view(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // The glyph's background image (tracing template), with its
+        // placement rect in design space. Shear in the stored
+        // transform is not drawn; scale and offset are.
+        let glyph_image: Option<(Arc<gpui::RenderImage>, kurbo::Rect)> =
+            (self.show_background)
+                .then(|| {
+                    let img = self
+                        .font()?
+                        .font
+                        .get_glyph(self.font()?.glyphs.get(index)?.name.as_ref())?
+                        .image
+                        .clone()?;
+                    let file = img.file_name().to_string_lossy().to_string();
+                    let image = self.glyph_image(&file)?;
+                    let size = image.size(0);
+                    let (w, h) =
+                        (i32::from(size.width) as f64, i32::from(size.height) as f64);
+                    let t = &img.transform;
+                    let rect = kurbo::Rect::new(
+                        t.x_offset,
+                        t.y_offset,
+                        t.x_offset + w * t.x_scale,
+                        t.y_offset + h * t.y_scale,
+                    );
+                    Some((image, rect))
+                })
+                .flatten();
         let font = self.font().unwrap();
         let entry = &font.glyphs[index];
         let outline = entry.contour_path.clone();
@@ -6786,6 +6823,30 @@ impl Workspace {
                                 ));
                             };
                             if !text_mode {
+                                // The tracing template sits under
+                                // everything.
+                                if let Some((image, rect)) = &glyph_image {
+                                    let a = to_screen(rect.x0, rect.y0);
+                                    let b = to_screen(rect.x1, rect.y1);
+                                    let target = Bounds::from_corners(
+                                        gpui::point(
+                                            a.x.min(b.x),
+                                            a.y.min(b.y),
+                                        ),
+                                        gpui::point(
+                                            a.x.max(b.x),
+                                            a.y.max(b.y),
+                                        ),
+                                    );
+                                    let _ = window.paint_image(
+                                        target,
+                                        target,
+                                        gpui::Corners::default(),
+                                        image.clone(),
+                                        0,
+                                        true,
+                                    );
+                                }
                                 // Every guide the font defines, the way
                                 // the web draws them: the baseline
                                 // always, then the box edges, the upm,
@@ -11469,6 +11530,165 @@ impl Workspace {
         .detach();
     }
 
+    /// Glyph > Place Image…: copy a picture into the UFO's images
+    /// store and set it as this glyph's background image, scaled to
+    /// the em and sitting on the descender. The tracing-template
+    /// workflow; norad round-trips the images directory.
+    fn command_place_image(&mut self, cx: &mut Context<Self>) {
+        let Mode::Editor(index) = self.mode else { return };
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Place".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let bytes = std::fs::read(&path);
+            this.update(cx, |workspace, cx| {
+                match bytes {
+                    Ok(bytes) => {
+                        workspace.apply_place_image(index, &path, bytes)
+                    }
+                    Err(e) => {
+                        workspace.status_note =
+                            Some(format!("Place image: {e}").into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn apply_place_image(
+        &mut self,
+        index: usize,
+        path: &std::path::Path,
+        bytes: Vec<u8>,
+    ) {
+        // Decode first: a file the editor cannot draw is refused
+        // rather than silently written into the font.
+        let decoded = match image::load_from_memory(&bytes) {
+            Ok(img) => img,
+            Err(e) => {
+                self.status_note = Some(format!("Place image: {e}").into());
+                return;
+            }
+        };
+        let (img_w, img_h) = (decoded.width() as f64, decoded.height() as f64);
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "image.png".into());
+        let Some(font) = self.font() else { return };
+        let (ascender, descender) = (font.ascender, font.descender);
+        let name = font.glyphs[index].name.to_string();
+        let scale = ((ascender - descender) / img_h.max(1.0)).max(1e-6);
+        let transform = norad::AffineTransform {
+            x_scale: scale,
+            xy_scale: 0.0,
+            yx_scale: 0.0,
+            y_scale: scale,
+            x_offset: 0.0,
+            y_offset: descender,
+        };
+        let image = match norad::Image::new(
+            std::path::PathBuf::from(&file_name),
+            None,
+            transform,
+        ) {
+            Ok(image) => image,
+            Err(e) => {
+                self.status_note = Some(format!("Place image: {e}").into());
+                return;
+            }
+        };
+        if let Some(font) = self.font_mut() {
+            // An existing entry under the same name is replaced.
+            let _ = font
+                .font
+                .images
+                .insert(std::path::PathBuf::from(&file_name), bytes);
+            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
+                glyph.image = Some(image);
+            }
+            font.dirty = true;
+            font.modified_glyphs.insert(name);
+        }
+        // The cache entry is rebuilt from the store on next paint.
+        self.glyph_image_cache.lock().unwrap().remove(&file_name);
+        self.show_background = true;
+        self.status_note = Some(
+            format!("Placed {file_name} · {img_w:.0}×{img_h:.0}px").into(),
+        );
+    }
+
+    /// Glyph > Remove Image: unlink this glyph's background image.
+    /// The stored file stays; other glyphs may reference it.
+    fn command_remove_image(&mut self) {
+        let Mode::Editor(index) = self.mode else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if let Some(font) = self.font_mut() {
+            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
+                if glyph.image.take().is_some() {
+                    font.dirty = true;
+                    font.modified_glyphs.insert(name);
+                }
+            }
+        }
+    }
+
+    /// The decoded background image for a file in the UFO images
+    /// store, cached. gpui's RenderImage wants premultiplied BGRA.
+    fn glyph_image(&self, file_name: &str) -> Option<Arc<gpui::RenderImage>> {
+        if let Some(cached) = self.glyph_image_cache.lock().unwrap().get(file_name)
+        {
+            return cached.clone();
+        }
+        let decoded = self
+            .font()
+            .and_then(|f| {
+                f.font
+                    .images
+                    .get(std::path::Path::new(file_name))
+                    .and_then(|r| r.ok())
+            })
+            .and_then(|bytes| image::load_from_memory(&bytes).ok())
+            .map(|img| {
+                let rgba = img.to_rgba8();
+                let (w, h) = (rgba.width(), rgba.height());
+                let mut bytes = rgba.into_raw();
+                for px in bytes.chunks_exact_mut(4) {
+                    let a = px[3] as u32;
+                    // Swap to BGRA and premultiply in one pass.
+                    let (r, g, b) = (px[0] as u32, px[1] as u32, px[2] as u32);
+                    px[0] = ((b * a) / 255) as u8;
+                    px[1] = ((g * a) / 255) as u8;
+                    px[2] = ((r * a) / 255) as u8;
+                }
+                let buffer = image::RgbaImage::from_raw(w, h, bytes)
+                    .expect("same-size buffer");
+                Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+                    buffer,
+                )]))
+            });
+        self.glyph_image_cache
+            .lock()
+            .unwrap()
+            .insert(file_name.to_string(), decoded.clone());
+        decoded
+    }
+
     fn apply_image_trace(&mut self, index: usize, bytes: &[u8]) {
         let Some(font) = self.font() else { return };
         let (ascender, descender) = (font.ascender, font.descender);
@@ -14795,6 +15015,13 @@ impl Render for Workspace {
                 this.command_round_corners();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &PlaceImage, _, cx| {
+                this.command_place_image(cx);
+            }))
+            .on_action(cx.listener(|this, _: &RemoveImage, _, cx| {
+                this.command_remove_image();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &TraceImage, _, cx| {
                 this.command_trace_image(cx);
             }))
@@ -15532,6 +15759,7 @@ fn main() {
                         reference_glyph_input: reference_glyph_input.clone(),
                         component_name_input: component_name_input.clone(),
                         anchor_name_input: anchor_name_input.clone(),
+                        glyph_image_cache: Default::default(),
                         glyph_inputs: GlyphInputs {
                             name: name_input,
                             unicode: unicode_input,
@@ -15741,6 +15969,54 @@ mod tests {
         project.ds_dirty = true;
         project.refresh_instances_from_doc();
         assert_eq!(project.instances.len(), before - 1);
+    }
+
+    #[test]
+    fn glyph_image_roundtrips_through_save() {
+        // A 2x2 png in the images store plus a glyph image reference
+        // must survive a save and reload (norad owns the images dir).
+        let mut font = runebender_core::new_font::new_font("Img", "Regular", 400);
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        ];
+        // Not a decodable png, but the store does not care; the
+        // editor validates before writing, the test only checks the
+        // round-trip.
+        font.images
+            .insert(std::path::PathBuf::from("scan.png"), png.to_vec())
+            .expect("store accepts");
+        let image = norad::Image::new(
+            std::path::PathBuf::from("scan.png"),
+            None,
+            norad::AffineTransform::default(),
+        )
+        .expect("image ref");
+        let glyph_name = font
+            .default_layer()
+            .iter()
+            .next()
+            .map(|g| g.name().to_string())
+            .expect("template has glyphs");
+        font.default_layer_mut()
+            .get_glyph_mut(&glyph_name)
+            .unwrap()
+            .image = Some(image);
+        let dir = std::env::temp_dir().join("rb-image-roundtrip.ufo");
+        std::fs::remove_dir_all(&dir).ok();
+        font.save(&dir).expect("saves");
+        let back = norad::Font::load(&dir).expect("reloads");
+        assert!(
+            back.images.get(std::path::Path::new("scan.png")).is_some(),
+            "images store round-trips"
+        );
+        assert!(
+            back.default_layer()
+                .get_glyph(&glyph_name)
+                .and_then(|g| g.image.as_ref())
+                .is_some(),
+            "glyph image reference round-trips"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
