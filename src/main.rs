@@ -5378,9 +5378,16 @@ impl Workspace {
             else {
                 return;
             };
-            let mut n = 1usize;
+            // Date-named like Glyphs' backup layers; a counter
+            // steps in when the same minute already has one.
+            let stamp = chrono::Local::now().format("%b %-d, %H.%M").to_string();
+            let mut n = 0usize;
             let layer_name = loop {
-                let candidate = format!("backup-{n}");
+                let candidate = if n == 0 {
+                    stamp.clone()
+                } else {
+                    format!("{stamp} ({n})")
+                };
                 let taken = font
                     .font
                     .layers
@@ -9847,14 +9854,27 @@ impl Workspace {
                             });
                         }
                     }))
-                    .child(
+                    .child({
+                        // Groups read as @name, the Glyphs kerning
+                        // window's shorthand; the editor row keeps
+                        // the full public.kern names.
+                        let short = |name: &str| {
+                            name.strip_prefix("public.kern1.")
+                                .or_else(|| name.strip_prefix("public.kern2."))
+                                .map(|g| format!("@{g}"))
+                                .unwrap_or_else(|| name.to_string())
+                        };
                         div()
                             .flex_1()
                             .min_w(px(0.0))
                             .truncate()
                             .text_color(t::text())
-                            .child(format!("{first} · {second}")),
-                    )
+                            .child(format!(
+                                "{} · {}",
+                                short(first),
+                                short(second)
+                            ))
+                    })
                     .child(
                         div()
                             .text_color(t::text_muted())
