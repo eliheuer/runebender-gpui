@@ -832,6 +832,11 @@ struct Project {
     /// Named designspace instances: style name and normalized
     /// location, for the Instances rows under the axis sliders.
     instances: Vec<(SharedString, runebender_core::var_model::Location)>,
+    /// The loaded designspace document, kept so instance (and later
+    /// axis) edits can be written back. None for single-UFO projects.
+    ds_doc: Option<norad::designspace::DesignSpaceDocument>,
+    /// Instance edits not yet written to the designspace file.
+    ds_dirty: bool,
 }
 
 impl Project {
@@ -884,6 +889,8 @@ impl Project {
             compat: std::collections::HashMap::new(),
             export_source: None,
             instances: Vec::new(),
+            ds_doc: None,
+            ds_dirty: false,
         };
         project.compute_compat();
         project
@@ -964,6 +971,8 @@ impl Project {
                 compat: std::collections::HashMap::new(),
                 export_source: None,
                 instances: Vec::new(),
+                ds_doc: None,
+                ds_dirty: false,
             })
         }
     }
@@ -1048,39 +1057,7 @@ impl Project {
                 .iter()
                 .map(|a| (a.name.clone(), 0.0))
                 .collect();
-            // Named instances, normalized like the master locations,
-            // for the Instances rows under the axis sliders.
-            let instances: Vec<(SharedString, runebender_core::var_model::Location)> =
-                doc.instances
-                    .iter()
-                    .map(|inst| {
-                        let name: SharedString = inst
-                            .stylename
-                            .clone()
-                            .or_else(|| inst.name.clone())
-                            .unwrap_or_else(|| "Instance".into())
-                            .into();
-                        let mut location =
-                            runebender_core::var_model::Location::new();
-                        for axis in &axes {
-                            let raw = inst
-                                .location
-                                .iter()
-                                .find(|d| d.name == axis.name)
-                                .and_then(|d| d.xvalue.or(d.uservalue))
-                                .map(|v| v as f64)
-                                .unwrap_or(axis.default);
-                            location.insert(
-                                axis.name.clone(),
-                                runebender_core::var_model::normalize_value(
-                                    raw, axis.min, axis.default, axis.max,
-                                ),
-                            );
-                        }
-                        (name, location)
-                    })
-                    .collect();
-            Ok(Self {
+            let mut project = Self {
                 active: default_index,
                 masters,
                 master_names,
@@ -1090,8 +1067,12 @@ impl Project {
                 location,
                 compat: std::collections::HashMap::new(),
                 export_source: None,
-                instances,
-            })
+                instances: Vec::new(),
+                ds_doc: Some(doc),
+                ds_dirty: false,
+            };
+            project.refresh_instances_from_doc();
+            Ok(project)
         }
     }
 
@@ -1158,6 +1139,8 @@ impl Project {
                 compat: std::collections::HashMap::new(),
                 export_source: None,
                 instances: Vec::new(),
+                ds_doc: None,
+                ds_dirty: false,
             }
         };
         let mut project = project;
@@ -1247,6 +1230,41 @@ impl Project {
         // Same counts everywhere: the disagreement is point types
         // (a curve against a line somewhere).
         Some("point types differ between masters".into())
+    }
+
+    /// Rebuild the Instances display rows (name + normalized
+    /// location) from the designspace document.
+    fn refresh_instances_from_doc(&mut self) {
+        let Some(doc) = self.ds_doc.as_ref() else { return };
+        self.instances = doc
+            .instances
+            .iter()
+            .map(|inst| {
+                let name: SharedString = inst
+                    .stylename
+                    .clone()
+                    .or_else(|| inst.name.clone())
+                    .unwrap_or_else(|| "Instance".into())
+                    .into();
+                let mut location = runebender_core::var_model::Location::new();
+                for axis in &self.axes {
+                    let raw = inst
+                        .location
+                        .iter()
+                        .find(|d| d.name == axis.name)
+                        .and_then(|d| d.xvalue.or(d.uservalue))
+                        .map(|v| v as f64)
+                        .unwrap_or(axis.default);
+                    location.insert(
+                        axis.name.clone(),
+                        runebender_core::var_model::normalize_value(
+                            raw, axis.min, axis.default, axis.max,
+                        ),
+                    );
+                }
+                (name, location)
+            })
+            .collect();
     }
 
     /// Check one glyph's compatibility across all masters.
@@ -1808,6 +1826,9 @@ struct Workspace {
     kern_inputs: KernInputs,
     /// Slant angle field in the Transformations section (degrees).
     slant_input: gpui::Entity<gpui_component::input::InputState>,
+    /// The Instances editor field under the axis sliders: Enter
+    /// renames the instance at the preview location, or adds one.
+    instance_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// The Features section's features.fea editor (grid mode).
     features_input: gpui::Entity<gpui_component::input::TextareaState>,
     /// Unapplied edits in the features editor: the refresh keeps its
@@ -11141,6 +11162,22 @@ impl Workspace {
                         Err(e) => failed.push(format!("{e}")),
                     }
                 }
+                // Instance edits go back into the designspace file.
+                if project.ds_dirty
+                    && let (Some(doc), Some(path)) = (
+                        project.ds_doc.as_ref(),
+                        project.export_source.as_ref(),
+                    )
+                    && path.extension().is_some_and(|e| e == "designspace")
+                {
+                    match doc.save(path) {
+                        Ok(()) => {
+                            project.ds_dirty = false;
+                            saved.push(path.display().to_string());
+                        }
+                        Err(e) => failed.push(format!("{e}")),
+                    }
+                }
                 *self.last_save.lock().unwrap() = web_time::Instant::now();
                 self.last_save_label = Some(
                     chrono::Local::now().format("%-I:%M %p").to_string().into(),
@@ -12094,9 +12131,11 @@ impl Workspace {
             );
         }
         let mut body = div().flex().flex_col().gap_2().child(rows);
-        if !project.instances.is_empty() {
+        if project.ds_doc.is_some() {
             // Named designspace instances: one row each; clicking
-            // parks the sliders and the preview on that instance.
+            // parks the sliders and the preview on that instance,
+            // × drops it. The field below renames the instance at
+            // the current location on Enter, or adds one there.
             let mut list = div().flex().flex_col();
             let here = &project.location;
             for (i, (name, location)) in project.instances.iter().enumerate() {
@@ -12122,10 +12161,24 @@ impl Workspace {
                             t::text()
                         })
                         .hover(|el| el.bg(t::cell_selected_bg()))
-                        .child(name.clone())
+                        .child(div().flex_1().min_w(px(0.0)).truncate().child(name.clone()))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.go_to_location(&target, window, cx);
-                        })),
+                        }))
+                        .child(
+                            div()
+                                .id(("instance-del", i))
+                                .px_1()
+                                .text_color(t::text_muted())
+                                .hover(|el| el.text_color(t::text()))
+                                .child("×")
+                                .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                                    let _ = ev;
+                                    cx.stop_propagation();
+                                    this.command_instance_delete(i);
+                                    cx.notify();
+                                })),
+                        ),
                 );
             }
             body = body.child(
@@ -12135,8 +12188,105 @@ impl Workspace {
                     .child("Instances"),
             );
             body = body.child(list);
+            body = body.child(gpui_component::input::Input::new(
+                &self.instance_name_input,
+            ));
         }
         Some(self.section(cx, "Axes", body))
+    }
+
+    /// Enter in the Instances field: rename the instance sitting at
+    /// the preview location, or add a new one there. The name is the
+    /// style name; the full name follows the family.
+    fn command_instance_upsert(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let Some(project) = self.project.as_mut() else { return };
+        if project.ds_doc.is_none() {
+            self.status_note =
+                Some("Instances need a designspace project".into());
+            return;
+        }
+        // The preview location in design coordinates, one value per
+        // axis, computed before the document is borrowed.
+        let wants: Vec<(String, f64)> = project
+            .axes
+            .iter()
+            .map(|axis| {
+                let normalized =
+                    project.location.get(&axis.name).copied().unwrap_or(0.0);
+                let raw = runebender_core::var_model::denormalize_value(
+                    normalized, axis.min, axis.default, axis.max,
+                );
+                (axis.name.clone(), raw)
+            })
+            .collect();
+        let defaults: std::collections::HashMap<String, f64> = project
+            .axes
+            .iter()
+            .map(|a| (a.name.clone(), a.default))
+            .collect();
+        let family = project
+            .masters
+            .first()
+            .and_then(|m| m.font.font_info.family_name.clone());
+        let doc = project.ds_doc.as_mut().expect("checked above");
+        let at_location = |inst: &norad::designspace::Instance| {
+            wants.iter().all(|(axis, want)| {
+                let got = inst
+                    .location
+                    .iter()
+                    .find(|d| d.name == *axis)
+                    .and_then(|d| d.xvalue.or(d.uservalue))
+                    .map(|v| v as f64)
+                    .or_else(|| defaults.get(axis).copied())
+                    .unwrap_or(0.0);
+                (got - want).abs() < 0.5
+            })
+        };
+        let note = match doc.instances.iter().position(at_location) {
+            Some(i) => {
+                let inst = &mut doc.instances[i];
+                inst.stylename = Some(name.to_string());
+                if let Some(fam) = &family {
+                    inst.name = Some(format!("{fam} {name}"));
+                }
+                format!("Renamed instance to {name}")
+            }
+            None => {
+                doc.instances.push(norad::designspace::Instance {
+                    familyname: family.clone(),
+                    stylename: Some(name.to_string()),
+                    name: family.as_ref().map(|f| format!("{f} {name}")),
+                    location: wants
+                        .iter()
+                        .map(|(axis, value)| norad::designspace::Dimension {
+                            name: axis.clone(),
+                            xvalue: Some(*value as f32),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                });
+                format!("Added instance {name}")
+            }
+        };
+        project.ds_dirty = true;
+        project.refresh_instances_from_doc();
+        self.status_note = Some(note.into());
+    }
+
+    /// Drop one instance (the × on its row). Saved with the font.
+    fn command_instance_delete(&mut self, index: usize) {
+        let Some(project) = self.project.as_mut() else { return };
+        let Some(doc) = project.ds_doc.as_mut() else { return };
+        if index < doc.instances.len() {
+            doc.instances.remove(index);
+            project.ds_dirty = true;
+            project.refresh_instances_from_doc();
+        }
     }
 
     /// Park the preview (and the sliders) on a normalized location.
@@ -14424,6 +14574,34 @@ fn main() {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Angle°")
                     });
+                    let instance_name_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("Instance name")
+                    });
+                    let sub_instance_name = cx.subscribe_in(
+                        &instance_name_input,
+                        window,
+                        {
+                            let state = instance_name_input.clone();
+                            move |this: &mut Workspace,
+                                  _,
+                                  ev: &gpui_component::input::InputEvent,
+                                  window,
+                                  cx| {
+                                if matches!(
+                                    ev,
+                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                ) {
+                                    let name = state.read(cx).value().to_string();
+                                    this.command_instance_upsert(&name);
+                                    state.update(cx, |st, cx| {
+                                        st.set_value(String::new(), window, cx);
+                                    });
+                                    cx.notify();
+                                }
+                            }
+                        },
+                    );
                     let features_input = cx.new(|cx| {
                         gpui_component::input::TextareaState::new(window, cx)
                     });
@@ -14783,6 +14961,7 @@ fn main() {
                             value: kern_value,
                         },
                         slant_input,
+                        instance_name_input,
                         features_input,
                         features_edited: false,
                         features_status: None,
@@ -14801,7 +14980,7 @@ fn main() {
                             sub_fi_xh, sub_fi_ch,
                             sub_kern_filter, sub_kern_first,
                             sub_kern_second, sub_kern_value, sub_slant,
-                            sub_features,
+                            sub_features, sub_instance_name,
                         ],
                     };
                     workspace.rebuild_text_models();
@@ -14931,6 +15110,31 @@ mod tests {
             .expect("a Bold instance");
         let weight = bold.1.values().next().copied().unwrap_or(0.0);
         assert!((weight - 1.0).abs() < 1e-6, "Bold sits at the axis max");
+    }
+
+    #[test]
+    fn designspace_roundtrip_and_instance_edit() {
+        // The saved document must equal the loaded one: instance
+        // editing rewrites the whole file, so nothing may be lost.
+        let path = default_font_path();
+        let doc = norad::designspace::DesignSpaceDocument::load(&path)
+            .expect("designspace loads");
+        let tmp = std::env::temp_dir().join("rb-ds-roundtrip.designspace");
+        doc.save(&tmp).expect("designspace saves");
+        let doc2 = norad::designspace::DesignSpaceDocument::load(&tmp)
+            .expect("saved designspace loads");
+        assert_eq!(doc, doc2, "designspace round-trips losslessly");
+        std::fs::remove_file(&tmp).ok();
+
+        // Upsert against the project: renaming at an existing
+        // location, adding at a fresh one, deleting.
+        let mut project = Project::load(&path).expect("designspace loads");
+        let before = project.instances.len();
+        let doc = project.ds_doc.as_mut().expect("designspace doc kept");
+        doc.instances.remove(0);
+        project.ds_dirty = true;
+        project.refresh_instances_from_doc();
+        assert_eq!(project.instances.len(), before - 1);
     }
 
     #[test]
