@@ -67,10 +67,10 @@ Deliberate non-goals are in the last section.
       section). Editing directly on a non-default layer comes later
 - [ ] Intermediate ("brace") layers per glyph
 - [ ] Alternate ("bracket") layers for shape switching
-- [~] Guides: global guides land (draw, drag with snap, hover
-      highlight, grab knobs, add and delete from the context
-      menu; fontinfo guidelines). Local per-glyph guides and
-      locking come later
+- [~] Guides: global and local per-glyph guides (draw, drag with
+      snap, hover highlight, grab knobs, add and delete from the
+      context menu; two hues tell the scopes apart). Locking and
+      angled-guide editing come later
 - [ ] Images placed in a layer as a tracing template
 - [x] Glyph notes (Note field in the Glyph panel, UFO glif note)
 
@@ -192,7 +192,8 @@ Deliberate non-goals are in the last section.
 - [x] Grid multi-select with batch mark color
 - [~] Font view detail: we show name and unicode; Glyphs 4 has a
       detail mode with category, script, and custom columns
-- [ ] Character / glyph info window (Unicode data lookup)
+- [~] Character info: the Glyph panel shows the encoded
+      character's Unicode name. A full lookup window comes later
 - [ ] Settings window (we have the theme menu only)
 - [ ] Autosave and file versioning
 
@@ -200,7 +201,9 @@ Deliberate non-goals are in the last section.
 
 - [x] Round corners
 - [x] Remove overlap
-- [ ] Offset curve (bolder or lighter, open-path stroke expand)
+- [~] Offset curve: the Stroke field expands skeleton contours
+      into stroked outlines (round joins and caps). The
+      bolder/lighter closed-contour offset comes later
 - [~] Slanter: the Transformations section shears the selection
       by typed degrees. Contrast and weight corrections come later
 - [ ] Simplify: redraw with fewer points (new in 4; our image
