@@ -9589,33 +9589,63 @@ impl Workspace {
     }
 
     fn apply_metric(&mut self, which: MetricField, value: f64) {
-        let Some(index) = (match self.mode {
-            Mode::Editor(index) => Some(index),
-            Mode::Grid => self.selected,
-        }) else {
-            return;
+        // A grid multi-selection batch-edits: the typed value lands
+        // on every selected glyph, the Glyphs list-edit behavior.
+        // No undo for the batch yet — undo is single-glyph.
+        let batch: Vec<usize> = if matches!(self.mode, Mode::Grid)
+            && self.multi_selected.len() > 1
+        {
+            let Some(font) = self.font() else { return };
+            self.multi_selected
+                .iter()
+                .filter_map(|name| font.name_map.get(name).copied())
+                .collect()
+        } else {
+            let Some(index) = (match self.mode {
+                Mode::Editor(index) => Some(index),
+                Mode::Grid => self.selected,
+            }) else {
+                return;
+            };
+            self.push_undo_snapshot(index);
+            vec![index]
         };
-        self.push_undo_snapshot(index);
+        let count = batch.len();
         let Some(font) = self.font_mut() else {
             return;
         };
-        let ink = font.ink_bounds(index);
-        let advance = font.glyphs[index].advance;
-        match which {
-            MetricField::Width => font.set_advance(index, value.round()),
-            MetricField::Lsb => {
-                if let Some(ink) = ink {
-                    // Move the ink; the right sidebearing absorbs it.
-                    font.shift_ink(index, (value - ink.x0).round());
+        for index in batch {
+            let ink = font.ink_bounds(index);
+            let advance = font.glyphs[index].advance;
+            match which {
+                MetricField::Width => font.set_advance(index, value.round()),
+                MetricField::Lsb => {
+                    if let Some(ink) = ink {
+                        // Move the ink; the right sidebearing absorbs it.
+                        font.shift_ink(index, (value - ink.x0).round());
+                    }
+                }
+                MetricField::Rsb => {
+                    if let Some(ink) = ink {
+                        font.set_advance(index, (ink.x1 + value).round());
+                    } else {
+                        font.set_advance(index, (advance + value).round());
+                    }
                 }
             }
-            MetricField::Rsb => {
-                if let Some(ink) = ink {
-                    font.set_advance(index, (ink.x1 + value).round());
-                } else {
-                    font.set_advance(index, (advance + value).round());
-                }
-            }
+        }
+        if count > 1 {
+            self.status_note = Some(
+                format!(
+                    "{} set on {count} glyphs",
+                    match which {
+                        MetricField::Width => "Width",
+                        MetricField::Lsb => "LSB",
+                        MetricField::Rsb => "RSB",
+                    }
+                )
+                .into(),
+            );
         }
     }
 
