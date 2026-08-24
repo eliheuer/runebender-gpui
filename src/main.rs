@@ -1820,6 +1820,9 @@ struct Workspace {
     measure_opts: MeasureOpts,
     /// Show the UFO background layer as a quiet outline.
     show_background: bool,
+    /// Per-glyph UFO layers drawn as underlays (layer names with the
+    /// eye on), beyond the default and background layers.
+    visible_glyph_layers: std::collections::HashSet<String>,
     /// Another glyph ghosted behind the drawing for comparison.
     reference_glyph: Option<String>,
     reference_glyph_input: gpui::Entity<gpui_component::input::InputState>,
@@ -5338,6 +5341,134 @@ impl Workspace {
         }
     }
 
+    /// The open glyph in the editor, or the grid selection.
+    fn current_glyph_index(&self) -> Option<usize> {
+        match self.mode {
+            Mode::Editor(index) => Some(index),
+            Mode::Grid => self.selected,
+        }
+    }
+
+    /// Non-default, non-background layers of the active master that
+    /// hold a copy of `name`.
+    fn glyph_layer_names(font: &norad::Font, name: &str) -> Vec<String> {
+        font.layers
+            .iter()
+            .filter(|l| !l.is_default())
+            .filter(|l| {
+                let ln = l.name().as_str();
+                ln != "public.background" && ln != "background"
+            })
+            .filter(|l| l.contains_glyph(name))
+            .map(|l| l.name().to_string())
+            .collect()
+    }
+
+    /// Copy the current drawing into a fresh backup layer
+    /// (backup-1, backup-2, …): the Glyphs copy-layer gesture.
+    fn command_backup_layer(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        let mut created = None;
+        if let Some(font) = self.font_mut() {
+            let Some(source) = font.font.get_glyph(name.as_str()).cloned()
+            else {
+                return;
+            };
+            let mut n = 1usize;
+            let layer_name = loop {
+                let candidate = format!("backup-{n}");
+                let taken = font
+                    .font
+                    .layers
+                    .get(&candidate)
+                    .is_some_and(|l| l.contains_glyph(name.as_str()));
+                if !taken {
+                    break candidate;
+                }
+                n += 1;
+            };
+            if let Ok(layer) = font.font.layers.get_or_create_layer(&layer_name)
+            {
+                let mut copy = norad::Glyph::new(name.as_str());
+                copy.width = source.width;
+                copy.contours = source.contours.clone();
+                copy.components = source.components.clone();
+                copy.anchors = source.anchors.clone();
+                layer.insert_glyph(copy);
+                font.dirty = true;
+                created = Some(layer_name);
+            }
+        }
+        if let Some(layer) = created {
+            self.visible_glyph_layers.insert(layer.clone());
+            self.status_note = Some(format!("Copied to {layer}").into());
+        }
+    }
+
+    /// Exchange the drawing with a named layer's copy (editor only,
+    /// so the swap is undoable like the background swap).
+    fn command_swap_layer(&mut self, layer_name: &str) {
+        let Mode::Editor(index) = self.mode else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        self.push_undo_snapshot(index);
+        let mut swapped = false;
+        if let Some(font) = self.font_mut() {
+            let fg = font
+                .font
+                .get_glyph(name.as_str())
+                .map(|g| g.contours.clone());
+            let other = font
+                .font
+                .layers
+                .get(layer_name)
+                .and_then(|l| l.get_glyph(name.as_str()))
+                .map(|g| g.contours.clone());
+            if let (Some(fg), Some(other)) = (fg, other) {
+                if let Some(layer) = font.font.layers.get_mut(layer_name) {
+                    if let Some(g) = layer.get_glyph_mut(name.as_str()) {
+                        g.contours = fg;
+                    }
+                }
+                font.edit_glyph(index, |g| {
+                    g.contours = other;
+                });
+                swapped = true;
+            }
+        }
+        if !swapped {
+            self.editor.undo.pop();
+        }
+    }
+
+    /// Drop a layer's copy of the current glyph; an emptied layer
+    /// goes with it.
+    fn command_delete_layer_glyph(&mut self, layer_name: &str) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if let Some(font) = self.font_mut() {
+            let mut emptied = false;
+            if let Some(layer) = font.font.layers.get_mut(layer_name) {
+                layer.remove_glyph(name.as_str());
+                emptied = layer.is_empty();
+            }
+            if emptied {
+                font.font.layers.remove(layer_name);
+            }
+            font.dirty = true;
+        }
+        self.visible_glyph_layers.remove(layer_name);
+    }
+
     /// The background layer we read: public.background first, then
     /// RoboFont's conventional plain "background".
     fn background_layer_name(font: &norad::Font) -> Option<String> {
@@ -5606,7 +5737,112 @@ impl Workspace {
                     .into_any_element()
             })
             .collect();
-        let body = div().flex().flex_col().children(rows);
+        let mut body = div().flex().flex_col().children(rows);
+        // Per-glyph layers: any other UFO layer holding this glyph.
+        // Eye = underlay, arrows = swap with the drawing, × = drop.
+        if let (Some(font), Some(name)) = (
+            self.font(),
+            self.current_glyph_index()
+                .and_then(|i| self.font().map(|f| f.glyphs[i].name.to_string())),
+        ) {
+            let layers = Self::glyph_layer_names(&font.font, &name);
+            if !layers.is_empty() {
+                body = body.child(
+                    div()
+                        .mt_1()
+                        .text_xs()
+                        .text_color(t::text_muted())
+                        .child("Glyph Layers"),
+                );
+            }
+            for (i, layer) in layers.into_iter().enumerate() {
+                let eye_on = self.visible_glyph_layers.contains(&layer);
+                let (l_eye, l_swap, l_del) =
+                    (layer.clone(), layer.clone(), layer.clone());
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .id(("glyph-layer-eye", i))
+                                .w(px(20.0))
+                                .text_sm()
+                                .cursor_pointer()
+                                .text_color(if eye_on {
+                                    t::accent()
+                                } else {
+                                    t::text_muted()
+                                })
+                                .child("◉")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.visible_glyph_layers.remove(&l_eye)
+                                    {
+                                        this.visible_glyph_layers
+                                            .insert(l_eye.clone());
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .truncate()
+                                .text_sm()
+                                .text_color(t::text())
+                                .child(layer.clone()),
+                        )
+                        .child(
+                            div()
+                                .id(("glyph-layer-swap", i))
+                                .px_1()
+                                .text_sm()
+                                .cursor_pointer()
+                                .text_color(t::text_muted())
+                                .hover(|el| el.text_color(t::text()))
+                                .child("⇅")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.command_swap_layer(&l_swap);
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(("glyph-layer-del", i))
+                                .px_1()
+                                .text_sm()
+                                .cursor_pointer()
+                                .text_color(t::text_muted())
+                                .hover(|el| el.text_color(t::text()))
+                                .child("×")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.command_delete_layer_glyph(&l_del);
+                                    cx.notify();
+                                })),
+                        ),
+                );
+            }
+            body = body.child(
+                div()
+                    .id("glyph-layer-backup")
+                    .mt_1()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .text_sm()
+                    .cursor_pointer()
+                    .border_1()
+                    .border_color(t::cell_border())
+                    .text_color(t::text())
+                    .child("+ Backup Layer")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.command_backup_layer();
+                        cx.notify();
+                    })),
+            );
+        }
         self.section(cx, "Masters", body)
     }
 
@@ -6107,6 +6343,20 @@ impl Workspace {
                 })
             })
             .flatten();
+        // Visible per-glyph layers, drawn like the background.
+        let glyph_layer_paths: Vec<Arc<BezPath>> = font
+            .font
+            .layers
+            .iter()
+            .filter(|l| {
+                !l.is_default()
+                    && self.visible_glyph_layers.contains(l.name().as_str())
+            })
+            .filter_map(|l| l.get_glyph(entry.name.as_ref()))
+            .map(|g| {
+                Arc::new(runebender_core::glyph_paths::contours_to_bezpath(g))
+            })
+            .collect();
         let reference_path: Option<Arc<BezPath>> = self
             .reference_glyph
             .as_ref()
@@ -6778,6 +7028,18 @@ impl Workspace {
                                 )
                             {
                                 window.paint_path(p, t::metric_quiet());
+                            }
+                            // Per-glyph layers with the eye on: same
+                            // quiet outline as the background.
+                            for path in &glyph_layer_paths {
+                                if let Some(p) = build_path(
+                                    path,
+                                    transform,
+                                    origin,
+                                    PathBuilder::stroke(px(1.0)),
+                                ) {
+                                    window.paint_path(p, t::metric_quiet());
+                                }
                             }
                             // Curvature comb, behind the outline so points
                             // stay selectable over it.
@@ -14163,6 +14425,7 @@ fn main() {
                         curve_continuity: false,
                         measure_opts: MeasureOpts::default(),
                         show_background: true,
+                        visible_glyph_layers: Default::default(),
                         reference_glyph: None,
                         reference_glyph_input: reference_glyph_input.clone(),
                         component_name_input: component_name_input.clone(),
