@@ -247,3 +247,32 @@ Ordered by leverage. Each step is small enough to land on its own.
 Corner and smart components, strokes, pen points, color fonts,
 and hinting come after these. They are deep model changes and
 none of them blocks daily type design work.
+
+## UI reference notes (Glyphs 4 screenshots, 2026-08-24)
+
+Layout facts from Glyphs 4 on the Virtua Grotesk designspace, for
+building the matching pieces here.
+
+- Layers palette: masters in bold; backup layers indented under
+  their master and named by date ("Aug 24, 26 at 13:09"); + and −
+  below the list.
+- Kerning window: three columns (Left, Value, Right), group names
+  shown as @name in a second color, search on top, pair count at
+  the foot.
+- Features tab: left rail lists Prefix, Classes, and Features;
+  auto-generated entries carry a regenerate badge. Right side is a
+  syntax-colored code pane with line numbers. Top: Active and
+  Generate automatically checkboxes. Bottom: Update and Compile.
+- Font Info is one window with Font / Masters / Exports / Features
+  / Document / Notes tabs. Masters tab: Active toggle, name, icon,
+  axis coordinates (internal and external), metrics as value +
+  zone pairs, stems, and custom parameters carrying the vertical
+  metrics (typo/hhea ascender 1024, descender -296, line gap 0;
+  winAscent 1112, winDescent 470; UFO Filename).
+- Exports tab per instance: Active, style name, weight class,
+  width class, style linking, axis coordinates.
+- Guides draw blue with a round drag handle; selecting one puts
+  name, X, Y, angle, and a lock in the info box.
+- Slanter filter: Geometric Slant, Cursivy, stems (Auto Stems),
+  Slant and Rotate. Offset Curve filter: Horizontal, Vertical
+  (linkable), Make Stroke, Position %, Keep Compatible, cap style.
