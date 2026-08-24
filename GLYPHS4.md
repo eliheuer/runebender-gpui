@@ -135,9 +135,12 @@ Deliberate non-goals are in the last section.
 
 ## Export
 
-- [~] TTF export through fontc (File > Export, Cmd+E): variable
-      from a designspace, static from a single UFO. CFF outlines
-      and per-instance statics come later
+- [~] TTF export (File > Export, Cmd+E). With a repo build
+      script (build-fontc.sh / build.sh) the export runs the
+      repo's own Google Fonts pipeline: gftools fixes, STAT, and
+      per-instance statics included. Bare sources compile through
+      fontc plus a gftools-fix-font pass when the tool is found.
+      CFF outlines come later
 - [ ] WOFF and WOFF2
 - [ ] Instance export from the instance list
 - [ ] PostScript autohinting at export
