@@ -1213,6 +1213,42 @@ impl Project {
         font.font.get_glyph(name).map(ops::glyph_signature)
     }
 
+    /// Why a glyph does not interpolate: the first master pair whose
+    /// structure disagrees, with contour and point counts. None when
+    /// compatible or single-master.
+    fn compat_detail(&self, name: &str) -> Option<String> {
+        if self.masters.len() < 2
+            || self.compat.get(name).copied().unwrap_or(true)
+        {
+            return None;
+        }
+        let first_sig = Self::glyph_signature(&self.masters[0], name);
+        let first_name = &self.master_names[0];
+        let describe = |sig: &Option<Vec<Vec<norad::PointType>>>| match sig {
+            None => "missing".to_string(),
+            Some(contours) => {
+                let points: usize = contours.iter().map(|c| c.len()).sum();
+                format!("{}c · {}pt", contours.len(), points)
+            }
+        };
+        for (master, master_name) in
+            self.masters.iter().zip(&self.master_names).skip(1)
+        {
+            let sig = Self::glyph_signature(master, name);
+            if sig == first_sig {
+                continue;
+            }
+            return Some(format!(
+                "{first_name} {} · {master_name} {}",
+                describe(&first_sig),
+                describe(&sig),
+            ));
+        }
+        // Same counts everywhere: the disagreement is point types
+        // (a curve against a line somewhere).
+        Some("point types differ between masters".into())
+    }
+
     /// Check one glyph's compatibility across all masters.
     fn check_compat(&self, name: &str) -> bool {
         let mut signatures = self.masters.iter().map(|m| Self::glyph_signature(m, name));
@@ -4074,6 +4110,21 @@ impl Workspace {
         let in_editor = matches!(self.mode, Mode::Editor(_));
         panel = panel
             .child(row("Master", master))
+            // Why the glyph is not interpolating, when it is not: the
+            // grid dot says that something is wrong, this says what.
+            .when_some(
+                self.project
+                    .as_ref()
+                    .and_then(|p| p.compat_detail(entry.name.as_ref())),
+                |el, detail| {
+                    el.child(
+                        div()
+                            .text_xs()
+                            .text_color(t::status_yellow())
+                            .child(format!("Not interpolating: {detail}")),
+                    )
+                },
+            )
             .child(input_row("Glyph Name", &self.glyph_inputs.name))
             .when(in_editor, |el| {
                 el.child(row("Width", format!("{:.0}", entry.advance).into()))
