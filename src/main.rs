@@ -1723,6 +1723,7 @@ struct Workspace {
     search_regex: bool,
     search_case: bool,
     metric_inputs: MetricInputs,
+    font_info_inputs: FontInfoInputs,
     glyph_inputs: GlyphInputs,
     context_menu: Option<ContextMenu>,
     /// The Selection panel's 9-point reference for numeric move and
@@ -1845,6 +1846,32 @@ struct MetricInputs {
     y: gpui::Entity<gpui_component::input::InputState>,
     w: gpui::Entity<gpui_component::input::InputState>,
     h: gpui::Entity<gpui_component::input::InputState>,
+}
+
+/// Editable fields in the Font Info section (grid mode). Each commits
+/// on Enter and writes fontinfo.plist through the normal save path.
+struct FontInfoInputs {
+    family: gpui::Entity<gpui_component::input::InputState>,
+    style: gpui::Entity<gpui_component::input::InputState>,
+    upm: gpui::Entity<gpui_component::input::InputState>,
+    italic_angle: gpui::Entity<gpui_component::input::InputState>,
+    ascender: gpui::Entity<gpui_component::input::InputState>,
+    descender: gpui::Entity<gpui_component::input::InputState>,
+    x_height: gpui::Entity<gpui_component::input::InputState>,
+    cap_height: gpui::Entity<gpui_component::input::InputState>,
+}
+
+/// Which Font Info field an input commits to.
+#[derive(Clone, Copy, PartialEq)]
+enum FontInfoField {
+    Family,
+    Style,
+    Upm,
+    ItalicAngle,
+    Ascender,
+    Descender,
+    XHeight,
+    CapHeight,
 }
 
 /// A flat slider: a thin, evenly colored track (the library's own
@@ -9135,6 +9162,174 @@ impl Workspace {
         set(&r_input, group_r, window, cx);
     }
 
+    /// Commit one Font Info field (Enter in the Font Info section).
+    /// The family name is font-wide and lands on every master; style
+    /// and the metrics belong to the active master.
+    fn apply_font_info(&mut self, field: FontInfoField, text: &str) {
+        let Some(project) = self.project.as_mut() else { return };
+        let text = text.trim();
+        match field {
+            FontInfoField::Family => {
+                if text.is_empty() {
+                    return;
+                }
+                for master in project.masters.iter_mut() {
+                    master.font.font_info.family_name = Some(text.to_string());
+                    master.dirty = true;
+                }
+            }
+            FontInfoField::Style => {
+                if text.is_empty() {
+                    return;
+                }
+                let active = project.active;
+                let master = &mut project.masters[active];
+                master.font.font_info.style_name = Some(text.to_string());
+                master.dirty = true;
+                project.master_names[active] = text.to_string().into();
+            }
+            _ => {
+                let Ok(v) = text.parse::<f64>() else { return };
+                let master = &mut project.masters[project.active];
+                let info = &mut master.font.font_info;
+                match field {
+                    FontInfoField::Upm => {
+                        let Ok(upm) =
+                            norad::fontinfo::NonNegativeIntegerOrFloat::try_from(v)
+                        else {
+                            return;
+                        };
+                        info.units_per_em = Some(upm);
+                        master.units_per_em = v;
+                    }
+                    FontInfoField::ItalicAngle => info.italic_angle = Some(v),
+                    FontInfoField::Ascender => {
+                        info.ascender = Some(v);
+                        master.ascender = v;
+                    }
+                    FontInfoField::Descender => {
+                        info.descender = Some(v);
+                        master.descender = v;
+                    }
+                    FontInfoField::XHeight => {
+                        info.x_height = Some(v);
+                        master.x_height = Some(v);
+                    }
+                    FontInfoField::CapHeight => {
+                        info.cap_height = Some(v);
+                        master.cap_height = Some(v);
+                    }
+                    FontInfoField::Family | FontInfoField::Style => unreachable!(),
+                }
+                master.dirty = true;
+            }
+        }
+    }
+
+    /// Push the active master's font info into the section's inputs.
+    /// Skipped while any input is focused, unless `force`, the same
+    /// contract as `refresh_metric_inputs`.
+    fn refresh_font_info_inputs(
+        &mut self,
+        force: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !force
+            && window
+                .focused(cx)
+                .is_some_and(|f| f != self.focus_handle)
+        {
+            return;
+        }
+        let Some(project) = self.project.as_ref() else { return };
+        let master = &project.masters[project.active];
+        let info = &master.font.font_info;
+        let opt = |v: Option<f64>| v.map(|v| format!("{v:.0}")).unwrap_or_default();
+        let values = [
+            (
+                &self.font_info_inputs.family,
+                info.family_name.clone().unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.style,
+                info.style_name.clone().unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.upm,
+                format!("{:.0}", master.units_per_em),
+            ),
+            (
+                &self.font_info_inputs.italic_angle,
+                info.italic_angle.map(|v| format!("{v}")).unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.ascender,
+                format!("{:.0}", master.ascender),
+            ),
+            (
+                &self.font_info_inputs.descender,
+                format!("{:.0}", master.descender),
+            ),
+            (&self.font_info_inputs.x_height, opt(master.x_height)),
+            (&self.font_info_inputs.cap_height, opt(master.cap_height)),
+        ];
+        for (entity, value) in values {
+            entity.update(cx, |st, cx| {
+                if st.value() != value.as_str() {
+                    st.set_value(value, window, cx);
+                }
+            });
+        }
+    }
+
+    /// Font Info section (grid mode): names and vertical metrics of
+    /// the active master, saved to fontinfo.plist. The first slice of
+    /// Glyphs' Font Info window; axes and instances come later.
+    fn font_info_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        if self.project.is_none() {
+            return self.section(cx, "Font Info", div());
+        }
+        let field = |header: &'static str,
+                     input: &gpui::Entity<gpui_component::input::InputState>| {
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(div().text_xs().text_color(t::text_muted()).child(header))
+                .child(gpui_component::input::Input::new(input))
+        };
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(field("Family Name", &self.font_info_inputs.family))
+            .child(field("Style Name", &self.font_info_inputs.style))
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(field("UPM", &self.font_info_inputs.upm))
+                    .child(field("Italic Angle", &self.font_info_inputs.italic_angle)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(field("Ascender", &self.font_info_inputs.ascender))
+                    .child(field("Descender", &self.font_info_inputs.descender)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(field("x-Height", &self.font_info_inputs.x_height))
+                    .child(field("Cap Height", &self.font_info_inputs.cap_height)),
+            );
+        self.section(cx, "Font Info", body)
+    }
+
     fn refresh_metric_inputs(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
         // The metric fields live in the Glyph panel, which is up in
         // both modes: in the grid they follow the selected cell.
@@ -12316,6 +12511,7 @@ impl Render for Workspace {
         // when nothing that decides the order has changed.
         self.visible_glyphs();
         self.refresh_metric_inputs(false, window, cx);
+        self.refresh_font_info_inputs(false, window, cx);
         if matches!(self.mode, Mode::Editor(_)) {
             self.refresh_coord_inputs(false, window, cx);
         }
@@ -12528,6 +12724,7 @@ impl Render for Workspace {
             })
             .when(!in_editor, |el| {
                 el.child(self.glyph_info_panel(cx))
+                    .child(self.font_info_section(cx))
                     .child(self.layers_section(cx))
                     .child(self.glyph_preview_panel())
             });
@@ -12958,6 +13155,57 @@ fn main() {
                     let y_input = metric(cx, window);
                     let w_input = metric(cx, window);
                     let h_input = metric(cx, window);
+                    let fi_family = metric(cx, window);
+                    let fi_style = metric(cx, window);
+                    let fi_upm = metric(cx, window);
+                    let fi_angle = metric(cx, window);
+                    let fi_asc = metric(cx, window);
+                    let fi_desc = metric(cx, window);
+                    let fi_xh = metric(cx, window);
+                    let fi_ch = metric(cx, window);
+                    let font_info_sub = |cx: &mut Context<Workspace>,
+                                         window: &mut Window,
+                                         state: &gpui::Entity<
+                        gpui_component::input::InputState,
+                    >,
+                                         which: FontInfoField| {
+                        let state = state.clone();
+                        cx.subscribe_in(&state, window, {
+                            let state = state.clone();
+                            move |this: &mut Workspace,
+                                  _,
+                                  ev: &gpui_component::input::InputEvent,
+                                  window,
+                                  cx| {
+                                if matches!(
+                                    ev,
+                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                ) {
+                                    let text = state.read(cx).value().to_string();
+                                    this.apply_font_info(which, &text);
+                                    this.rebuild_text_models();
+                                    this.refresh_font_info_inputs(true, window, cx);
+                                    cx.notify();
+                                }
+                            }
+                        })
+                    };
+                    let sub_fi_family =
+                        font_info_sub(cx, window, &fi_family, FontInfoField::Family);
+                    let sub_fi_style =
+                        font_info_sub(cx, window, &fi_style, FontInfoField::Style);
+                    let sub_fi_upm =
+                        font_info_sub(cx, window, &fi_upm, FontInfoField::Upm);
+                    let sub_fi_angle =
+                        font_info_sub(cx, window, &fi_angle, FontInfoField::ItalicAngle);
+                    let sub_fi_asc =
+                        font_info_sub(cx, window, &fi_asc, FontInfoField::Ascender);
+                    let sub_fi_desc =
+                        font_info_sub(cx, window, &fi_desc, FontInfoField::Descender);
+                    let sub_fi_xh =
+                        font_info_sub(cx, window, &fi_xh, FontInfoField::XHeight);
+                    let sub_fi_ch =
+                        font_info_sub(cx, window, &fi_ch, FontInfoField::CapHeight);
                     let metric_sub = |cx: &mut Context<Workspace>,
                                       window: &mut Window,
                                       state: &gpui::Entity<gpui_component::input::InputState>,
@@ -13247,6 +13495,16 @@ fn main() {
                             w: w_input,
                             h: h_input,
                         },
+                        font_info_inputs: FontInfoInputs {
+                            family: fi_family,
+                            style: fi_style,
+                            upm: fi_upm,
+                            italic_angle: fi_angle,
+                            ascender: fi_asc,
+                            descender: fi_desc,
+                            x_height: fi_xh,
+                            cap_height: fi_ch,
+                        },
                         axis_sliders: Vec::new(),
                         clipboard: Vec::new(),
                         #[cfg(target_family = "wasm")]
@@ -13257,6 +13515,9 @@ fn main() {
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_comp,
                             sub_sw, sub_sh, sub_anchor, sub_ref,
+                            sub_fi_family, sub_fi_style, sub_fi_upm,
+                            sub_fi_angle, sub_fi_asc, sub_fi_desc,
+                            sub_fi_xh, sub_fi_ch,
                         ],
                     };
                     workspace.rebuild_text_models();
