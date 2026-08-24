@@ -1502,6 +1502,23 @@ enum Drag {
         applied: f64,
         start_width: f64,
     },
+    /// Free transform from the selection bounding box: a handle
+    /// scales about the opposite handle, the ring outside a corner
+    /// rotates about the box centre. Shift constrains (proportional
+    /// scale, 15-degree rotation steps).
+    FreeTransform {
+        /// The fixed point of the gesture, in design space.
+        anchor: (f64, f64),
+        /// Where the gesture began, in design space.
+        start: (f64, f64),
+        /// Rotation instead of scaling.
+        rotate: bool,
+        /// Which axes a scale handle drives (edge handles pin one).
+        scale_x: bool,
+        scale_y: bool,
+        /// Every point's position when the gesture began.
+        originals: std::collections::HashMap<(usize, usize), (f64, f64)>,
+    },
     /// Dragging a global guide: index into the active master's
     /// fontinfo guidelines. Guides move live; the master is marked
     /// dirty as they move.
@@ -6240,6 +6257,13 @@ impl Workspace {
             Some(Drag::Marquee { start, current, .. }) => Some((*start, *current)),
             _ => None,
         };
+        // Free-transform box: shown for a multi-point selection with
+        // the select tool up, and kept up during its own drag.
+        let transform_box: Option<kurbo::Rect> = (self.editor.tool
+            == Tool::Select
+            && !matches!(self.editor.drag, Some(Drag::Marquee { .. })))
+        .then(|| self.selection_bbox(index))
+        .flatten();
         let shape_preview = match &self.editor.drag {
             Some(Drag::Shape { start, current }) => {
                 Some((*start, *current, self.editor.shape_ellipse))
@@ -8043,6 +8067,52 @@ impl Workspace {
                                 }
                             }
 
+                            // Free-transform box: the selection's
+                            // bounds, corner and edge handles, all
+                            // constant screen size (Glyphs 4's
+                            // on-canvas rotate and scale).
+                            if let Some(bbox) = transform_box {
+                                let pa = to_screen(bbox.x0, bbox.y0);
+                                let pb = to_screen(bbox.x1, bbox.y1);
+                                let rect = Bounds::from_corners(
+                                    gpui::point(pa.x.min(pb.x), pa.y.min(pb.y)),
+                                    gpui::point(pa.x.max(pb.x), pa.y.max(pb.y)),
+                                );
+                                window.paint_quad(gpui::outline(
+                                    rect,
+                                    t::marquee_stroke(),
+                                    gpui::BorderStyle::Solid,
+                                ));
+                                let (cx_, cy_) =
+                                    (bbox.center().x, bbox.center().y);
+                                const HANDLE: f32 = 6.0;
+                                for (hx, hy) in [
+                                    (bbox.x0, bbox.y0),
+                                    (bbox.x1, bbox.y0),
+                                    (bbox.x0, bbox.y1),
+                                    (bbox.x1, bbox.y1),
+                                    (cx_, bbox.y0),
+                                    (cx_, bbox.y1),
+                                    (bbox.x0, cy_),
+                                    (bbox.x1, cy_),
+                                ] {
+                                    let p = to_screen(hx, hy);
+                                    let half = px(HANDLE / 2.0);
+                                    let handle = Bounds::from_corners(
+                                        gpui::point(p.x - half, p.y - half),
+                                        gpui::point(p.x + half, p.y + half),
+                                    );
+                                    window.paint_quad(gpui::fill(
+                                        handle,
+                                        t::panel_bg(),
+                                    ));
+                                    window.paint_quad(gpui::outline(
+                                        handle,
+                                        t::marquee_stroke(),
+                                        gpui::BorderStyle::Solid,
+                                    ));
+                                }
+                            }
                             // Marquee rectangle.
                             if let Some((a, b)) = marquee {
                                 let pa = to_screen(a.0, a.1);
@@ -8679,6 +8749,75 @@ impl Workspace {
             .iter()
             .map(|p| ((p.contour, p.index), (p.x, p.y)))
             .collect();
+        // Free-transform handles outrank everything: a corner grab
+        // always transforms the selection (Glyphs 4's on-canvas
+        // rotate and scale).
+        // A point under the cursor still wins: the box corner usually
+        // sits exactly on a selected extreme, and grabbing that node
+        // must drag it, not scale the selection. Handles work from
+        // the parts of the box no point occupies.
+        let point_near = all_points.iter().any(|(_, (x, y))| {
+            ((x - dx).powi(2) + (y - dy).powi(2)).sqrt() <= point_tolerance
+        });
+        if self.editor.tool == Tool::Select && !shift && !point_near {
+            if let Some(bbox) = self.selection_bbox(index) {
+                let zoom = self.editor.zoom().max(1e-6);
+                let grab = 7.0 / zoom;
+                let ring = 22.0 / zoom;
+                let (cx_, cy_) = (bbox.center().x, bbox.center().y);
+                let corners = [
+                    ((bbox.x0, bbox.y0), (bbox.x1, bbox.y1)),
+                    ((bbox.x1, bbox.y0), (bbox.x0, bbox.y1)),
+                    ((bbox.x0, bbox.y1), (bbox.x1, bbox.y0)),
+                    ((bbox.x1, bbox.y1), (bbox.x0, bbox.y0)),
+                ];
+                let edges = [
+                    ((cx_, bbox.y0), (cx_, bbox.y1), false, true),
+                    ((cx_, bbox.y1), (cx_, bbox.y0), false, true),
+                    ((bbox.x0, cy_), (bbox.x1, cy_), true, false),
+                    ((bbox.x1, cy_), (bbox.x0, cy_), true, false),
+                ];
+                let dist = |p: (f64, f64)| {
+                    ((p.0 - dx).powi(2) + (p.1 - dy).powi(2)).sqrt()
+                };
+                let mut gesture: Option<((f64, f64), bool, bool, bool)> = None;
+                for (corner, opposite) in corners {
+                    if dist(corner) <= grab {
+                        gesture = Some((opposite, false, true, true));
+                        break;
+                    }
+                }
+                if gesture.is_none() {
+                    for (mid, opposite, sx, sy) in edges {
+                        if dist(mid) <= grab {
+                            gesture = Some((opposite, false, sx, sy));
+                            break;
+                        }
+                    }
+                }
+                if gesture.is_none() {
+                    for (corner, _) in corners {
+                        let d = dist(corner);
+                        if d > grab && d <= ring {
+                            gesture = Some(((cx_, cy_), true, false, false));
+                            break;
+                        }
+                    }
+                }
+                if let Some((anchor, rotate, scale_x, scale_y)) = gesture {
+                    self.push_undo_snapshot(index);
+                    self.editor.drag = Some(Drag::FreeTransform {
+                        anchor,
+                        start: (dx, dy),
+                        rotate,
+                        scale_x,
+                        scale_y,
+                        originals: all_points.iter().copied().collect(),
+                    });
+                    return;
+                }
+            }
+        }
         // Anchors take priority over points.
         let anchor_hit = font.glyphs[index]
             .anchors
@@ -8906,6 +9045,27 @@ impl Workspace {
         }
     }
 
+    /// Bounding box of the selected points, in design space. None
+    /// when it has no extent (a single point, or none).
+    fn selection_bbox(&self, index: usize) -> Option<kurbo::Rect> {
+        if self.editor.selected.len() < 2 {
+            return None;
+        }
+        let font = self.font()?;
+        let mut min = (f64::INFINITY, f64::INFINITY);
+        let mut max = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for p in font.glyphs[index].points.iter() {
+            if !self.editor.selected.contains(&(p.contour, p.index)) {
+                continue;
+            }
+            min = (min.0.min(p.x), min.1.min(p.y));
+            max = (max.0.max(p.x), max.1.max(p.y));
+        }
+        (min.0.is_finite()
+            && (max.0 - min.0 > 1e-9 || max.1 - min.1 > 1e-9))
+            .then(|| kurbo::Rect::new(min.0, min.1, max.0, max.1))
+    }
+
     /// The nearest global guide within `tolerance` design units of
     /// (dx, dy): an index into the active master's fontinfo
     /// guidelines.
@@ -9002,6 +9162,79 @@ impl Workspace {
                     self.sync_sort_offset();
                 }
                 changed
+            }
+            Some(Drag::FreeTransform {
+                anchor,
+                start,
+                rotate,
+                scale_x,
+                scale_y,
+                originals,
+            }) => {
+                let (ax, ay) = *anchor;
+                let affine = if *rotate {
+                    let a0 = (start.1 - ay).atan2(start.0 - ax);
+                    let a1 = (dy - ay).atan2(dx - ax);
+                    let mut angle = a1 - a0;
+                    if shift {
+                        let step = 15f64.to_radians();
+                        angle = (angle / step).round() * step;
+                    }
+                    Affine::translate((ax, ay))
+                        * Affine::rotate(angle)
+                        * Affine::translate((-ax, -ay))
+                } else {
+                    let denx = start.0 - ax;
+                    let deny = start.1 - ay;
+                    let mut sx = if *scale_x && denx.abs() > 1e-6 {
+                        (dx - ax) / denx
+                    } else {
+                        1.0
+                    };
+                    let mut sy = if *scale_y && deny.abs() > 1e-6 {
+                        (dy - ay) / deny
+                    } else {
+                        1.0
+                    };
+                    if shift && *scale_x && *scale_y {
+                        // Proportional: the larger factor drives both.
+                        let s = sx.abs().max(sy.abs());
+                        sx = s * sx.signum();
+                        sy = s * sy.signum();
+                    }
+                    Affine::translate((ax, ay))
+                        * Affine::scale_non_uniform(sx, sy)
+                        * Affine::translate((-ax, -ay))
+                };
+                let originals = originals.clone();
+                let selected = self.editor.selected.clone();
+                self.font_mut().is_some_and(|f| {
+                    f.edit_glyph(index, |g| {
+                        let mut moved = false;
+                        for (c, contour) in g.contours.iter_mut().enumerate() {
+                            for (pi, point) in
+                                contour.points.iter_mut().enumerate()
+                            {
+                                if !selected.contains(&(c, pi)) {
+                                    continue;
+                                }
+                                let Some(&(ox, oy)) = originals.get(&(c, pi))
+                                else {
+                                    continue;
+                                };
+                                let p = affine * kurbo::Point::new(ox, oy);
+                                let (nx, ny) = (p.x.round(), p.y.round());
+                                if point.x != nx || point.y != ny {
+                                    point.x = nx;
+                                    point.y = ny;
+                                    moved = true;
+                                }
+                            }
+                        }
+                        moved
+                    })
+                    .unwrap_or(false)
+                })
             }
             Some(Drag::Guide { index: gi }) => {
                 let gi = *gi;
