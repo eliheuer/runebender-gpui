@@ -53,6 +53,7 @@ gpui::actions!(
         NewFont,
         SaveFont,
         SaveFontAs,
+        ExportFont,
         Undo,
         Redo,
         CopyContours,
@@ -177,6 +178,8 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Save", SaveFont),
                 MenuItem::action("Save As…", SaveFontAs),
+                MenuItem::separator(),
+                MenuItem::action("Export…", ExportFont),
             ],
             disabled: false,
         },
@@ -822,6 +825,10 @@ struct Project {
     location: runebender_core::var_model::Location,
     /// Per-glyph master point-compatibility (designspaces only).
     compat: std::collections::HashMap<String, bool>,
+    /// What fontc compiles on File > Export: the designspace the
+    /// project was opened from, or the single UFO. `None` until the
+    /// project has a home on disk (File > New before Save As).
+    export_source: Option<PathBuf>,
 }
 
 impl Project {
@@ -872,6 +879,7 @@ impl Project {
             model: None,
             location: runebender_core::var_model::Location::new(),
             compat: std::collections::HashMap::new(),
+            export_source: None,
         };
         project.compute_compat();
         project
@@ -879,6 +887,9 @@ impl Project {
 
     fn load(path: &std::path::Path) -> Result<Self, String> {
         let mut project = Self::load_inner(path)?;
+        if project.export_source.is_none() {
+            project.export_source = Some(path.to_path_buf());
+        }
         project.compute_compat();
         Ok(project)
     }
@@ -914,7 +925,10 @@ impl Project {
             let open = designspace
                 .or(first_ufo)
                 .ok_or_else(|| "conversion produced no font".to_string())?;
-            return Self::load_inner(&open);
+            // Export compiles the converted files, not the .glyphs.
+            let mut project = Self::load_inner(&open)?;
+            project.export_source = Some(open);
+            return Ok(project);
         }
         if path.extension().is_some_and(|e| e == "designspace") {
             let doc = norad::designspace::DesignSpaceDocument::load(path)
@@ -944,6 +958,7 @@ impl Project {
                 model: None,
                 location: runebender_core::var_model::Location::new(),
                 compat: std::collections::HashMap::new(),
+                export_source: None,
             })
         }
     }
@@ -1037,6 +1052,7 @@ impl Project {
                 model,
                 location,
                 compat: std::collections::HashMap::new(),
+                export_source: None,
             })
         }
     }
@@ -1102,6 +1118,7 @@ impl Project {
                 model: None,
                 location: runebender_core::var_model::Location::new(),
                 compat: std::collections::HashMap::new(),
+                export_source: None,
             }
         };
         let mut project = project;
@@ -10033,6 +10050,94 @@ impl Workspace {
         }
     }
 
+    /// File > Export: compile the open source with fontc. Dirty
+    /// masters are saved first because fontc reads from disk. The
+    /// build runs in the background and reports through the status
+    /// note, so the editor stays live while it compiles.
+    #[cfg(not(target_family = "wasm"))]
+    fn command_export(&mut self, cx: &mut Context<Self>) {
+        if self
+            .project
+            .as_ref()
+            .is_some_and(|p| p.masters.iter().any(|m| m.dirty))
+        {
+            self.command_save(cx);
+        }
+        let Some(project) = self.project.as_ref() else { return };
+        let source = project
+            .export_source
+            .clone()
+            .unwrap_or_else(|| project.masters[project.active].source_path.clone());
+        if !source.exists() {
+            self.status_note = Some("Save the font before exporting".into());
+            return;
+        }
+        let Some(fontc) = fontc_binary() else {
+            self.status_note =
+                Some("fontc not found: cargo install fontc".into());
+            return;
+        };
+        let out_dir = source
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("exports");
+        let stem = source
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "font".into());
+        let out_file = out_dir.join(format!("{stem}.ttf"));
+        self.status_note = Some(format!("Exporting {stem}.ttf…").into());
+        cx.spawn(async move |this, cx| {
+            let result: Result<PathBuf, String> = cx
+                .background_executor()
+                .spawn(async move {
+                    std::fs::create_dir_all(&out_dir)
+                        .map_err(|e| format!("{e}"))?;
+                    // fontc's working files go to a temp dir, not the
+                    // font's directory, so the file watcher and git
+                    // status stay quiet.
+                    let build_dir =
+                        std::env::temp_dir().join("runebender-fontc");
+                    let output = std::process::Command::new(&fontc)
+                        .arg(&source)
+                        .arg("--output-file")
+                        .arg(&out_file)
+                        .arg("--build-dir")
+                        .arg(&build_dir)
+                        .output()
+                        .map_err(|e| format!("{e}"))?;
+                    if output.status.success() {
+                        Ok(out_file)
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        Err(stderr
+                            .lines()
+                            .rev()
+                            .find(|l| !l.trim().is_empty())
+                            .unwrap_or("fontc failed")
+                            .to_string())
+                    }
+                })
+                .await;
+            this.update(cx, |workspace, cx| {
+                workspace.status_note = Some(match result {
+                    Ok(path) => format!("Exported {}", path.display()).into(),
+                    Err(e) => format!("Export failed: {e}").into(),
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The browser build has no fontc to run; exporting is native.
+    #[cfg(target_family = "wasm")]
+    fn command_export(&mut self, _cx: &mut Context<Self>) {
+        self.status_note =
+            Some("Export runs in the native app only".into());
+    }
+
     /// Copy the selected contours (whole glyph when nothing selected).
     fn command_copy(&mut self) {
         let in_editor = matches!(self.mode, Mode::Editor(_));
@@ -12477,6 +12582,10 @@ impl Render for Workspace {
                 this.command_save(cx);
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &ExportFont, _, cx| {
+                this.command_export(cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
                 this.undo();
                 this.rebuild_text_models();
@@ -12710,6 +12819,23 @@ impl Render for Workspace {
 // ENTRY
 // ============================================================================
 
+/// Find the fontc compiler: PATH first, then the default cargo
+/// install location, because an app launched from the Dock does not
+/// inherit a shell PATH.
+#[cfg(not(target_family = "wasm"))]
+fn fontc_binary() -> Option<PathBuf> {
+    if std::process::Command::new("fontc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+    {
+        return Some(PathBuf::from("fontc"));
+    }
+    let home = std::env::var_os("HOME")?;
+    let cargo_bin = PathBuf::from(home).join(".cargo/bin/fontc");
+    cargo_bin.exists().then_some(cargo_bin)
+}
+
 fn default_font_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../runebender-web/assets/test-fonts/VirtuaGrotesk.designspace")
@@ -12777,6 +12903,7 @@ fn main() {
             gpui::KeyBinding::new("cmd-o", OpenFont, None),
             gpui::KeyBinding::new("cmd-n", NewFont, None),
             gpui::KeyBinding::new("cmd-shift-s", SaveFontAs, None),
+            gpui::KeyBinding::new("cmd-e", ExportFont, None),
             gpui::KeyBinding::new("cmd-s", SaveFont, None),
             gpui::KeyBinding::new("cmd-z", Undo, None),
             gpui::KeyBinding::new("cmd-shift-z", Redo, None),
