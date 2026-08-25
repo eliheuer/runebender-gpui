@@ -468,3 +468,16 @@ these are the hands-on checks:
    part blends Width and Height bilinearly through its corner
    pole layer (expect a 275x212.5 box at 50/50; edit the
    values in the Selection panel).
+8. **GDEF ligature carets** — add a `caret_1` anchor to a
+   ligature (f_i), Generate: a `table GDEF` block with
+   LigatureCaretByPos appears (and lands above a
+   `# Automatic Code` marker if one is set).
+9. **Reinterpolate** — break a glyph in one master, Glyph >
+   Reinterpolate: the outline rebuilds from the other masters
+   at this master's location (two masters = exact copy of the
+   other). Undo restores the break.
+10. **Export Glyph as SVG** — Glyph menu; writes <name>.svg
+    beside the project source, path shown in the status bar.
+11. **Stylistic set names** — a `featureNames { name "…"; };`
+    block inside `feature ss01` in the Features pane compiles
+    clean (Apply reports no error).
