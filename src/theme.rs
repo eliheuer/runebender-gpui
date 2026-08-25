@@ -317,6 +317,11 @@ pub fn zone_band() -> Rgba {
     color.a = 0.10;
     color
 }
+/// Annotation marks: arrows, circles, and notes in the kern-drag
+/// red, full strength — working marks should shout a little.
+pub fn annotation() -> Rgba {
+    c(theme().role("kernActive"))
+}
 /// The HOI velocity ribbon's speed ramp: slow steps in a deep
 /// ember, fast ones in gold — Glyphs' Show velocity, in this
 /// palette's warm terms. `t` is the normalized speed.

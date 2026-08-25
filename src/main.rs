@@ -2184,6 +2184,72 @@ fn roughen_glyph_contours(
     changed
 }
 
+// ---- annotations (canvas notes, arrows, circles) ----
+
+/// Editor annotations, the Glyphs annotation tool's marks: arrows,
+/// circles, plus/minus, and text notes pinned to design-space
+/// points. Stored in a glyph lib key; never exported.
+const ANNOTATIONS_KEY: &str = "com.runebender.annotations";
+
+#[derive(Clone, Debug, PartialEq)]
+struct Annotation {
+    kind: String,
+    x: f64,
+    y: f64,
+    text: String,
+}
+
+fn read_annotations(glyph: &norad::Glyph) -> Vec<Annotation> {
+    glyph
+        .lib
+        .get(ANNOTATIONS_KEY)
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let dict = row.as_dictionary()?;
+                    Some(Annotation {
+                        kind: dict.get("kind")?.as_string()?.to_string(),
+                        x: dict.get("x")?.as_real()?,
+                        y: dict.get("y")?.as_real()?,
+                        text: dict
+                            .get("text")
+                            .and_then(|t| t.as_string())
+                            .unwrap_or_default()
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_annotations(glyph: &mut norad::Glyph, notes: &[Annotation]) {
+    if notes.is_empty() {
+        glyph.lib.remove(ANNOTATIONS_KEY);
+        return;
+    }
+    let rows = notes
+        .iter()
+        .map(|a| {
+            let mut dict = plist::Dictionary::new();
+            dict.insert("kind".into(), plist::Value::String(a.kind.clone()));
+            dict.insert("x".into(), plist::Value::Real(a.x));
+            dict.insert("y".into(), plist::Value::Real(a.y));
+            if !a.text.is_empty() {
+                dict.insert(
+                    "text".into(),
+                    plist::Value::String(a.text.clone()),
+                );
+            }
+            plist::Value::Dictionary(dict)
+        })
+        .collect();
+    glyph
+        .lib
+        .insert(ANNOTATIONS_KEY.into(), plist::Value::Array(rows));
+}
+
 // ---- SVG outline import ----
 
 /// Pull every path's `d` attribute out of an SVG document, parse
@@ -3063,6 +3129,10 @@ struct ContextMenu {
     adding_component: bool,
     /// Inline corner-name input mode (Apply Corner…).
     applying_corner: bool,
+    /// Inline note-text input mode (Annotate: Note…).
+    adding_note: bool,
+    /// Annotation under the click.
+    annotation: Option<usize>,
     /// Guide under the click: (local, index).
     guide: Option<(bool, usize)>,
 }
@@ -3408,6 +3478,8 @@ struct Workspace {
     component_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Corner-glyph name typed in the context menu (Apply Corner…).
     corner_name_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Note text typed in the context menu (Annotate: Note…).
+    annotation_input: gpui::Entity<gpui_component::input::InputState>,
     anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
@@ -8488,6 +8560,43 @@ impl Workspace {
                 cx,
             ));
         }
+        if menu.adding_note {
+            list = list.child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .w(px(200.0))
+                    .child(gpui_component::input::Input::new(
+                        &self.annotation_input,
+                    )),
+            );
+        } else if menu.annotation.is_some() {
+            list = list.child(item(
+                ("cm", 15),
+                "Delete Annotation".into(),
+                "annotation-delete",
+                cx,
+            ));
+        } else {
+            list = list.child(item(
+                ("cm", 15),
+                "Annotate: Arrow".into(),
+                "annotation-arrow",
+                cx,
+            ));
+            list = list.child(item(
+                ("cm", 16),
+                "Annotate: Circle".into(),
+                "annotation-circle",
+                cx,
+            ));
+            list = list.child(item(
+                ("cm", 17),
+                "Annotate: Note…".into(),
+                "annotation-note",
+                cx,
+            ));
+        }
         match menu.guide {
             Some((true, _)) => {
                 list = list.child(item(
@@ -8755,6 +8864,12 @@ impl Workspace {
                 })
             })
             .flatten();
+        // Annotations: working marks pinned to design-space points.
+        let annotations: Vec<Annotation> = font
+            .font
+            .get_glyph(entry.name.as_ref())
+            .map(read_annotations)
+            .unwrap_or_default();
         // HOI knobs (one per node, at its intermediate point or the
         // linear middle) and the live curve while one is dragged.
         let hoi_knobs: Vec<((usize, usize), (f64, f64))> = (self
@@ -10935,6 +11050,128 @@ impl Workspace {
                                 }
                             }
 
+                            // Annotations: red working marks over
+                            // everything (arrows point at the spot,
+                            // circles ring it, notes label it).
+                            if !annotations.is_empty() {
+                                use kurbo::Shape as _;
+                                let color = t::annotation();
+                                for note in &annotations {
+                                    let p = to_screen(note.x, note.y);
+                                    let (px_, py_) = (
+                                        f32::from(p.x) as f64,
+                                        f32::from(p.y) as f64,
+                                    );
+                                    match note.kind.as_str() {
+                                        "circle" => {
+                                            let ring = kurbo::Circle::new(
+                                                (px_, py_),
+                                                12.0,
+                                            )
+                                            .to_path(0.25);
+                                            if let Some(path) = build_path(
+                                                &ring,
+                                                Affine::IDENTITY,
+                                                gpui::point(px(0.0), px(0.0)),
+                                                PathBuilder::stroke(px(2.0)),
+                                            ) {
+                                                window.paint_path(path, color);
+                                            }
+                                        }
+                                        "note" => {
+                                            let dot = kurbo::Circle::new(
+                                                (px_, py_),
+                                                3.0,
+                                            )
+                                            .to_path(0.25);
+                                            if let Some(path) =
+                                                build_fill_path(
+                                                    &dot,
+                                                    Affine::IDENTITY,
+                                                    gpui::point(
+                                                        px(0.0),
+                                                        px(0.0),
+                                                    ),
+                                                )
+                                            {
+                                                window.paint_path(path, color);
+                                            }
+                                            let text =
+                                                gpui::SharedString::from(
+                                                    note.text.clone(),
+                                                );
+                                            let run = gpui::TextRun {
+                                                len: text.len(),
+                                                font: window
+                                                    .text_style()
+                                                    .font(),
+                                                color: color.into(),
+                                                background_color: None,
+                                                underline: None,
+                                                strikethrough: None,
+                                            };
+                                            let line = window
+                                                .text_system()
+                                                .shape_line(
+                                                    text,
+                                                    px(12.0),
+                                                    std::slice::from_ref(&run),
+                                                    None,
+                                                );
+                                            let _ = line.paint(
+                                                gpui::point(
+                                                    p.x + px(8.0),
+                                                    p.y - px(7.0),
+                                                ),
+                                                px(14.0),
+                                                gpui::TextAlign::Left,
+                                                None,
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                        _ => {
+                                            // Arrow from lower-right,
+                                            // tip on the point.
+                                            let mut arrow = BezPath::new();
+                                            arrow.move_to((px_, py_));
+                                            arrow.line_to((
+                                                px_ + 12.0,
+                                                py_ + 4.0,
+                                            ));
+                                            arrow.line_to((
+                                                px_ + 8.0,
+                                                py_ + 8.0,
+                                            ));
+                                            arrow.line_to((
+                                                px_ + 20.0,
+                                                py_ + 20.0,
+                                            ));
+                                            arrow.line_to((
+                                                px_ + 8.0 + 4.0,
+                                                py_ + 8.0 + 8.0,
+                                            ));
+                                            arrow.line_to((
+                                                px_ + 4.0,
+                                                py_ + 12.0,
+                                            ));
+                                            arrow.close_path();
+                                            if let Some(path) =
+                                                build_fill_path(
+                                                    &arrow,
+                                                    Affine::IDENTITY,
+                                                    gpui::point(
+                                                        px(0.0),
+                                                        px(0.0),
+                                                    ),
+                                                )
+                                            {
+                                                window.paint_path(path, color);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             // Free-transform box: the selection's
                             // bounds, corner and edge handles, all
                             // constant screen size (Glyphs 4's
@@ -11290,6 +11527,19 @@ impl Workspace {
             has_components,
             adding_component: false,
             applying_corner: false,
+            adding_note: false,
+            annotation: self.font().and_then(|f| {
+                let glyph = f.font.get_glyph(f.glyphs[index].name.as_ref())?;
+                read_annotations(glyph)
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        (((a.x - dx).powi(2) + (a.y - dy).powi(2)).sqrt(), i)
+                    })
+                    .filter(|(dist, _)| *dist <= tolerance * 2.0)
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, i)| i)
+            }),
             guide: self.guide_hit(dx, dy, tolerance),
         });
     }
@@ -11404,6 +11654,23 @@ impl Workspace {
                     applying_corner: true,
                     ..menu
                 });
+            }
+            "annotation-note" => {
+                self.context_menu = Some(ContextMenu {
+                    adding_note: true,
+                    ..menu
+                });
+            }
+            "annotation-arrow" => {
+                self.command_add_annotation(menu.design, "arrow", "");
+            }
+            "annotation-circle" => {
+                self.command_add_annotation(menu.design, "circle", "");
+            }
+            "annotation-delete" => {
+                if let Some(i) = menu.annotation {
+                    self.command_delete_annotation(i);
+                }
             }
             "set-start" => {
                 if let Some((ci, pi)) = menu.start_point {
@@ -15116,6 +15383,55 @@ impl Workspace {
         self.status_note = Some(
             format!("Placed {file_name} · {img_w:.0}×{img_h:.0}px").into(),
         );
+    }
+
+    /// Drop an annotation at a design-space point on the open
+    /// glyph (active master; annotations are working notes, never
+    /// exported).
+    fn command_add_annotation(
+        &mut self,
+        at: (f64, f64),
+        kind: &str,
+        text: &str,
+    ) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if let Some(font) = self.font_mut() {
+            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
+                let mut notes = read_annotations(glyph);
+                notes.push(Annotation {
+                    kind: kind.to_string(),
+                    x: at.0.round(),
+                    y: at.1.round(),
+                    text: text.to_string(),
+                });
+                write_annotations(glyph, &notes);
+                font.dirty = true;
+                font.modified_glyphs.insert(name);
+            }
+        }
+    }
+
+    fn command_delete_annotation(&mut self, i: usize) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if let Some(font) = self.font_mut() {
+            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
+                let mut notes = read_annotations(glyph);
+                if i < notes.len() {
+                    notes.remove(i);
+                    write_annotations(glyph, &notes);
+                    font.dirty = true;
+                    font.modified_glyphs.insert(name);
+                }
+            }
+        }
     }
 
     /// Glyph > Import SVG…: parse the file's path outlines and add
@@ -19726,6 +20042,43 @@ fn main() {
                             }
                         }
                     });
+                    let annotation_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("note text")
+                    });
+                    let sub_note = cx.subscribe_in(&annotation_input, window, {
+                        let state = annotation_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              window,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text = state.read(cx).value().to_string();
+                                let at = this
+                                    .context_menu
+                                    .as_ref()
+                                    .map(|m| m.design);
+                                this.context_menu = None;
+                                if let (Some(at), false) =
+                                    (at, text.trim().is_empty())
+                                {
+                                    this.command_add_annotation(
+                                        at,
+                                        "note",
+                                        text.trim(),
+                                    );
+                                }
+                                state.update(cx, |st, cx| {
+                                    st.set_value(String::new(), window, cx);
+                                });
+                                cx.notify();
+                            }
+                        }
+                    });
                     let sub_comp = cx.subscribe_in(&component_name_input, window, {
                         let state = component_name_input.clone();
                         move |this: &mut Workspace,
@@ -19837,6 +20190,7 @@ fn main() {
                         reference_glyph_input: reference_glyph_input.clone(),
                         component_name_input: component_name_input.clone(),
                         corner_name_input: corner_name_input.clone(),
+                        annotation_input: annotation_input.clone(),
                         anchor_name_input: anchor_name_input.clone(),
                         glyph_image_cache: Default::default(),
                         glyph_inputs: GlyphInputs {
@@ -19914,7 +20268,7 @@ fn main() {
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_gnote,
                             sub_gswitch, sub_glk, sub_grk, sub_comp,
-                            sub_corner,
+                            sub_corner, sub_note,
                             sub_sw, sub_sh, sub_anchor, sub_ref,
                             sub_fi_family, sub_fi_style, sub_fi_upm,
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
@@ -20247,6 +20601,19 @@ mod tests {
             refined.contours[0].points[0].x,
             orig + 40.0,
         );
+    }
+
+    #[test]
+    fn annotations_roundtrip() {
+        let mut glyph = norad::Glyph::new("anno");
+        let notes = vec![
+            Annotation { kind: "arrow".into(), x: 10.0, y: 20.0, text: String::new() },
+            Annotation { kind: "note".into(), x: -5.0, y: 700.0, text: "fix this join".into() },
+        ];
+        write_annotations(&mut glyph, &notes);
+        assert_eq!(read_annotations(&glyph), notes);
+        write_annotations(&mut glyph, &[]);
+        assert!(glyph.lib.get(ANNOTATIONS_KEY).is_none());
     }
 
     #[test]
