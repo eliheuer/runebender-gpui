@@ -41,6 +41,18 @@ Deliberate non-goals are in the last section.
 - [ ] Pixel tool for pixel fonts
 - [x] Fit Curve (Curves section): handles set to a percentage of
       the tangent-intersection maximum, Glyphs' scale
+- [ ] Add extremes and inflections (Path menu + filter;
+      shift-click adds a node on a segment) (handbook audit)
+- [ ] Open and close paths, re-segment outlines — partly here
+      via pen and knife; no explicit open/close commands
+      (handbook audit)
+- [ ] Focus and lock nodes or paths (handbook audit)
+- [ ] Masking: a path attribute that subtracts a shape from the
+      layers below at export (handbook audit)
+- [ ] Annotation tool: text notes, arrows, circles, plus/minus
+      marks on the canvas (handbook audit)
+- [ ] Sample strings: predefined edit-view texts, cycled from
+      the keyboard (handbook audit)
 - [ ] Node corner radius stored on the node
 
 ## Shape reuse
