@@ -48,7 +48,9 @@ Deliberate non-goals are in the last section.
 - [ ] Open and close paths, re-segment outlines — partly here
       via pen and knife; no explicit open/close commands
       (handbook audit)
-- [ ] Focus and lock nodes or paths (handbook audit)
+- [~] Node locking: right-click locks a node against selection
+      and drags (session-scoped, read-only tint). Focus mode and
+      persistence later (handbook audit)
 - [~] Masking: Make Mask on a contour cuts it from the preview
       fill (accent-stroked); Bake Masks makes it real in every
       master. Live-through-export needs a compiler that reads
@@ -125,8 +127,10 @@ Deliberate non-goals are in the last section.
 - [x] Kerning group editing on the glyph
 - [x] Kerning panel: the grid's Kerning section lists the active
       master's pairs with filter, edit, and delete
-- [ ] Visual kerning groups: drag glyphs onto group shelves
-      (new in 4)
+- [~] Visual kerning groups: the Groups section's shelves —
+      member chips (click removes), '+ sel' adds the grid
+      selection, a field creates groups from it. Drag gesture
+      later (new in 4)
 - [x] Batch sidebearing editing: the Width/LSB/RSB fields land
       on every glyph in a grid multi-selection
 - [~] Metrics keys: =n, =|o, =n+10, =n*1.1, =50 in the Glyph
@@ -134,7 +138,10 @@ Deliberate non-goals are in the last section.
       on set and via Glyph > Sync Metrics (chains settle over
       passes). Per-layer local keys and an out-of-sync indicator
       come later
-- [ ] Kerning group exceptions (handbook audit)
+- [~] Kerning group exceptions: exception pairs (any raw glyph
+      side) color warning-yellow in the pair list, the Glyphs
+      window's code. Explicit exception locking later (handbook
+      audit)
 - [ ] Contextual kerning
 - [x] Auto "kern" feature generation at export (fontc writes
       kern, mark, and mkmk from UFO kerning, groups, and anchors)
@@ -156,7 +163,8 @@ Deliberate non-goals are in the last section.
       preview location with Google Fonts style linking filled in,
       saved back into the designspace. Weight class and
       reordering come later
-- [ ] Axis mappings (avar) editing
+- [x] Axis mappings (avar) editing: user→design pairs in the
+      Axes section, saved into the designspace
 - [ ] Reinterpolate a layer from the other masters
 - [ ] Axis particles: generate master and instance grids from
       named stops (new in 4)
@@ -179,7 +187,10 @@ Deliberate non-goals are in the last section.
       remains as bulk timing. Later: cubic handles and rotation
       path types, and exact export via Underware's
       duplicated-same-tag-axes designspace instead of baking
-- [ ] Compare Fonts / Compare Family windows (handbook audit)
+- [~] Compare: the grid's Compare section reports every master
+      against the active one (counts, advances, kerning, metrics,
+      incompatibilities). Cross-file comparison later (handbook
+      audit)
 
 ## Font-level data
 
