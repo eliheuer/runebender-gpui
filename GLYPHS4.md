@@ -147,8 +147,12 @@ Deliberate non-goals are in the last section.
       no full master) (handbook audit)
 - [ ] Show All Masters: every master of the glyph editable in
       one edit view, with layer selection sync (handbook audit)
-- [ ] Higher-order interpolation: per-node interpolation timing
-      curves (new in 4) (handbook audit)
+- [~] Higher-order interpolation: the Axes section's
+      Trajectories view draws every node's path across the axis
+      with velocity dots (brace layers bend it), and the Ease
+      field bakes timing into a standard brace layer — selected
+      points at t^gamma, the rest linear. Per-node curve editing
+      UI comes later (handbook audit)
 - [ ] Compare Fonts / Compare Family windows (handbook audit)
 
 ## Font-level data
@@ -276,9 +280,10 @@ Deliberate non-goals are in the last section.
 - [ ] Simplify: redraw with fewer points (new in 4; our image
       trace covers part of this)
 - [ ] Transformations panel as one place for all of these
-- [ ] Extrude filter (handbook audit)
+- [x] Extrude filter (Transformations: offset, angle, keep-front)
 - [ ] Hatch Outline filter (handbook audit)
-- [ ] Roughen filter (handbook audit)
+- [x] Roughen filter (Transformations: segment length, h/v
+      jitter, reseeded per apply)
 - [ ] Interpolate with Background (handbook audit)
 - [ ] Transform Metrics (batch metrics arithmetic) (handbook
       audit)
