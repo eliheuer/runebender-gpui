@@ -1902,6 +1902,167 @@ fn add_extreme_points(
     changed
 }
 
+/// Extrude (Glyphs' filter): sweep the glyph along `angle` by
+/// `offset` units — the union of the shape, its translated copy,
+/// and a wall quad per segment — then cut the front face away
+/// unless `keep_front`. Angle 0 extrudes right; 30 is the Glyphs
+/// default's downward-right shadow.
+fn extrude_glyph_contours(
+    glyph: &mut norad::Glyph,
+    offset: f64,
+    angle_degrees: f64,
+    keep_front: bool,
+) -> bool {
+    if offset <= 0.0 || glyph.contours.is_empty() {
+        return false;
+    }
+    let (sin, cos) = (-angle_degrees).to_radians().sin_cos();
+    let d = kurbo::Vec2::new(offset * cos, offset * sin);
+    let mut combined = BezPath::new();
+    let mut front = BezPath::new();
+    for contour in &glyph.contours {
+        let path = runebender_core::glyph_paths::contour_to_bezpath(contour);
+        front.extend(path.elements().iter().copied());
+        combined.extend(path.elements().iter().copied());
+        combined.extend(
+            (Affine::translate(d) * &path).elements().iter().copied(),
+        );
+        // Wall quads, each wound positive so the nonzero union eats
+        // them all the same way.
+        let mut walls = BezPath::new();
+        for seg in path.segments() {
+            use kurbo::ParamCurve as _;
+            let (a, b) = (seg.eval(0.0), seg.eval(1.0));
+            let (a2, b2) = (a + d, b + d);
+            let area = (b.x - a.x) * (b2.y - a.y) - (b2.x - a.x) * (b.y - a.y);
+            let quad = if area >= 0.0 {
+                [a, b, b2, a2]
+            } else {
+                [a, a2, b2, b]
+            };
+            walls.move_to(quad[0]);
+            walls.line_to(quad[1]);
+            walls.line_to(quad[2]);
+            walls.line_to(quad[3]);
+            walls.close_path();
+        }
+        combined.extend(walls.elements().iter().copied());
+    }
+    let empty = BezPath::new();
+    let Ok(silhouette) = linesweeper::binary_op(
+        &combined,
+        &empty,
+        linesweeper::FillRule::NonZero,
+        linesweeper::BinaryOp::Union,
+    ) else {
+        return false;
+    };
+    let mut merged = BezPath::new();
+    for contour in silhouette.contours() {
+        merged.extend(contour.path.elements().iter().copied());
+    }
+    let result = if keep_front {
+        merged
+    } else {
+        let Ok(cut) = linesweeper::binary_op(
+            &merged,
+            &front,
+            linesweeper::FillRule::NonZero,
+            linesweeper::BinaryOp::Difference,
+        ) else {
+            return false;
+        };
+        let mut out = BezPath::new();
+        for contour in cut.contours() {
+            out.extend(contour.path.elements().iter().copied());
+        }
+        out
+    };
+    let empty_map = std::collections::HashMap::new();
+    let mut contours: Vec<norad::Contour> = Vec::new();
+    let mut sub = BezPath::new();
+    for el in result.elements() {
+        if matches!(el, PathEl::MoveTo(_)) && !sub.elements().is_empty() {
+            if let Some(c) =
+                runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty_map)
+            {
+                contours.push(c);
+            }
+            sub = BezPath::new();
+        }
+        sub.push(*el);
+    }
+    if !sub.elements().is_empty() {
+        if let Some(c) =
+            runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty_map)
+        {
+            contours.push(c);
+        }
+    }
+    if contours.is_empty() {
+        return false;
+    }
+    glyph.contours = contours;
+    true
+}
+
+/// Roughen (Glyphs' filter): flatten each targeted contour into
+/// straight segments of roughly `segment_length`, then jitter every
+/// point by up to ±h/±v. `seed` varies run to run so Apply twice
+/// gives a different rough.
+fn roughen_glyph_contours(
+    glyph: &mut norad::Glyph,
+    selected: &std::collections::HashSet<usize>,
+    segment_length: f64,
+    h: f64,
+    v: f64,
+    seed: u64,
+) -> bool {
+    use kurbo::ParamCurve as _;
+    use kurbo::ParamCurveArclen as _;
+    if segment_length < 1.0 {
+        return false;
+    }
+    // A tiny LCG: deterministic per seed, no clock, no dependency.
+    let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+    let mut jitter = |amount: f64| {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let unit = (state >> 11) as f64 / (1u64 << 53) as f64;
+        (unit * 2.0 - 1.0) * amount
+    };
+    let mut changed = false;
+    for (ci, contour) in glyph.contours.iter_mut().enumerate() {
+        if !(selected.is_empty() || selected.contains(&ci)) {
+            continue;
+        }
+        let path = runebender_core::glyph_paths::contour_to_bezpath(&*contour);
+        let mut points: Vec<norad::ContourPoint> = Vec::new();
+        for seg in path.segments() {
+            let len = seg.arclen(0.5);
+            let steps = (len / segment_length).ceil().max(1.0) as usize;
+            for step in 0..steps {
+                let t = step as f64 / steps as f64;
+                let p = seg.eval(t);
+                points.push(norad::ContourPoint::new(
+                    (p.x + jitter(h)).round(),
+                    (p.y + jitter(v)).round(),
+                    norad::PointType::Line,
+                    false,
+                    None,
+                    None,
+                ));
+            }
+        }
+        if points.len() >= 3 {
+            *contour = norad::Contour::new(points, None);
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Built-in sample strings (View > Next Sample String): spacing
 /// control strings and kern words, cycled around the open glyph.
 const SAMPLE_STRINGS: &[&str] = &[
@@ -2457,6 +2618,11 @@ struct Workspace {
     /// Ease amount field: Enter bakes interpolation timing into a
     /// brace layer at the preview location.
     ease_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Extrude field ("offset,angle"; k-prefix keeps the front).
+    extrude_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Roughen field ("segment,h,v"); reseeded per apply.
+    roughen_input: gpui::Entity<gpui_component::input::InputState>,
+    roughen_seed: u64,
     /// The Instances editor field under the axis sliders: Enter
     /// renames the instance at the preview location, or adds one.
     instance_name_input: gpui::Entity<gpui_component::input::InputState>,
@@ -6048,6 +6214,8 @@ impl Workspace {
                         )),
                 )
                 // Offset: the whole glyph bolder (+) or lighter (−).
+                // Extrude sweeps a shadow ("offset,angle"); Roughen
+                // flattens and jitters ("segment,h,v").
                 .child(
                     div()
                         .flex()
@@ -6061,6 +6229,34 @@ impl Workspace {
                         )
                         .child(div().w(px(64.0)).child(
                             gpui_component::input::Input::new(&self.offset_input),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(t::text_muted())
+                                .child("Extrude"),
+                        )
+                        .child(div().w(px(64.0)).child(
+                            gpui_component::input::Input::new(
+                                &self.extrude_input,
+                            ),
+                        ))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(t::text_muted())
+                                .child("Roughen"),
+                        )
+                        .child(div().w(px(64.0)).child(
+                            gpui_component::input::Input::new(
+                                &self.roughen_input,
+                            ),
                         )),
                 ),
         )
@@ -14189,6 +14385,82 @@ impl Workspace {
         self.status_note = Some(format!("Sample: {sample}").into());
     }
 
+    /// Extrude field: "offset" or "offset,angle" (angle default 30,
+    /// the Glyphs default). Prefix with k to keep the front face
+    /// ("k15,30" = Don't Subtract).
+    fn command_extrude(&mut self, text: &str) {
+        let Mode::Editor(index) = self.mode else { return };
+        let trimmed = text.trim();
+        let keep_front = trimmed.starts_with(['k', 'K']);
+        let trimmed = trimmed.trim_start_matches(['k', 'K']).trim();
+        let mut parts = trimmed.split(',').map(str::trim);
+        let Some(Ok(offset)) = parts.next().map(str::parse::<f64>) else {
+            return;
+        };
+        let angle = parts
+            .next()
+            .and_then(|p| p.parse::<f64>().ok())
+            .unwrap_or(30.0);
+        self.push_undo_snapshot(index);
+        let changed = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    extrude_glyph_contours(g, offset, angle, keep_front)
+                })
+            })
+            .unwrap_or(false);
+        if !changed {
+            self.editor.undo.pop();
+        } else {
+            self.editor.selected.clear();
+        }
+    }
+
+    /// Roughen field: "segment" or "segment,h,v" (h and v default to
+    /// the segment length and half of it). New random rough each
+    /// apply.
+    fn command_roughen(&mut self, text: &str) {
+        let Mode::Editor(index) = self.mode else { return };
+        let mut parts = text.trim().split(',').map(str::trim);
+        let Some(Ok(seg)) = parts.next().map(str::parse::<f64>) else {
+            return;
+        };
+        let h = parts
+            .next()
+            .and_then(|p| p.parse::<f64>().ok())
+            .unwrap_or(seg);
+        let v = parts
+            .next()
+            .and_then(|p| p.parse::<f64>().ok())
+            .unwrap_or(seg / 2.0);
+        self.push_undo_snapshot(index);
+        self.roughen_seed = self.roughen_seed.wrapping_add(1);
+        let seed = self.roughen_seed;
+        let selected_contours: std::collections::HashSet<usize> =
+            self.editor.selected.iter().map(|(c, _)| *c).collect();
+        let changed = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| {
+                    roughen_glyph_contours(
+                        g,
+                        &selected_contours,
+                        seg,
+                        h,
+                        v,
+                        seed,
+                    )
+                })
+            })
+            .unwrap_or(false);
+        if !changed {
+            self.editor.undo.pop();
+        } else {
+            self.editor.selected.clear();
+        }
+    }
+
     /// Path > Add Extremes.
     fn command_add_extremes(&mut self) {
         let Mode::Editor(index) = self.mode else { return };
@@ -17545,6 +17817,48 @@ fn main() {
                             }
                         }
                     });
+                    let extrude_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("15,30")
+                    });
+                    let sub_extrude = cx.subscribe_in(&extrude_input, window, {
+                        let state = extrude_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text = state.read(cx).value().to_string();
+                                this.command_extrude(&text);
+                                cx.notify();
+                            }
+                        }
+                    });
+                    let roughen_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("15,15,10")
+                    });
+                    let sub_roughen = cx.subscribe_in(&roughen_input, window, {
+                        let state = roughen_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text = state.read(cx).value().to_string();
+                                this.command_roughen(&text);
+                                cx.notify();
+                            }
+                        }
+                    });
                     let instance_name_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Instance name")
@@ -17968,6 +18282,9 @@ fn main() {
                         sample_index: 0,
                         show_trajectories: false,
                         ease_input,
+                        extrude_input,
+                        roughen_input,
+                        roughen_seed: 0,
                         instance_name_input,
                         features_input,
                         features_edited: false,
@@ -17993,6 +18310,7 @@ fn main() {
                             sub_kern_second, sub_kern_value, sub_slant,
                             sub_features, sub_instance_name, sub_stroke,
                             sub_offset, sub_fit, sub_color_hex, sub_ease,
+                            sub_extrude, sub_roughen,
                         ],
                     };
                     workspace.rebuild_text_models();
@@ -18486,6 +18804,57 @@ mod tests {
         assert_eq!((pts[1].x, pts[1].y), (0.0, 50.0));
         // Second handle: from (100,100) toward (0,100), half = (50,100).
         assert_eq!((pts[2].x, pts[2].y), (50.0, 100.0));
+    }
+
+    #[test]
+    fn extrude_and_roughen_transform_a_square() {
+        use norad::{Contour, ContourPoint, PointType};
+        let square = || {
+            Contour::new(
+                [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
+                    .iter()
+                    .map(|&(x, y)| {
+                        ContourPoint::new(x, y, PointType::Line, false, None, None)
+                    })
+                    .collect(),
+                None,
+            )
+        };
+        let bbox = |g: &norad::Glyph| {
+            let (mut min, mut max) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+            for p in g.contours.iter().flat_map(|c| c.points.iter()) {
+                min = (min.0.min(p.x), min.1.min(p.y));
+                max = (max.0.max(p.x), max.1.max(p.y));
+            }
+            (min, max)
+        };
+        // Extrude right-down at 30° by 40: the box grows +40·cos30 in
+        // x and −40·sin30 in y, and the front face is cut away.
+        let mut g = norad::Glyph::new("extrude-test");
+        g.contours = vec![square()];
+        assert!(extrude_glyph_contours(&mut g, 40.0, 30.0, false));
+        let (min, max) = bbox(&g);
+        assert!((max.0 - (100.0 + 40.0 * (30f64).to_radians().cos())).abs() <= 2.0);
+        assert!((min.1 - (-40.0 * (30f64).to_radians().sin())).abs() <= 2.0);
+
+        // Roughen: many short jittered segments replace the four.
+        let mut r = norad::Glyph::new("roughen-test");
+        r.contours = vec![square()];
+        let all = std::collections::HashSet::new();
+        assert!(roughen_glyph_contours(&mut r, &all, 10.0, 4.0, 4.0, 7));
+        assert!(
+            r.contours[0].points.len() >= 30,
+            "flattened into short segments: {}",
+            r.contours[0].points.len()
+        );
+        // Different seed, different rough.
+        let mut r2 = norad::Glyph::new("roughen-test-2");
+        r2.contours = vec![square()];
+        assert!(roughen_glyph_contours(&mut r2, &all, 10.0, 4.0, 4.0, 8));
+        assert_ne!(
+            r.contours[0].points.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+            r2.contours[0].points.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+        );
     }
 
     #[test]
