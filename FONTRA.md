@@ -24,16 +24,21 @@ Legend: `[x]` we have it, `[~]` partial, `[ ]` missing.
       section — characters logical, glyphs visual, advances,
       cluster cross-highlighting, double-click to edit.
 - [x] Feature toggles (2026-08-26): every features.fea tag as
-      a chip, default → off → on, reshaping live. Script and
-      language overrides remain.
+      a chip, default → off → on, reshaping live.
+- [x] Script/language overrides (2026-08-25): locale chips in
+      the Shaping panel (Urdu, Sindhi, Farsi, Kashmiri, Turkish,
+      Dutch, Romanian, Vietnamese) set the shaper's script and
+      language, so languagesystem-specific rules fire in the
+      preview.
 - [~] Positioning in the preview (2026-08-26): Generate now
       writes mark/mkmk from anchors and curs from entry/exit, so
       one Generate + Apply positions marks in the shaped preview.
       Fontra skips the Apply step (true live emulation); ours is
       one click behind.
-- [ ] Insertion markers in feature code ("# Automatic Code")
-      controlling where generated code lands among hand-written
-      blocks. Our Generate replaces whole blocks by tag.
+- [x] Insertion markers (2026-08-25): a "# Automatic Code"
+      line in features.fea marks where Generate adds new blocks
+      (inserted just above it, in order; existing blocks still
+      replaced in place; no marker = append at end).
 - [~] Axis mappings: avar pairs editable in the Axes section;
       avar2 cross-axis mapping remains.
 - [ ] Status definitions: per-source glyph status colors with

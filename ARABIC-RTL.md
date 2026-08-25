@@ -35,7 +35,10 @@ init/medi/fina, mark anchors) is the working test font.
 3. [done 2026-08-26] Feature toggles: the Shaping section lists
    every features.fea tag as a chip cycling default → off → on,
    reshaping immediately (core grew shape_with_features).
-   Script/language override remains.
+   [done 2026-08-25] Script/language override: locale chips
+   (Urdu, Sindhi, Farsi, Kashmiri + Latin locales) drive core's
+   set_shaping_locale, making languagesystem-specific rules
+   (arab/URD locl) fire in the preview — unit-tested in core.
 4. [done 2026-08-26] Cursive attachment: Generate writes a curs
    block from entry/exit anchors (RightToLeft IgnoreMarks,
    NULL for missing sides). Drawing the connection line in the

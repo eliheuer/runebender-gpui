@@ -45,9 +45,10 @@ Deliberate non-goals are in the last section.
       horizontal and vertical tangent, selection-scoped.
       Inflections and shift-click-to-add come later (handbook
       audit)
-- [ ] Open and close paths, re-segment outlines — partly here
-      via pen and knife; no explicit open/close commands
-      (handbook audit)
+- [x] Open and close paths, re-segment outlines (2026-08-25):
+      right-click a segment > Insert Node Here splits it at the
+      click; right-click an on-curve point > Open Contour Here /
+      Close Contour toggles the contour open at that point
 - [~] Node locking: right-click locks a node against selection
       and drags (session-scoped, read-only tint). Focus mode and
       persistence later (handbook audit)
@@ -306,8 +307,11 @@ Deliberate non-goals are in the last section.
       Clipboard paste and transform support come later
       (handbook audit)
 - [ ] Copy glyphs between open fonts (handbook audit)
-- [ ] Smart filters (predicate-based sidebar filters) and custom
-      sidebar categories (handbook audit)
+- [x] Smart filters (2026-08-25): a query in the search field
+      grows a Save row at the foot of Filters; saved filters
+      live in the font lib (com.runebender.savedFilters), filter
+      by the predicate language (w>600, cat:, comp:, has:...)
+      or name substring, count live, delete on hover
 - [x] Search with scopes, regex, case toggle
 - [x] Grid multi-select with batch mark color
 - [x] Font view modes: Grid / Detail / List switcher in the
