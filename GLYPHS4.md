@@ -195,8 +195,15 @@ Deliberate non-goals are in the last section.
 
 ## Color fonts
 
-- [ ] COLRv0 / CPAL layered color
-- [ ] COLRv1 with gradients
+- [~] COLRv0 / CPAL layered color: the editor's Color section
+      edits the ufo2ft lib keys (palette hex entry, color.N layer
+      mapping, stacked in-canvas preview); color layers are plain
+      UFO layers, edited through the Glyph Layers swap arrows.
+      Verified compiling to COLR + CPAL through ufo2ft. Remaining:
+      per-glyph mapping overrides, palette reordering
+- [ ] COLRv1 with gradients (paint graph model; a much bigger
+      lift — ufo2ft consumes COLR_v1-style lib data via
+      colorLayers with paints)
 - (sbix and SVG-in-OT are non-goals; see below)
 
 ## Application shell
