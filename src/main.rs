@@ -3721,6 +3721,9 @@ struct Workspace {
     annotation_input: gpui::Entity<gpui_component::input::InputState>,
     /// Smart-axis definition on the open part glyph ("Width,0,100").
     smart_axis_input: gpui::Entity<gpui_component::input::InputState>,
+    /// New kerning group from the grid selection: "o" (kern1) or
+    /// "|o" (kern2).
+    group_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// The selected smart component's value on its first axis.
     smart_value_input: gpui::Entity<gpui_component::input::InputState>,
     anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
@@ -14962,6 +14965,181 @@ impl Workspace {
         self.rebuild_text_models();
     }
 
+    /// Add the grid selection to a kerning group (creating it as
+    /// needed), on every master. `first_side` = public.kern1, the
+    /// first glyph's right edge.
+    fn command_add_selection_to_group(&mut self, first_side: bool, group: &str) {
+        let names = self.selection_names();
+        if names.is_empty() {
+            self.status_note =
+                Some("Select glyphs in the grid first".into());
+            return;
+        }
+        let prefix = if first_side { "public.kern1." } else { "public.kern2." };
+        let full = format!("{prefix}{group}");
+        let Ok(group_name) = norad::Name::new(&full) else { return };
+        let Some(project) = self.project.as_mut() else { return };
+        let mut added = 0usize;
+        for master in project.masters.iter_mut() {
+            let members = master
+                .font
+                .groups
+                .entry(group_name.clone())
+                .or_default();
+            for name in &names {
+                if let Ok(member) = norad::Name::new(name) {
+                    if !members.contains(&member) {
+                        members.push(member);
+                        added += 1;
+                    }
+                }
+            }
+            master.dirty = true;
+        }
+        self.rebuild_text_models();
+        self.status_note = Some(
+            format!("@{group}: {added} membership(s) added").into(),
+        );
+    }
+
+    /// Drop one glyph from a kerning group, on every master. An
+    /// emptied group is removed.
+    fn command_remove_from_group(&mut self, full_group: &str, member: &str) {
+        let Some(project) = self.project.as_mut() else { return };
+        for master in project.masters.iter_mut() {
+            let mut emptied = false;
+            if let Some(members) = master.font.groups.get_mut(full_group) {
+                members.retain(|m| m.as_str() != member);
+                emptied = members.is_empty();
+            }
+            if emptied {
+                master.font.groups.retain(|k, _| k.as_str() != full_group);
+            }
+            master.dirty = true;
+        }
+        self.rebuild_text_models();
+    }
+
+    /// Groups section (grid mode): the kerning groups as shelves —
+    /// members as chips with removal, and '+ sel' adds the grid
+    /// selection (the Glyphs 4 visual groups shelf, click-to-assign
+    /// instead of drag for now). The field creates a group from the
+    /// selection: 'o' for kern1, '|o' for kern2.
+    fn groups_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(font) = self.font() else {
+            return self.section(cx, "Groups", div());
+        };
+        let mut rows = div().flex().flex_col().gap_1();
+        let mut shown = 0usize;
+        for (full, members) in font.font.groups.iter() {
+            let name = full.as_str();
+            let (side, short) =
+                if let Some(s) = name.strip_prefix("public.kern1.") {
+                    ("L", s)
+                } else if let Some(s) = name.strip_prefix("public.kern2.") {
+                    ("R", s)
+                } else {
+                    continue;
+                };
+            shown += 1;
+            if shown > 40 {
+                break;
+            }
+            let full_owned = name.to_string();
+            let short_owned = short.to_string();
+            let side_first = side == "L";
+            let mut chips = div().flex().flex_wrap().gap_1();
+            for member in members.iter().take(24) {
+                let member_owned = member.to_string();
+                let full_for_chip = full_owned.clone();
+                chips = chips.child(
+                    div()
+                        .id(gpui::SharedString::from(format!(
+                            "grp-{name}-{member}"
+                        )))
+                        .px_1()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(t::cell_border())
+                        .text_xs()
+                        .text_color(t::text())
+                        .cursor_pointer()
+                        .child(member.to_string())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.command_remove_from_group(
+                                &full_for_chip,
+                                &member_owned,
+                            );
+                            cx.notify();
+                        })),
+                );
+            }
+            if members.len() > 24 {
+                chips = chips.child(
+                    div()
+                        .text_xs()
+                        .text_color(t::text_muted())
+                        .child(format!("+{}", members.len() - 24)),
+                );
+            }
+            rows = rows.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(t::accent())
+                                    .child(format!("@{short} · {side}")),
+                            )
+                            .child(
+                                div()
+                                    .id(gpui::SharedString::from(format!(
+                                        "grp-add-{name}"
+                                    )))
+                                    .px_1()
+                                    .rounded_sm()
+                                    .text_xs()
+                                    .cursor_pointer()
+                                    .border_1()
+                                    .border_color(t::cell_border())
+                                    .text_color(t::text_muted())
+                                    .child("+ sel")
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.command_add_selection_to_group(
+                                                side_first,
+                                                &short_owned,
+                                            );
+                                            cx.notify();
+                                        },
+                                    )),
+                            ),
+                    )
+                    .child(chips),
+            );
+        }
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(gpui_component::input::Input::new(&self.group_name_input))
+            .child(rows)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("Chip removes · + sel adds the grid selection"),
+            );
+        self.section(cx, "Groups", body)
+    }
+
     /// Kerning section (grid mode): every pair on the active master,
     /// filtered by the search field, with an editor row that commits
     /// on Enter. Glyphs keeps this in its kerning window; the drag
@@ -15042,20 +15220,30 @@ impl Workspace {
                         }
                     }))
                     .child({
-                        // Groups read as @name, the Glyphs kerning
-                        // window's shorthand; the editor row keeps
-                        // the full public.kern names.
+                        // Groups read as @name in the accent; raw
+                        // glyph pairs — exceptions — in the warning
+                        // yellow, the Glyphs kerning window's code.
+                        let is_group = |name: &str| {
+                            name.starts_with("public.kern1.")
+                                || name.starts_with("public.kern2.")
+                        };
                         let short = |name: &str| {
                             name.strip_prefix("public.kern1.")
                                 .or_else(|| name.strip_prefix("public.kern2."))
                                 .map(|g| format!("@{g}"))
                                 .unwrap_or_else(|| name.to_string())
                         };
+                        let exception =
+                            !is_group(first) || !is_group(second);
                         div()
                             .flex_1()
                             .min_w(px(0.0))
                             .truncate()
-                            .text_color(t::text())
+                            .text_color(if exception {
+                                t::status_yellow()
+                            } else {
+                                t::text()
+                            })
                             .child(format!(
                                 "{} · {}",
                                 short(first),
@@ -20592,6 +20780,7 @@ impl Render for Workspace {
                     .child(self.font_info_section(cx))
                     .child(self.dimensions_section(cx))
                     .child(self.kerning_section(cx))
+                    .child(self.groups_section(cx))
                     .child(self.features_section(cx))
                     .child(self.layers_section(cx))
                     .child(self.glyph_preview_panel())
@@ -21755,6 +21944,40 @@ fn main() {
                             }
                         }
                     });
+                    let group_name_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("new group · o or |o")
+                    });
+                    let sub_group_name = cx.subscribe_in(&group_name_input, window, {
+                        let state = group_name_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              window,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text = state.read(cx).value().to_string();
+                                let trimmed = text.trim();
+                                let (first_side, name) =
+                                    match trimmed.strip_prefix('|') {
+                                        Some(rest) => (false, rest.trim()),
+                                        None => (true, trimmed),
+                                    };
+                                if !name.is_empty() {
+                                    this.command_add_selection_to_group(
+                                        first_side, name,
+                                    );
+                                    state.update(cx, |st, cx| {
+                                        st.set_value(String::new(), window, cx);
+                                    });
+                                }
+                                cx.notify();
+                            }
+                        }
+                    });
                     let smart_value_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("value")
@@ -21933,6 +22156,7 @@ fn main() {
                         annotation_input: annotation_input.clone(),
                         smart_axis_input,
                         smart_value_input,
+                        group_name_input,
                         anchor_name_input: anchor_name_input.clone(),
                         glyph_image_cache: Default::default(),
                         glyph_inputs: GlyphInputs {
@@ -22015,7 +22239,7 @@ fn main() {
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_gnote,
                             sub_gswitch, sub_glk, sub_grk, sub_comp,
                             sub_corner, sub_note, sub_smart_axis,
-                            sub_smart_value,
+                            sub_smart_value, sub_group_name,
                             sub_sw, sub_sh, sub_anchor, sub_ref,
                             sub_fi_family, sub_fi_style, sub_fi_upm,
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
