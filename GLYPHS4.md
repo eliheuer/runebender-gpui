@@ -64,7 +64,11 @@ Deliberate non-goals are in the last section.
       double click, lock
 - [x] Component auto-alignment from anchors, live
 - [ ] Smart components (per-component axes, "glyph axes" in 4)
-- [ ] Corner components
+- [~] Corner components: Apply Corner… on a node splices the
+      _corner glyph's path with Glyphs' sheared fit, in every
+      master. Baked (no UFO compiler expands corner metadata);
+      live re-editable corners, caps, and curve-adjacent corners
+      come later
 - [ ] Segment components
 - [ ] Head components
 - [ ] Strokes: live offset on open paths, caps, miters
