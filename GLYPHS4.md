@@ -171,7 +171,11 @@ Deliberate non-goals are in the last section.
       reordering come later
 - [x] Axis mappings (avar) editing: user→design pairs in the
       Axes section, saved into the designspace
-- [ ] Reinterpolate a layer from the other masters
+- [x] Reinterpolate a layer from the other masters
+      (2026-08-25): Glyph > Reinterpolate rebuilds the active
+      master's outline from the rest (brace layers included) at
+      this master's location; two masters = exact copy,
+      unit-tested
 - [ ] Axis particles: generate master and instance grids from
       named stops (new in 4)
 - [ ] Virtual masters (an axis carried by a custom parameter,

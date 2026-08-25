@@ -89,6 +89,7 @@ gpui::actions!(
         Rotate180,
         RoundCorners,
         AddExtremes,
+        Reinterpolate,
         SyncMetrics,
         ShowAllMasters,
         BakeMasks,
@@ -229,6 +230,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Round Corners", RoundCorners),
                 MenuItem::action("Add Extremes", AddExtremes),
                 MenuItem::action("Sync Metrics", SyncMetrics),
+                MenuItem::action("Reinterpolate", Reinterpolate),
                 MenuItem::action("Bake Masks", BakeMasks),
                 MenuItem::action("Check Joining", CheckJoining),
                 MenuItem::action("Hyperbezier to Cubic", HyperToCubic),
@@ -1430,6 +1432,80 @@ impl Project {
     /// Interpolated outline + advance of a glyph at the current
     /// location. None when at the default location, when masters are
     /// point-incompatible, or when there is no model.
+    /// The glyph rebuilt from every source EXCEPT the active
+    /// master, evaluated at the active master's own location —
+    /// Glyphs' Re-Interpolate, for repairing one broken master from
+    /// the others. With one other source this is a straight copy.
+    fn reinterpolated_from_others(
+        &self,
+        glyph_name: &str,
+    ) -> Result<norad::Glyph, String> {
+        let flatten = |glyph: &norad::Glyph| {
+            let mut v = vec![glyph.width];
+            for contour in &glyph.contours {
+                for p in &contour.points {
+                    v.push(p.x);
+                    v.push(p.y);
+                }
+            }
+            v
+        };
+        let mut values: Vec<Vec<f64>> = Vec::new();
+        let mut locations: Vec<runebender_core::var_model::Location> =
+            Vec::new();
+        let mut template: Option<norad::Glyph> = None;
+        for (mi, master) in self.masters.iter().enumerate() {
+            if mi == self.active {
+                continue;
+            }
+            let Some(glyph) = master.font.get_glyph(glyph_name) else {
+                continue;
+            };
+            values.push(flatten(glyph));
+            locations.push(self.master_locations[mi].clone());
+            if template.is_none() {
+                template = Some(glyph.clone());
+            }
+        }
+        for b in &self.brace {
+            if b.master == self.active {
+                continue;
+            }
+            let Some(glyph) = self
+                .masters
+                .get(b.master)
+                .and_then(|m| m.font.layers.get(&b.layer))
+                .and_then(|l| l.get_glyph(glyph_name))
+            else {
+                continue;
+            };
+            values.push(flatten(glyph));
+            locations.push(b.location.clone());
+        }
+        let Some(mut template) = template else {
+            return Err("No other master holds this glyph".into());
+        };
+        let len = values[0].len();
+        if values.iter().any(|v| v.len() != len) {
+            return Err("Other masters are not point-compatible".into());
+        }
+        let out = if values.len() == 1 {
+            values.remove(0)
+        } else {
+            runebender_core::var_model::VariationModel::new(&locations)
+                .interpolate(&values, &self.master_locations[self.active])
+        };
+        let mut it = out.iter().copied();
+        template.width = it.next().unwrap_or(template.width);
+        for contour in template.contours.iter_mut() {
+            for p in contour.points.iter_mut() {
+                p.x = it.next().unwrap_or(p.x);
+                p.y = it.next().unwrap_or(p.y);
+            }
+        }
+        Ok(template)
+    }
+
     fn interpolated_glyph(&self, glyph_name: &str) -> Option<(BezPath, f64)> {
         let glyph = self.interpolated_norad_glyph(glyph_name)?;
         let advance = glyph.width;
@@ -9019,6 +9095,41 @@ impl Workspace {
             }
         }
         self.command_sync_metrics();
+    }
+
+    /// Glyph > Reinterpolate: rebuild the current glyph's outline
+    /// in the active master from the other masters, evaluated at
+    /// this master's location.
+    fn command_reinterpolate(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        let rebuilt = match self
+            .project
+            .as_ref()
+            .map(|p| p.reinterpolated_from_others(&name))
+        {
+            Some(Ok(glyph)) => glyph,
+            Some(Err(why)) => {
+                self.status_note = Some(why.into());
+                return;
+            }
+            None => return,
+        };
+        self.push_undo_snapshot(index);
+        if let Some(font) = self.font_mut() {
+            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
+                glyph.contours = rebuilt.contours;
+                glyph.width = rebuilt.width;
+                font.dirty = true;
+                font.modified_glyphs.insert(name.clone());
+            }
+            font.refresh_from_font();
+        }
+        self.status_note =
+            Some(format!("{name}: reinterpolated from the other masters").into());
     }
 
     /// Glyph > Sync Metrics: apply every metrics key in every
@@ -22104,6 +22215,10 @@ impl Render for Workspace {
                 this.command_add_extremes();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &Reinterpolate, _, cx| {
+                this.command_reinterpolate();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &SyncMetrics, _, cx| {
                 this.command_sync_metrics();
                 cx.notify();
@@ -23773,6 +23888,35 @@ mod tests {
             "feature kern {\n} kern;\n", "liga", "    sub f i by fi;\n",
         );
         assert!(plain.trim_end().ends_with("} liga;"));
+    }
+
+    #[test]
+    fn reinterpolate_rebuilds_a_master_from_the_others() {
+        let mut project = Project::load(&default_font_path()).expect("loads");
+        // Two masters: rebuilding the active one from "the others"
+        // must reproduce the other master exactly.
+        assert_eq!(project.masters.len(), 2);
+        project.active = 0;
+        let expected = project.masters[1]
+            .font
+            .get_glyph("H")
+            .expect("bold has H")
+            .clone();
+        let rebuilt = project
+            .reinterpolated_from_others("H")
+            .expect("reinterpolates");
+        assert_eq!(rebuilt.width, expected.width);
+        assert_eq!(rebuilt.contours.len(), expected.contours.len());
+        for (a, b) in rebuilt.contours.iter().zip(expected.contours.iter()) {
+            for (pa, pb) in a.points.iter().zip(b.points.iter()) {
+                assert!((pa.x - pb.x).abs() < 1e-6);
+                assert!((pa.y - pb.y).abs() < 1e-6);
+            }
+        }
+        // A glyph missing everywhere else reports, not panics.
+        assert!(project
+            .reinterpolated_from_others("no.such.glyph")
+            .is_err());
     }
 
     #[test]
