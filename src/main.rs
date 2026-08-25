@@ -3675,6 +3675,9 @@ struct Workspace {
     /// Ghost every attachable mark on the open glyph's anchors
     /// (Glyphs' mark cloud).
     show_mark_cloud: bool,
+    /// Preview feature overrides: tag → forced on/off. Absent tags
+    /// keep the shaper's defaults.
+    feature_overrides: std::collections::HashMap<String, bool>,
     /// Ease amount field: Enter bakes interpolation timing into a
     /// brace layer at the preview location.
     ease_input: gpui::Entity<gpui_component::input::InputState>,
@@ -7629,10 +7632,103 @@ impl Workspace {
                 true,
             ));
         }
+        // Feature toggles: every feature tag in features.fea, each
+        // cycling default → off → on (Fontra's preview switches).
+        let mut tags: Vec<String> = self
+            .font()
+            .map(|f| {
+                let mut found = Vec::new();
+                let fea = &f.font.features;
+                let mut rest = fea.as_str();
+                while let Some(at) = rest.find("feature ") {
+                    let tail = &rest[at + 8..];
+                    let tag: String = tail
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric())
+                        .take(4)
+                        .collect();
+                    if tag.len() == 4 && !found.contains(&tag) {
+                        found.push(tag);
+                    }
+                    rest = tail;
+                }
+                found
+            })
+            .unwrap_or_default();
+        tags.sort();
+        let mut toggles = div().flex().flex_wrap().gap_1();
+        for tag in &tags {
+            let state = self.feature_overrides.get(tag.as_str()).copied();
+            let tag_owned = tag.clone();
+            toggles = toggles.child(
+                div()
+                    .id(gpui::SharedString::from(format!("fea-{tag}")))
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_sm()
+                    .border_1()
+                    .text_xs()
+                    .cursor_pointer()
+                    .border_color(match state {
+                        Some(true) => t::accent(),
+                        Some(false) => t::annotation(),
+                        None => t::cell_border(),
+                    })
+                    .text_color(match state {
+                        Some(true) => t::accent(),
+                        Some(false) => t::annotation(),
+                        None => t::text_muted(),
+                    })
+                    .child(match state {
+                        Some(false) => format!("{tag} ×"),
+                        Some(true) => format!("{tag} ✓"),
+                        None => tag.clone(),
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        // default → off → on → default.
+                        let next = match this
+                            .feature_overrides
+                            .get(tag_owned.as_str())
+                        {
+                            None => Some(false),
+                            Some(false) => Some(true),
+                            Some(true) => None,
+                        };
+                        match next {
+                            Some(v) => {
+                                this.feature_overrides
+                                    .insert(tag_owned.clone(), v);
+                            }
+                            None => {
+                                this.feature_overrides
+                                    .remove(tag_owned.as_str());
+                            }
+                        }
+                        let overrides: Vec<(String, bool)> = this
+                            .feature_overrides
+                            .iter()
+                            .map(|(k, v)| (k.clone(), *v))
+                            .collect();
+                        this.edit_buffer.set_feature_overrides(overrides);
+                        this.edit_buffer.shape_arabic_if_rtl();
+                        this.sync_sort_offset();
+                        cx.notify();
+                    })),
+            );
+        }
         let body = div()
             .flex()
             .flex_col()
             .gap_2()
+            .when(!tags.is_empty(), |el| {
+                el.child(
+                    div()
+                        .text_xs()
+                        .text_color(t::text_muted())
+                        .child("Features (click: default → off → on)"),
+                )
+                .child(toggles)
+            })
             .child(
                 div()
                     .text_xs()
@@ -21652,6 +21748,7 @@ fn main() {
                         hoi_live: None,
                         shaping_focus: None,
                         show_mark_cloud: false,
+                        feature_overrides: Default::default(),
                         ease_input,
                         extrude_input,
                         roughen_input,
