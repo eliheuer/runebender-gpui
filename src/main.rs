@@ -1392,10 +1392,22 @@ impl Project {
     /// (point structure kept): the working form for the ghost, the
     /// strip, and for freezing into a brace layer.
     fn interpolated_norad_glyph(&self, glyph_name: &str) -> Option<norad::Glyph> {
-        self.model.as_ref()?;
         if self.location.values().all(|v| v.abs() < 1e-9) {
             return None;
         }
+        self.interpolated_at(glyph_name, &self.location)
+    }
+
+    /// The interpolation at an arbitrary normalized location — the
+    /// default location included, where it returns the default
+    /// master's own coordinates (trajectory sampling needs the whole
+    /// axis, ends included).
+    fn interpolated_at(
+        &self,
+        glyph_name: &str,
+        location: &runebender_core::var_model::Location,
+    ) -> Option<norad::Glyph> {
+        self.model.as_ref()?;
         let flatten = |glyph: &norad::Glyph| {
             let mut v = vec![glyph.width];
             for contour in &glyph.contours {
@@ -1433,14 +1445,12 @@ impl Project {
             return None; // point-incompatible sources
         }
         let out = if brace_locations.is_empty() {
-            self.model
-                .as_ref()?
-                .interpolate(&values, &self.location)
+            self.model.as_ref()?.interpolate(&values, location)
         } else {
             let mut locations = self.master_locations.clone();
             locations.extend(brace_locations);
             runebender_core::var_model::VariationModel::new(&locations)
-                .interpolate(&values, &self.location)
+                .interpolate(&values, location)
         };
         // Rebuild on the default master's structure.
         let base = &self.masters[self.active];
@@ -1455,6 +1465,49 @@ impl Project {
         }
         glyph.width = advance;
         Some(glyph)
+    }
+
+    /// Sample every point's position at `steps + 1` equal stops
+    /// along the first axis (min to max), through the same per-glyph
+    /// model the ghost uses — brace layers bend the trajectories.
+    /// Outer index: point (flattened contour order); inner: stop.
+    fn trajectory_samples(
+        &self,
+        glyph_name: &str,
+        steps: usize,
+    ) -> Option<Vec<Vec<kurbo::Point>>> {
+        self.model.as_ref()?;
+        let axis = self.axes.first()?;
+        let mut per_point: Vec<Vec<kurbo::Point>> = Vec::new();
+        for step in 0..=steps {
+            let t = step as f64 / steps as f64;
+            let design = axis.min + (axis.max - axis.min) * t;
+            let mut location = self.location.clone();
+            location.insert(
+                axis.name.clone(),
+                runebender_core::var_model::normalize_value(
+                    design, axis.min, axis.default, axis.max,
+                ),
+            );
+            let glyph = self.interpolated_at(glyph_name, &location)?;
+            let mut flat = Vec::new();
+            for contour in &glyph.contours {
+                for p in &contour.points {
+                    flat.push(kurbo::Point::new(p.x, p.y));
+                }
+            }
+            if per_point.is_empty() {
+                per_point = flat.into_iter().map(|p| vec![p]).collect();
+            } else {
+                if flat.len() != per_point.len() {
+                    return None;
+                }
+                for (track, p) in per_point.iter_mut().zip(flat) {
+                    track.push(p);
+                }
+            }
+        }
+        Some(per_point)
     }
 
     /// The glyph a designspace rule shows at the current preview
@@ -2398,6 +2451,12 @@ struct Workspace {
     show_color_preview: bool,
     /// Which built-in sample string the buffer shows.
     sample_index: usize,
+    /// Draw node trajectories + velocity dots across the first axis
+    /// (higher-order interpolation view).
+    show_trajectories: bool,
+    /// Ease amount field: Enter bakes interpolation timing into a
+    /// brace layer at the preview location.
+    ease_input: gpui::Entity<gpui_component::input::InputState>,
     /// The Instances editor field under the axis sliders: Enter
     /// renames the instance at the preview location, or adds one.
     instance_name_input: gpui::Entity<gpui_component::input::InputState>,
@@ -6168,6 +6227,13 @@ impl Workspace {
     /// source, Glyphs' intermediate layer. Edit it via the swap
     /// arrows; the interpolation ghost and strip pick it up live.
     fn command_brace_layer(&mut self) {
+        self.command_brace_layer_with(None);
+    }
+
+    /// The brace-layer write path, optionally freezing a supplied
+    /// glyph instead of the plain interpolation (interpolation
+    /// timing bakes eased positions through here).
+    fn command_brace_layer_with(&mut self, frozen_override: Option<norad::Glyph>) {
         let Some(index) = self.current_glyph_index() else { return };
         let Some(project) = self.project.as_ref() else { return };
         if project.ds_doc.is_none() {
@@ -6209,8 +6275,8 @@ impl Workspace {
         );
         let normalized_location = project.location.clone();
         let active = project.active;
-        let frozen = project
-            .interpolated_norad_glyph(&name)
+        let frozen = frozen_override
+            .or_else(|| project.interpolated_norad_glyph(&name))
             .or_else(|| project.active_font().font.get_glyph(&name).cloned());
         let Some(frozen) = frozen else { return };
         let filename = project.active_font().source_path.file_name()
@@ -6260,6 +6326,77 @@ impl Workspace {
         self.visible_glyph_layers.insert(layer_name.clone());
         self.status_note =
             Some(format!("Intermediate {layer_name} added for {name}").into());
+    }
+
+    /// Interpolation timing: bake an ease into a brace layer at the
+    /// preview location. Positive ease means the change comes late
+    /// (the light shape holds on), negative means early. Selected
+    /// points ease; the rest stay on the straight interpolation, so
+    /// the layer stays point-compatible. Standard designspace out —
+    /// every compiler understands the result.
+    fn command_ease_interpolation(&mut self, ease: f64) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(project) = self.project.as_ref() else { return };
+        let Some(axis) = project.axes.first().cloned() else { return };
+        if project.master_at_location().is_some() {
+            self.status_note = Some(
+                "Move the axes off a master first: the ease bakes at that location"
+                    .into(),
+            );
+            return;
+        }
+        let name = project.active_font().glyphs[index].name.to_string();
+        // Where the preview sits along the axis, 0..1.
+        let normalized =
+            project.location.get(&axis.name).copied().unwrap_or(0.0);
+        let design = runebender_core::var_model::denormalize_value(
+            normalized, axis.min, axis.default, axis.max,
+        );
+        let t01 = ((design - axis.min) / (axis.max - axis.min)).clamp(0.0, 1.0);
+        let gamma = (ease / 50.0).exp();
+        let eased_t01 = t01.powf(gamma);
+        let eased_design = axis.min + (axis.max - axis.min) * eased_t01;
+        let mut eased_location = project.location.clone();
+        eased_location.insert(
+            axis.name.clone(),
+            runebender_core::var_model::normalize_value(
+                eased_design, axis.min, axis.default, axis.max,
+            ),
+        );
+        let here = project.interpolated_norad_glyph(&name);
+        let eased = project.interpolated_at(&name, &eased_location);
+        let (Some(mut merged), Some(eased)) = (here, eased) else {
+            self.status_note =
+                Some("Ease needs compatible masters".into());
+            return;
+        };
+        // Merge: selected points take the eased position.
+        let selected = self.editor.selected.clone();
+        let all = selected.is_empty();
+        for (ci, contour) in merged.contours.iter_mut().enumerate() {
+            for (pi, point) in contour.points.iter_mut().enumerate() {
+                if !all && !selected.contains(&(ci, pi)) {
+                    continue;
+                }
+                let Some(src) = eased
+                    .contours
+                    .get(ci)
+                    .and_then(|c| c.points.get(pi))
+                else {
+                    continue;
+                };
+                point.x = src.x;
+                point.y = src.y;
+            }
+        }
+        self.command_brace_layer_with(Some(merged));
+        self.status_note = Some(
+            format!(
+                "Ease {ease:+.0} baked at {} {design:.0} (t {:.2} → {:.2})",
+                axis.tag, t01, eased_t01
+            )
+            .into(),
+        );
     }
 
     /// Add a shape switch (bracket layer): an unencoded `.bold`
@@ -7238,6 +7375,17 @@ impl Workspace {
                 .map(|pair| (pair[0].min(pair[1]), pair[0].max(pair[1])))
                 .collect()
         };
+        // Node trajectories across the axis (HOI view): sampled at
+        // equal axis stops, so dot spacing reads as velocity, and
+        // brace layers visibly bend the paths.
+        let trajectories: Option<Vec<Vec<kurbo::Point>>> = self
+            .show_trajectories
+            .then(|| {
+                self.project.as_ref().and_then(|p| {
+                    p.trajectory_samples(entry.name.as_ref(), 10)
+                })
+            })
+            .flatten();
         // Guides, drawn across the whole canvas under the outline:
         // the master's global fontinfo guidelines plus the open
         // glyph's own. The hot one (hovered or mid-drag) draws
@@ -7878,6 +8026,67 @@ impl Workspace {
                                         gpui::point(px(0.0), px(0.0)),
                                     ) {
                                         window.paint_path(path, color);
+                                    }
+                                }
+                                // Node trajectories (HOI): each
+                                // point's path across the axis as a
+                                // thin line, dots at equal axis
+                                // stops — close dots mean slow,
+                                // spread dots mean fast; brace
+                                // layers bend the line.
+                                if let Some(tracks) = &trajectories {
+                                    use kurbo::Shape as _;
+                                    for track in tracks {
+                                        let mut pb =
+                                            PathBuilder::stroke(px(1.0));
+                                        for (i, p) in track.iter().enumerate()
+                                        {
+                                            let sp = to_screen(p.x, p.y);
+                                            if i == 0 {
+                                                pb.move_to(sp);
+                                            } else {
+                                                pb.line_to(sp);
+                                            }
+                                        }
+                                        if let Ok(line) = pb.build() {
+                                            window.paint_path(
+                                                line,
+                                                t::trajectory_line(),
+                                            );
+                                        }
+                                        let last = track.len() - 1;
+                                        for (i, p) in track.iter().enumerate()
+                                        {
+                                            let sp = to_screen(p.x, p.y);
+                                            let r = if i == 0 || i == last {
+                                                3.0
+                                            } else {
+                                                1.7
+                                            };
+                                            let dot = kurbo::Circle::new(
+                                                (
+                                                    f32::from(sp.x) as f64,
+                                                    f32::from(sp.y) as f64,
+                                                ),
+                                                r,
+                                            )
+                                            .to_path(0.25);
+                                            if let Some(path) =
+                                                build_fill_path(
+                                                    &dot,
+                                                    Affine::IDENTITY,
+                                                    gpui::point(
+                                                        px(0.0),
+                                                        px(0.0),
+                                                    ),
+                                                )
+                                            {
+                                                window.paint_path(
+                                                    path,
+                                                    t::trajectory_dot(),
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                                 for (right, x) in [(false, 0.0), (true, advance)] {
@@ -14663,6 +14872,52 @@ impl Workspace {
                 &self.instance_name_input,
             ));
         }
+        // HOI: the trajectory view and the timing ease, the
+        // higher-order interpolation corner of the panel.
+        body = body.child(
+            div()
+                .text_xs()
+                .text_color(t::text_muted())
+                .child("Interpolation"),
+        );
+        let on = self.show_trajectories;
+        body = body.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .id("hoi-trajectories")
+                        .px_2()
+                        .py_0p5()
+                        .rounded_sm()
+                        .text_sm()
+                        .cursor_pointer()
+                        .border_1()
+                        .when(on, |el| {
+                            el.border_color(t::accent()).text_color(t::accent())
+                        })
+                        .when(!on, |el| {
+                            el.border_color(t::cell_border())
+                                .text_color(t::text())
+                        })
+                        .child("Trajectories")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_trajectories = !this.show_trajectories;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(t::text_muted())
+                        .child("Ease"),
+                )
+                .child(div().w(px(64.0)).child(
+                    gpui_component::input::Input::new(&self.ease_input),
+                )),
+        );
         Some(self.section(cx, "Axes", body))
     }
 
@@ -17263,6 +17518,33 @@ fn main() {
                             }
                         }
                     });
+                    let ease_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("±50")
+                    });
+                    let sub_ease = cx.subscribe_in(&ease_input, window, {
+                        let state = ease_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                if let Ok(ease) = state
+                                    .read(cx)
+                                    .value()
+                                    .trim()
+                                    .parse::<f64>()
+                                {
+                                    this.command_ease_interpolation(ease);
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    });
                     let instance_name_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Instance name")
@@ -17684,6 +17966,8 @@ fn main() {
                         color_selected: 0,
                         show_color_preview: true,
                         sample_index: 0,
+                        show_trajectories: false,
+                        ease_input,
                         instance_name_input,
                         features_input,
                         features_edited: false,
@@ -17708,7 +17992,7 @@ fn main() {
                             sub_kern_filter, sub_kern_first,
                             sub_kern_second, sub_kern_value, sub_slant,
                             sub_features, sub_instance_name, sub_stroke,
-                            sub_offset, sub_fit, sub_color_hex,
+                            sub_offset, sub_fit, sub_color_hex, sub_ease,
                         ],
                     };
                     workspace.rebuild_text_models();
@@ -18028,6 +18312,58 @@ mod tests {
             "brace layer pins the outline at its location: {} vs {}",
             refined.contours[0].points[0].x,
             orig + 40.0,
+        );
+    }
+
+    #[test]
+    fn trajectories_sample_the_axis_and_bend_with_braces() {
+        let mut project = Project::load(&default_font_path()).expect("loads");
+        let name = "n";
+        let tracks = project
+            .trajectory_samples(name, 10)
+            .expect("samples with plain masters");
+        let regular = project.masters[0].font.get_glyph(name).unwrap();
+        let first_point = &regular.contours[0].points[0];
+        // The t=0 end of every track is the Regular master exactly.
+        assert!(
+            (tracks[0][0].x - first_point.x).abs() < 1e-6
+                && (tracks[0][0].y - first_point.y).abs() < 1e-6
+        );
+        // Straight interpolation: the midpoint sample is the average
+        // of the ends.
+        let mid_linear = tracks[0][5].x;
+        let expected =
+            (tracks[0][0].x + tracks[0][10].x) / 2.0;
+        assert!((mid_linear - expected).abs() < 1.0, "linear before braces");
+        // A brace at wght 550 (the axis midpoint) pushing the point
+        // +60 bends the track's middle away from the straight line.
+        let axis = project.axes[0].clone();
+        let mut frozen = regular.clone();
+        frozen.contours[0].points[0].x += 60.0;
+        project.masters[0]
+            .font
+            .layers
+            .get_or_create_layer("{550}")
+            .unwrap()
+            .insert_glyph(frozen);
+        let mut loc = runebender_core::var_model::Location::new();
+        loc.insert(
+            axis.name.clone(),
+            runebender_core::var_model::normalize_value(
+                550.0, axis.min, axis.default, axis.max,
+            ),
+        );
+        project.brace.push(BraceSource {
+            master: 0,
+            layer: "{550}".into(),
+            location: loc,
+        });
+        let bent = project.trajectory_samples(name, 10).expect("still samples");
+        assert!(
+            (bent[0][5].x - mid_linear).abs() > 20.0,
+            "brace bends the middle: {} vs {}",
+            bent[0][5].x,
+            mid_linear
         );
     }
 

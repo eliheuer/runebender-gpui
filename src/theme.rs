@@ -317,6 +317,14 @@ pub fn zone_band() -> Rgba {
     color.a = 0.10;
     color
 }
+/// HOI node trajectories: the across-the-axis connector line…
+pub fn trajectory_line() -> Rgba {
+    with_alpha(theme().role("kernActive"), 0.55)
+}
+/// …and its velocity dots.
+pub fn trajectory_dot() -> Rgba {
+    c(theme().role("kernActive"))
+}
 /// The sort being manually kerned.
 pub fn kern_active() -> Rgba {
     c(theme().role("kernActive"))
