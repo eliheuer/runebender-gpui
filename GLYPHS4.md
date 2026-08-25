@@ -53,8 +53,9 @@ Deliberate non-goals are in the last section.
       layers below at export (handbook audit)
 - [ ] Annotation tool: text notes, arrows, circles, plus/minus
       marks on the canvas (handbook audit)
-- [ ] Sample strings: predefined edit-view texts, cycled from
-      the keyboard (handbook audit)
+- [~] Sample strings: View menu cycles built-in spacing and
+      kerning texts around the open glyph. Custom string lists
+      come later (handbook audit)
 - [ ] Node corner radius stored on the node
 
 ## Shape reuse
@@ -163,10 +164,11 @@ Deliberate non-goals are in the last section.
 - [ ] Custom parameters / lib editing
 - [ ] Grid spacing and subdivision settings
 - [x] New font from template
-- [ ] Per-master alignment zones (the metrics' zone half; we
-      edit values only) (handbook audit)
-- [ ] Per-master standard stems (feeds hinting, Auto Stems for
-      the Slanter, and zone displays) (handbook audit)
+- [x] Per-master alignment zones: Blue/Other Blues pairs edited
+      in Font Info, drawn as quiet bands in the editor (handbook
+      audit)
+- [x] Per-master standard stems: StemSnap H/V edited in Font
+      Info, read by the autohinter at export (handbook audit)
 - [ ] Stylistic set naming (featureNames blocks) (handbook
       audit)
 - [x] Add and remove glyphs, missing-glyph generate from
