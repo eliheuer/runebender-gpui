@@ -42,6 +42,7 @@ linesweeper = "0.4"
 web-time = "1"
 include_dir = "0.7.4"
 unicode_names2 = "3.1.0"
+plist = "1"
 
 # Shared editing/model crate used by all Runebender editors. Pulled
 # from git so a plain clone (or `cargo install --git`) builds without

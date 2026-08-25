@@ -1790,6 +1790,119 @@ fn fit_curve_handles(
     changed
 }
 
+// ---- color fonts (COLRv0 via the ufo2ft lib keys) ----
+//
+// The build contract is ufo2ft's: `colorPalettes` in the font lib is a
+// list of palettes of [r, g, b, a] floats, `colorLayerMapping` is an
+// ordered list of [layerName, paletteIndex] pairs (bottom first), and
+// at build time same-named glyphs in those UFO layers become the COLR
+// layers. Fontra edits the same keys.
+
+const COLOR_PALETTES_KEY: &str = "com.github.googlei18n.ufo2ft.colorPalettes";
+const COLOR_LAYER_MAPPING_KEY: &str =
+    "com.github.googlei18n.ufo2ft.colorLayerMapping";
+
+/// The first palette: [r, g, b, a] float rows.
+fn read_color_palette(font: &norad::Font) -> Vec<[f64; 4]> {
+    let number = |v: &plist::Value| {
+        v.as_real()
+            .or_else(|| v.as_signed_integer().map(|n| n as f64))
+    };
+    font.lib
+        .get(COLOR_PALETTES_KEY)
+        .and_then(|v| v.as_array())
+        .and_then(|palettes| palettes.first())
+        .and_then(|p| p.as_array())
+        .map(|colors| {
+            colors
+                .iter()
+                .filter_map(|c| {
+                    let arr = c.as_array()?;
+                    let mut out = [0.0, 0.0, 0.0, 1.0];
+                    for (i, v) in arr.iter().take(4).enumerate() {
+                        out[i] = number(v)?;
+                    }
+                    Some(out)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_color_palette(font: &mut norad::Font, palette: &[[f64; 4]]) {
+    let value = plist::Value::Array(vec![plist::Value::Array(
+        palette
+            .iter()
+            .map(|c| {
+                plist::Value::Array(
+                    c.iter().map(|&v| plist::Value::Real(v)).collect(),
+                )
+            })
+            .collect(),
+    )]);
+    font.lib.insert(COLOR_PALETTES_KEY.into(), value);
+}
+
+/// The font-level layer mapping: (layer name, palette index), bottom
+/// layer first.
+fn read_color_mapping(font: &norad::Font) -> Vec<(String, usize)> {
+    font.lib
+        .get(COLOR_LAYER_MAPPING_KEY)
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let arr = row.as_array()?;
+                    let layer = arr.first()?.as_string()?.to_string();
+                    let color = arr
+                        .get(1)?
+                        .as_signed_integer()
+                        .or_else(|| arr.get(1)?.as_real().map(|v| v as i64))?;
+                    Some((layer, color.max(0) as usize))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_color_mapping(font: &mut norad::Font, mapping: &[(String, usize)]) {
+    if mapping.is_empty() {
+        font.lib.remove(COLOR_LAYER_MAPPING_KEY);
+        return;
+    }
+    let value = plist::Value::Array(
+        mapping
+            .iter()
+            .map(|(layer, color)| {
+                plist::Value::Array(vec![
+                    plist::Value::String(layer.clone()),
+                    plist::Value::Integer((*color as u64).into()),
+                ])
+            })
+            .collect(),
+    );
+    font.lib.insert(COLOR_LAYER_MAPPING_KEY.into(), value);
+}
+
+/// Parse #RRGGBB or #RRGGBBAA (the # optional).
+fn parse_hex_color(text: &str) -> Option<[f64; 4]> {
+    let hex = text.trim().trim_start_matches('#');
+    if hex.len() != 6 && hex.len() != 8 {
+        return None;
+    }
+    let byte = |i: usize| {
+        u8::from_str_radix(&hex[i..i + 2], 16)
+            .ok()
+            .map(|v| v as f64 / 255.0)
+    };
+    Some([
+        byte(0)?,
+        byte(2)?,
+        byte(4)?,
+        if hex.len() == 8 { byte(6)? } else { 1.0 },
+    ])
+}
+
 // ============================================================================
 // EDITOR VIEWPORT
 // ============================================================================
@@ -2206,6 +2319,12 @@ struct Workspace {
     offset_input: gpui::Entity<gpui_component::input::InputState>,
     /// Fit Curve percentage field in the Curves section.
     fit_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Hex field that appends a color to the CPAL palette.
+    color_hex_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Palette index the next color layer is assigned.
+    color_selected: usize,
+    /// Paint the color layers stacked in the editor.
+    show_color_preview: bool,
     /// The Instances editor field under the axis sliders: Enter
     /// renames the instance at the preview location, or adds one.
     instance_name_input: gpui::Entity<gpui_component::input::InputState>,
@@ -7209,6 +7328,40 @@ impl Workspace {
                 })
             })
             .flatten();
+        // Stacked color layers (COLRv0 preview): each mapped layer's
+        // copy of this glyph filled with its palette color, bottom
+        // first, under the editing outline.
+        let color_preview: Vec<(Arc<BezPath>, gpui::Rgba)> = if self
+            .show_color_preview
+        {
+            let palette = read_color_palette(&font.font);
+            read_color_mapping(&font.font)
+                .into_iter()
+                .filter_map(|(layer, color)| {
+                    let c = palette.get(color)?;
+                    let glyph = font
+                        .font
+                        .layers
+                        .get(&layer)?
+                        .get_glyph(entry.name.as_ref())?;
+                    Some((
+                        Arc::new(
+                            runebender_core::glyph_paths::contours_to_bezpath(
+                                glyph,
+                            ),
+                        ),
+                        gpui::Rgba {
+                            r: c[0] as f32,
+                            g: c[1] as f32,
+                            b: c[2] as f32,
+                            a: c[3] as f32,
+                        },
+                    ))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         // Visible per-glyph layers, drawn like the background.
         let glyph_layer_paths: Vec<Arc<BezPath>> = font
             .font
@@ -7484,6 +7637,15 @@ impl Workspace {
                                         0,
                                         true,
                                     );
+                                }
+                                // The color stack, bottom first, so
+                                // editing happens over the composite.
+                                for (path, color) in &color_preview {
+                                    if let Some(p) = build_fill_path(
+                                        path, transform, origin,
+                                    ) {
+                                        window.paint_path(p, *color);
+                                    }
                                 }
                                 // Every guide the font defines, the way
                                 // the web draws them: the baseline
@@ -11649,6 +11811,285 @@ impl Workspace {
                 }
             });
         }
+    }
+
+    /// Append a hex color to the palette, on every master (CPAL
+    /// palettes must agree across sources). Returns true on success.
+    fn command_add_palette_color(&mut self, hex: &str) -> bool {
+        let Some(color) = parse_hex_color(hex) else {
+            self.status_note = Some("Color: use #RRGGBB or #RRGGBBAA".into());
+            return false;
+        };
+        let Some(project) = self.project.as_mut() else { return false };
+        for master in project.masters.iter_mut() {
+            let mut palette = read_color_palette(&master.font);
+            palette.push(color);
+            write_color_palette(&mut master.font, &palette);
+            master.dirty = true;
+        }
+        true
+    }
+
+    /// Drop a palette color. Refused while a layer still uses it,
+    /// because CPAL indices shift on removal.
+    fn command_remove_palette_color(&mut self, index: usize) {
+        let Some(project) = self.project.as_mut() else { return };
+        let used = project
+            .masters
+            .first()
+            .map(|m| read_color_mapping(&m.font))
+            .unwrap_or_default()
+            .iter()
+            .any(|(_, ci)| *ci == index);
+        if used {
+            self.status_note =
+                Some("Color is used by a layer · remove the layer first".into());
+            return;
+        }
+        for master in project.masters.iter_mut() {
+            let mut palette = read_color_palette(&master.font);
+            if index < palette.len() {
+                palette.remove(index);
+                write_color_palette(&mut master.font, &palette);
+                master.dirty = true;
+            }
+        }
+        // Higher indices shifted down: follow them in the mapping.
+        for master in project.masters.iter_mut() {
+            let mut mapping = read_color_mapping(&master.font);
+            for (_, ci) in mapping.iter_mut() {
+                if *ci > index {
+                    *ci -= 1;
+                }
+            }
+            write_color_mapping(&mut master.font, &mapping);
+        }
+        if self.color_selected >= index && self.color_selected > 0 {
+            self.color_selected -= 1;
+        }
+    }
+
+    /// Add a color layer: a UFO layer named color.N mapped to the
+    /// selected palette color, appended on top. The open glyph's
+    /// outline is copied in as a starting point; edit it through the
+    /// Glyph Layers swap arrows, drawing per master like any layer.
+    fn command_add_color_layer(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(project) = self.project.as_ref() else { return };
+        if read_color_palette(&project.active_font().font).is_empty() {
+            self.status_note =
+                Some("Add a palette color first (hex field)".into());
+            return;
+        }
+        let name = project.active_font().glyphs[index].name.to_string();
+        let color = self.color_selected;
+        let Some(project) = self.project.as_mut() else { return };
+        // First free color.N name across the mapping.
+        let mapping = project
+            .masters
+            .first()
+            .map(|m| read_color_mapping(&m.font))
+            .unwrap_or_default();
+        let mut n = 0usize;
+        let layer_name = loop {
+            let candidate = format!("color.{n}");
+            if !mapping.iter().any(|(l, _)| *l == candidate) {
+                break candidate;
+            }
+            n += 1;
+        };
+        for master in project.masters.iter_mut() {
+            let mut mapping = read_color_mapping(&master.font);
+            mapping.push((layer_name.clone(), color));
+            write_color_mapping(&mut master.font, &mapping);
+            // Seed the layer with this master's outline of the glyph.
+            let seed = master.font.get_glyph(name.as_str()).cloned();
+            if let (Some(seed), Ok(layer)) = (
+                seed,
+                master.font.layers.get_or_create_layer(&layer_name),
+            ) {
+                let mut copy = norad::Glyph::new(name.as_str());
+                copy.width = seed.width;
+                copy.contours = seed.contours.clone();
+                copy.components = seed.components.clone();
+                layer.insert_glyph(copy);
+            }
+            master.dirty = true;
+            master.modified_glyphs.insert(name.clone());
+        }
+        self.show_color_preview = true;
+        self.status_note =
+            Some(format!("Color layer {layer_name} added").into());
+    }
+
+    /// Remove one mapping row (the UFO layer and its drawings stay).
+    fn command_remove_color_layer(&mut self, row: usize) {
+        let Some(project) = self.project.as_mut() else { return };
+        for master in project.masters.iter_mut() {
+            let mut mapping = read_color_mapping(&master.font);
+            if row < mapping.len() {
+                mapping.remove(row);
+                write_color_mapping(&mut master.font, &mapping);
+                master.dirty = true;
+            }
+        }
+    }
+
+    /// Color section: the CPAL palette, the layer mapping, and the
+    /// stacked-preview toggle (COLRv0 through the ufo2ft lib keys).
+    fn color_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(font) = self.font() else {
+            return self.section(cx, "Color", div());
+        };
+        let palette = read_color_palette(&font.font);
+        let mapping = read_color_mapping(&font.font);
+        let swatch_color = |c: &[f64; 4]| gpui::Rgba {
+            r: c[0] as f32,
+            g: c[1] as f32,
+            b: c[2] as f32,
+            a: c[3] as f32,
+        };
+        let mut swatches = div().flex().flex_wrap().gap_1().items_center();
+        for (i, c) in palette.iter().enumerate() {
+            let selected = i == self.color_selected;
+            swatches = swatches.child(
+                div()
+                    .id(("cpal-swatch", i))
+                    .w(px(18.0))
+                    .h(px(18.0))
+                    .rounded_sm()
+                    .bg(swatch_color(c))
+                    .border_2()
+                    .border_color(if selected {
+                        t::accent()
+                    } else {
+                        t::cell_border()
+                    })
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.color_selected = i;
+                        cx.notify();
+                    })),
+            );
+        }
+        swatches = swatches.child(
+            div().w(px(96.0)).child(gpui_component::input::Input::new(
+                &self.color_hex_input,
+            )),
+        );
+        if !palette.is_empty() {
+            let selected = self.color_selected;
+            swatches = swatches.child(
+                div()
+                    .id("cpal-remove")
+                    .px_1()
+                    .text_sm()
+                    .cursor_pointer()
+                    .text_color(t::text_muted())
+                    .hover(|el| el.text_color(t::text()))
+                    .child("×")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.command_remove_palette_color(selected);
+                        cx.notify();
+                    })),
+            );
+        }
+        let mut rows = div().flex().flex_col().gap_0p5();
+        for (i, (layer, color)) in mapping.iter().enumerate() {
+            let dot = palette
+                .get(*color)
+                .map(swatch_color)
+                .unwrap_or(t::text_muted());
+            rows = rows.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .child(
+                        div()
+                            .w(px(10.0))
+                            .h(px(10.0))
+                            .rounded_full()
+                            .bg(dot),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .text_color(t::text())
+                            .child(layer.clone()),
+                    )
+                    .child(
+                        div()
+                            .id(("color-layer-del", i))
+                            .px_1()
+                            .cursor_pointer()
+                            .text_color(t::text_muted())
+                            .hover(|el| el.text_color(t::text()))
+                            .child("×")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.command_remove_color_layer(i);
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+        let toggle_on = self.show_color_preview;
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(swatches)
+            .child(rows)
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id("color-layer-add")
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .text_sm()
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(t::cell_border())
+                            .text_color(t::text())
+                            .child("+ Color Layer")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.command_add_color_layer();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("color-preview-toggle")
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .text_sm()
+                            .cursor_pointer()
+                            .border_1()
+                            .when(toggle_on, |el| {
+                                el.border_color(t::accent())
+                                    .text_color(t::accent())
+                            })
+                            .when(!toggle_on, |el| {
+                                el.border_color(t::cell_border())
+                                    .text_color(t::text())
+                            })
+                            .child("Preview")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.show_color_preview =
+                                    !this.show_color_preview;
+                                cx.notify();
+                            })),
+                    ),
+            );
+        self.section(cx, "Color", body)
     }
 
     /// Measured stem and bar of a glyph: the narrowest horizontal
@@ -15829,6 +16270,7 @@ impl Render for Workspace {
                     .child(self.transform_section(cx))
                     .child(self.curves_section(cx))
                     .child(self.background_section(cx))
+                    .child(self.color_section(cx))
                     .child(self.layers_section(cx))
                     .children(self.axes_section(cx))
             })
@@ -16528,6 +16970,31 @@ fn main() {
                             }
                         }
                     });
+                    let color_hex_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("#RRGGBB")
+                    });
+                    let sub_color_hex = cx.subscribe_in(&color_hex_input, window, {
+                        let state = color_hex_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              window,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text = state.read(cx).value().to_string();
+                                if this.command_add_palette_color(&text) {
+                                    state.update(cx, |st, cx| {
+                                        st.set_value(String::new(), window, cx);
+                                    });
+                                }
+                                cx.notify();
+                            }
+                        }
+                    });
                     let instance_name_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("Instance name")
@@ -16941,6 +17408,9 @@ fn main() {
                         stroke_input,
                         offset_input,
                         fit_input,
+                        color_hex_input,
+                        color_selected: 0,
+                        show_color_preview: true,
                         instance_name_input,
                         features_input,
                         features_edited: false,
@@ -16964,7 +17434,7 @@ fn main() {
                             sub_kern_filter, sub_kern_first,
                             sub_kern_second, sub_kern_value, sub_slant,
                             sub_features, sub_instance_name, sub_stroke,
-                            sub_offset, sub_fit,
+                            sub_offset, sub_fit, sub_color_hex,
                         ],
                     };
                     workspace.rebuild_text_models();
@@ -17166,6 +17636,42 @@ mod tests {
                 .is_some(),
             "glyph image reference round-trips"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn color_lib_keys_roundtrip() {
+        // Palette + mapping written through the helpers must read
+        // back identically after a norad save/load, in the exact
+        // shape ufo2ft's COLR builder consumes.
+        let mut font = runebender_core::new_font::new_font("Col", "Regular", 400);
+        let palette = vec![[1.0, 0.2, 0.0, 1.0], [0.0, 0.4, 1.0, 0.5]];
+        write_color_palette(&mut font, &palette);
+        let mapping = vec![("color.0".into(), 0usize), ("color.1".into(), 1)];
+        write_color_mapping(&mut font, &mapping);
+        // A layer glyph so the layers round-trip too.
+        let glyph_name = font
+            .default_layer()
+            .iter()
+            .next()
+            .map(|g| g.name().to_string())
+            .unwrap();
+        let seed = font.default_layer().get_glyph(&glyph_name).unwrap().clone();
+        for layer in ["color.0", "color.1"] {
+            let mut copy = norad::Glyph::new(glyph_name.as_str());
+            copy.width = seed.width;
+            font.layers
+                .get_or_create_layer(layer)
+                .unwrap()
+                .insert_glyph(copy);
+        }
+        let dir = std::env::temp_dir().join("rb-color-roundtrip.ufo");
+        std::fs::remove_dir_all(&dir).ok();
+        font.save(&dir).expect("saves");
+        let back = norad::Font::load(&dir).expect("reloads");
+        assert_eq!(read_color_palette(&back), palette);
+        assert_eq!(read_color_mapping(&back), mapping);
+        assert!(back.layers.get("color.0").is_some());
         std::fs::remove_dir_all(&dir).ok();
     }
 
