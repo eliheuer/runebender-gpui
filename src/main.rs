@@ -1467,6 +1467,26 @@ impl Project {
         Some(glyph)
     }
 
+    /// The masters at the low and high end of the first axis (by
+    /// normalized location), for HOI endpoints.
+    fn axis_end_masters(&self) -> Option<(usize, usize)> {
+        let axis = self.axes.first()?;
+        if self.masters.len() < 2 {
+            return None;
+        }
+        let value = |i: usize| {
+            self.master_locations
+                .get(i)
+                .and_then(|l| l.get(&axis.name).copied())
+                .unwrap_or(0.0)
+        };
+        let lo = (0..self.masters.len())
+            .min_by(|&a, &b| value(a).total_cmp(&value(b)))?;
+        let hi = (0..self.masters.len())
+            .max_by(|&a, &b| value(a).total_cmp(&value(b)))?;
+        (lo != hi).then_some((lo, hi))
+    }
+
     /// Sample every point's position at `steps + 1` equal stops
     /// along the first axis (min to max), through the same per-glyph
     /// model the ghost uses — brace layers bend the trajectories.
@@ -2063,6 +2083,75 @@ fn roughen_glyph_contours(
     changed
 }
 
+/// Per-node HOI intermediate points (the Glyphs "Intermediate
+/// Point": the node's interpolation path curves through it at the
+/// axis middle). Stored on the axis-min master's glyph, absolute
+/// design coordinates, keyed "contour,point". Source of truth for
+/// re-editing; the baked brace layers are what compilers consume.
+const HOI_INTERMEDIATE_KEY: &str = "com.runebender.hoiIntermediate";
+
+fn read_hoi_intermediates(
+    glyph: &norad::Glyph,
+) -> std::collections::HashMap<(usize, usize), (f64, f64)> {
+    glyph
+        .lib
+        .get(HOI_INTERMEDIATE_KEY)
+        .and_then(|v| v.as_dictionary())
+        .map(|dict| {
+            dict.iter()
+                .filter_map(|(key, value)| {
+                    let (c, p) = key.split_once(',')?;
+                    let arr = value.as_array()?;
+                    let x = arr.first()?.as_real()?;
+                    let y = arr.get(1)?.as_real()?;
+                    Some(((c.parse().ok()?, p.parse().ok()?), (x, y)))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_hoi_intermediates(
+    glyph: &mut norad::Glyph,
+    map: &std::collections::HashMap<(usize, usize), (f64, f64)>,
+) {
+    if map.is_empty() {
+        glyph.lib.remove(HOI_INTERMEDIATE_KEY);
+        return;
+    }
+    let mut dict = plist::Dictionary::new();
+    for ((c, p), (x, y)) in map {
+        dict.insert(
+            format!("{c},{p}"),
+            plist::Value::Array(vec![
+                plist::Value::Real(*x),
+                plist::Value::Real(*y),
+            ]),
+        );
+    }
+    glyph
+        .lib
+        .insert(HOI_INTERMEDIATE_KEY.into(), plist::Value::Dictionary(dict));
+}
+
+/// Quadratic through Q at the middle: position at `t` between `a`
+/// and `b` when the path must pass through `q` at t = 0.5.
+fn hoi_quad_at(
+    a: (f64, f64),
+    b: (f64, f64),
+    q: (f64, f64),
+    t: f64,
+) -> (f64, f64) {
+    // Control C with (1-t)²A + 2(1-t)tC + t²B passing Q at 0.5:
+    // Q = A/4 + C/2 + B/4  =>  C = 2Q - (A+B)/2.
+    let c = (2.0 * q.0 - (a.0 + b.0) / 2.0, 2.0 * q.1 - (a.1 + b.1) / 2.0);
+    let u = 1.0 - t;
+    (
+        u * u * a.0 + 2.0 * u * t * c.0 + t * t * b.0,
+        u * u * a.1 + 2.0 * u * t * c.1 + t * t * b.1,
+    )
+}
+
 /// Built-in sample strings (View > Next Sample String): spacing
 /// control strings and kern words, cycled around the open glyph.
 const SAMPLE_STRINGS: &[&str] = &[
@@ -2264,6 +2353,13 @@ enum Drag {
         scale_y: bool,
         /// Every point's position when the gesture began.
         originals: std::collections::HashMap<(usize, usize), (f64, f64)>,
+    },
+    /// Dragging a node's HOI intermediate knob: the point id and
+    /// the node's positions in the axis-end masters.
+    HoiKnob {
+        id: (usize, usize),
+        a: (f64, f64),
+        b: (f64, f64),
     },
     /// Dragging a guide: `local` picks the open glyph's guidelines
     /// over the master's fontinfo ones. Guides move live; the
@@ -2615,6 +2711,9 @@ struct Workspace {
     /// Draw node trajectories + velocity dots across the first axis
     /// (higher-order interpolation view).
     show_trajectories: bool,
+    /// The intermediate point being dragged right now (id, Q),
+    /// painted live and committed + baked on mouse-up.
+    hoi_live: Option<((usize, usize), (f64, f64))>,
     /// Ease amount field: Enter bakes interpolation timing into a
     /// brace layer at the preview location.
     ease_input: gpui::Entity<gpui_component::input::InputState>,
@@ -6524,6 +6623,174 @@ impl Workspace {
             Some(format!("Intermediate {layer_name} added for {name}").into());
     }
 
+    /// Commit a dragged intermediate point: store it in the glyph's
+    /// HOI lib key (dragging back onto the linear middle clears it),
+    /// then rebake the brace layers so every consumer follows.
+    fn commit_hoi_intermediate(&mut self, id: (usize, usize), q: (f64, f64)) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(project) = self.project.as_mut() else { return };
+        let Some((lo, hi)) = project.axis_end_masters() else { return };
+        let name = project.active_font().glyphs[index].name.to_string();
+        let linear_mid = {
+            let a = project.masters[lo]
+                .font
+                .get_glyph(name.as_str())
+                .and_then(|g| g.contours.get(id.0))
+                .and_then(|c| c.points.get(id.1))
+                .map(|p| (p.x, p.y));
+            let b = project.masters[hi]
+                .font
+                .get_glyph(name.as_str())
+                .and_then(|g| g.contours.get(id.0))
+                .and_then(|c| c.points.get(id.1))
+                .map(|p| (p.x, p.y));
+            match (a, b) {
+                (Some(a), Some(b)) => ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0),
+                _ => return,
+            }
+        };
+        {
+            let master = &mut project.masters[lo];
+            let Some(glyph) = master.font.get_glyph_mut(name.as_str()) else {
+                return;
+            };
+            let mut map = read_hoi_intermediates(glyph);
+            let back_to_linear = ((q.0 - linear_mid.0).powi(2)
+                + (q.1 - linear_mid.1).powi(2))
+            .sqrt()
+                < 3.0;
+            if back_to_linear {
+                map.remove(&id);
+            } else {
+                map.insert(id, (q.0.round(), q.1.round()));
+            }
+            write_hoi_intermediates(glyph, &map);
+            master.dirty = true;
+            master.modified_glyphs.insert(name.clone());
+        }
+        self.bake_hoi();
+    }
+
+    /// Rebake the HOI brace layers for the open glyph: stops at
+    /// t = 0.25 / 0.5 / 0.75 of the first axis, curved nodes on
+    /// their quadratic, the rest linear — standard sparse sources
+    /// out, so fontc and fontmake follow the curves exactly enough.
+    fn bake_hoi(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(project) = self.project.as_mut() else { return };
+        let Some((lo, hi)) = project.axis_end_masters() else { return };
+        let Some(axis) = project.axes.first().cloned() else { return };
+        let name = project.active_font().glyphs[index].name.to_string();
+        let (lo_glyph, hi_glyph, curves) = {
+            let a = project.masters[lo].font.get_glyph(name.as_str()).cloned();
+            let b = project.masters[hi].font.get_glyph(name.as_str()).cloned();
+            let (Some(a), Some(b)) = (a, b) else { return };
+            let curves = read_hoi_intermediates(&a);
+            (a, b, curves)
+        };
+        let filename = project.masters[lo]
+            .source_path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string());
+        let Some(filename) = filename else { return };
+        for &t in &[0.25_f64, 0.5, 0.75] {
+            let design = (axis.min + (axis.max - axis.min) * t).round();
+            let layer_name = format!("{{{design:.0}}}");
+            if curves.is_empty() {
+                // Cleared: drop our baked copies.
+                if let Some(layer) =
+                    project.masters[lo].font.layers.get_mut(&layer_name)
+                {
+                    layer.remove_glyph(name.as_str());
+                }
+                project.masters[lo].dirty = true;
+                continue;
+            }
+            let mut baked = lo_glyph.clone();
+            baked.width =
+                lo_glyph.width + (hi_glyph.width - lo_glyph.width) * t;
+            for (ci, contour) in baked.contours.iter_mut().enumerate() {
+                for (pi, point) in contour.points.iter_mut().enumerate() {
+                    let Some(pb) = hi_glyph
+                        .contours
+                        .get(ci)
+                        .and_then(|c| c.points.get(pi))
+                    else {
+                        continue;
+                    };
+                    let a = (point.x, point.y);
+                    let b = (pb.x, pb.y);
+                    let pos = match curves.get(&(ci, pi)) {
+                        Some(&q) => hoi_quad_at(a, b, q, t),
+                        None => (
+                            a.0 + (b.0 - a.0) * t,
+                            a.1 + (b.1 - a.1) * t,
+                        ),
+                    };
+                    point.x = pos.0.round();
+                    point.y = pos.1.round();
+                }
+            }
+            let master = &mut project.masters[lo];
+            if let Ok(layer) = master.font.layers.get_or_create_layer(&layer_name)
+            {
+                layer.insert_glyph(baked);
+                master.dirty = true;
+                master.modified_glyphs.insert(name.clone());
+            }
+            // Register the sparse source once.
+            let registered = project
+                .ds_doc
+                .as_ref()
+                .is_some_and(|doc| {
+                    doc.sources.iter().any(|src| {
+                        src.layer.as_deref() == Some(layer_name.as_str())
+                            && src.filename == filename
+                    })
+                });
+            if !registered {
+                if let Some(doc) = project.ds_doc.as_mut() {
+                    doc.sources.push(norad::designspace::Source {
+                        name: Some(format!("hoi {layer_name}")),
+                        filename: filename.clone(),
+                        layer: Some(layer_name.clone()),
+                        location: vec![norad::designspace::Dimension {
+                            name: axis.name.clone(),
+                            xvalue: Some(design as f32),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    });
+                    project.ds_dirty = true;
+                }
+                let mut location = runebender_core::var_model::Location::new();
+                location.insert(
+                    axis.name.clone(),
+                    runebender_core::var_model::normalize_value(
+                        design, axis.min, axis.default, axis.max,
+                    ),
+                );
+                project.brace.push(BraceSource {
+                    master: lo,
+                    layer: layer_name.clone(),
+                    location,
+                });
+            }
+        }
+        self.status_note = Some(
+            if curves.is_empty() {
+                format!("{name}: interpolation back to linear")
+            } else {
+                format!(
+                    "{name}: {} curved node path{} baked",
+                    curves.len(),
+                    if curves.len() == 1 { "" } else { "s" }
+                )
+            }
+            .into(),
+        );
+    }
+
     /// Interpolation timing: bake an ease into a brace layer at the
     /// preview location. Positive ease means the change comes late
     /// (the light shape holds on), negative means early. Selected
@@ -7582,6 +7849,42 @@ impl Workspace {
                 })
             })
             .flatten();
+        // HOI knobs (one per node, at its intermediate point or the
+        // linear middle) and the live curve while one is dragged.
+        let hoi_knobs: Vec<((usize, usize), (f64, f64))> = (self
+            .show_trajectories)
+            .then(|| {
+                self.project.as_ref().and_then(|p| {
+                    let (lo, hi) = p.axis_end_masters()?;
+                    let name = entry.name.as_ref();
+                    let a = p.masters[lo].font.get_glyph(name)?;
+                    let b = p.masters[hi].font.get_glyph(name)?;
+                    let curves = read_hoi_intermediates(a);
+                    let mut knobs = Vec::new();
+                    for (ci, (ca, cb)) in
+                        a.contours.iter().zip(b.contours.iter()).enumerate()
+                    {
+                        for (pi, (pa, pb)) in
+                            ca.points.iter().zip(cb.points.iter()).enumerate()
+                        {
+                            let q = curves.get(&(ci, pi)).copied().unwrap_or((
+                                (pa.x + pb.x) / 2.0,
+                                (pa.y + pb.y) / 2.0,
+                            ));
+                            knobs.push(((ci, pi), q));
+                        }
+                    }
+                    Some(knobs)
+                })
+            })
+            .flatten()
+            .unwrap_or_default();
+        let hoi_live = self.hoi_live;
+        let hoi_drag_ends: Option<((f64, f64), (f64, f64))> =
+            match &self.editor.drag {
+                Some(Drag::HoiKnob { a, b, .. }) => Some((*a, *b)),
+                _ => None,
+            };
         // Guides, drawn across the whole canvas under the outline:
         // the master's global fontinfo guidelines plus the open
         // glyph's own. The hot one (hovered or mid-drag) draws
@@ -8230,6 +8533,66 @@ impl Workspace {
                                 // stops — close dots mean slow,
                                 // spread dots mean fast; brace
                                 // layers bend the line.
+                                // Knobs and the live-dragged curve
+                                // ride on top of the tracks below.
+                                if !hoi_knobs.is_empty() {
+                                    use kurbo::Shape as _;
+                                    if let (
+                                        Some((id, q)),
+                                        Some((a, b)),
+                                    ) = (hoi_live, hoi_drag_ends)
+                                    {
+                                        let _ = id;
+                                        let mut pb =
+                                            PathBuilder::stroke(px(1.5));
+                                        for step in 0..=12 {
+                                            let t = step as f64 / 12.0;
+                                            let p = hoi_quad_at(a, b, q, t);
+                                            let sp = to_screen(p.0, p.1);
+                                            if step == 0 {
+                                                pb.move_to(sp);
+                                            } else {
+                                                pb.line_to(sp);
+                                            }
+                                        }
+                                        if let Ok(line) = pb.build() {
+                                            window
+                                                .paint_path(line, t::accent());
+                                        }
+                                    }
+                                    for (id, q) in &hoi_knobs {
+                                        let dragging = hoi_live
+                                            .is_some_and(|(live, _)| live == *id);
+                                        let q = if dragging {
+                                            hoi_live.unwrap().1
+                                        } else {
+                                            *q
+                                        };
+                                        let sp = to_screen(q.0, q.1);
+                                        let dot = kurbo::Circle::new(
+                                            (
+                                                f32::from(sp.x) as f64,
+                                                f32::from(sp.y) as f64,
+                                            ),
+                                            if dragging { 4.0 } else { 2.5 },
+                                        )
+                                        .to_path(0.25);
+                                        if let Some(path) = build_fill_path(
+                                            &dot,
+                                            Affine::IDENTITY,
+                                            gpui::point(px(0.0), px(0.0)),
+                                        ) {
+                                            window.paint_path(
+                                                path,
+                                                if dragging {
+                                                    t::accent()
+                                                } else {
+                                                    t::text_muted()
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
                                 if let Some(tracks) = &trajectories {
                                     use kurbo::Shape as _;
                                     for track in tracks {
@@ -10368,6 +10731,59 @@ impl Workspace {
                 }
             }
         }
+        // HOI knobs (trajectory intermediate points) come first while
+        // the trajectory view is up: each node's knob sits at its
+        // intermediate point, or the linear middle.
+        if self.editor.tool == Tool::Select && self.show_trajectories {
+            if let Some((lo, hi, curves)) =
+                self.project.as_ref().and_then(|p| {
+                    let (lo, hi) = p.axis_end_masters()?;
+                    let name = p.active_font().glyphs[index].name.clone();
+                    let canon = p.masters[lo].font.get_glyph(name.as_ref())?;
+                    Some((
+                        p.masters[lo]
+                            .font
+                            .get_glyph(name.as_ref())?
+                            .clone(),
+                        p.masters[hi]
+                            .font
+                            .get_glyph(name.as_ref())?
+                            .clone(),
+                        read_hoi_intermediates(canon),
+                    ))
+                })
+            {
+                let grab = 7.0 / self.editor.zoom().max(1e-6);
+                let mut best: Option<(f64, (usize, usize), (f64, f64), (f64, f64))> =
+                    None;
+                for (ci, (ca, cb)) in
+                    lo.contours.iter().zip(hi.contours.iter()).enumerate()
+                {
+                    for (pi, (pa, pb)) in
+                        ca.points.iter().zip(cb.points.iter()).enumerate()
+                    {
+                        let a = (pa.x, pa.y);
+                        let b = (pb.x, pb.y);
+                        let q = curves
+                            .get(&(ci, pi))
+                            .copied()
+                            .unwrap_or(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0));
+                        let dist =
+                            ((q.0 - dx).powi(2) + (q.1 - dy).powi(2)).sqrt();
+                        if dist <= grab
+                            && best.is_none_or(|(d, ..)| dist < d)
+                        {
+                            best = Some((dist, (ci, pi), a, b));
+                        }
+                    }
+                }
+                if let Some((_, id, a, b)) = best {
+                    self.hoi_live = Some((id, (dx, dy)));
+                    self.editor.drag = Some(Drag::HoiKnob { id, a, b });
+                    return;
+                }
+            }
+        }
         // Anchors take priority over points.
         let anchor_hit = font.glyphs[index]
             .anchors
@@ -10799,6 +11215,13 @@ impl Workspace {
                     .unwrap_or(false)
                 })
             }
+            Some(Drag::HoiKnob { id, .. }) => {
+                // Live only: the knob follows the cursor; commit and
+                // bake happen on mouse-up.
+                let id = *id;
+                self.hoi_live = Some((id, (dx, dy)));
+                true
+            }
             Some(Drag::Guide { local, index: gi }) => {
                 let (local, gi) = (*local, *gi);
                 let move_line = |line: &mut norad::Line| match line {
@@ -11113,6 +11536,16 @@ impl Workspace {
     }
 
     fn editor_mouse_up(&mut self) {
+        if let Some(Drag::HoiKnob { id, .. }) = self.editor.drag.as_ref() {
+            let id = *id;
+            self.editor.drag = None;
+            if let Some((live_id, q)) = self.hoi_live.take() {
+                if live_id == id {
+                    self.commit_hoi_intermediate(id, q);
+                }
+            }
+            return;
+        }
         if self.editor.tool == Tool::Pen {
             if let Some(pen) = self.editor.pen.as_mut() {
                 pen.placing = None;
@@ -18281,6 +18714,7 @@ fn main() {
                         show_color_preview: true,
                         sample_index: 0,
                         show_trajectories: false,
+                        hoi_live: None,
                         ease_input,
                         extrude_input,
                         roughen_input,
@@ -18631,6 +19065,32 @@ mod tests {
             refined.contours[0].points[0].x,
             orig + 40.0,
         );
+    }
+
+    #[test]
+    fn hoi_quad_passes_through_the_intermediate() {
+        let a = (0.0, 0.0);
+        let b = (100.0, 0.0);
+        let q = (50.0, 40.0);
+        assert_eq!(hoi_quad_at(a, b, q, 0.0), a);
+        assert_eq!(hoi_quad_at(a, b, q, 1.0), b);
+        assert_eq!(hoi_quad_at(a, b, q, 0.5), q);
+        // Quarter stop, worked by hand: control C = (50, 80).
+        let (x, y) = hoi_quad_at(a, b, q, 0.25);
+        assert!((x - 25.0).abs() < 1e-9 && (y - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hoi_intermediates_roundtrip_the_lib_key() {
+        let mut glyph = norad::Glyph::new("hoi-store");
+        let mut map = std::collections::HashMap::new();
+        map.insert((0usize, 3usize), (166.0, 73.0));
+        map.insert((2, 0), (-12.0, 400.0));
+        write_hoi_intermediates(&mut glyph, &map);
+        assert_eq!(read_hoi_intermediates(&glyph), map);
+        // Empty map clears the key.
+        write_hoi_intermediates(&mut glyph, &std::collections::HashMap::new());
+        assert!(glyph.lib.get(HOI_INTERMEDIATE_KEY).is_none());
     }
 
     #[test]
