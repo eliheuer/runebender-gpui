@@ -6153,6 +6153,7 @@ dependencies = [
  "runebender-core",
  "serde",
  "serde_json",
+ "skrifa 0.44.0",
  "tiny-skia",
  "unicode_names2",
  "web-sys",

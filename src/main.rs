@@ -94,6 +94,8 @@ gpui::actions!(
         NextSampleString,
         PreviousSampleString,
         HyperToCubic,
+        QuadsToCubics,
+        CubicsToQuads,
         TraceImage,
         PlaceImage,
         RemoveImage,
@@ -225,6 +227,8 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Add Extremes", AddExtremes),
                 MenuItem::action("Sync Metrics", SyncMetrics),
                 MenuItem::action("Hyperbezier to Cubic", HyperToCubic),
+                MenuItem::action("Quadratic to Cubic", QuadsToCubics),
+                MenuItem::action("Cubic to Quadratic", CubicsToQuads),
                 MenuItem::action("Reverse Contours", ReverseContours),
                 MenuItem::action("Set Start Point", SetStartPoint),
                 MenuItem::separator(),
@@ -973,6 +977,40 @@ impl Project {
             // Export compiles the converted files, not the .glyphs.
             let mut project = Self::load_inner(&open)?;
             project.export_source = Some(open);
+            return Ok(project);
+        }
+        if path.extension().is_some_and(|e| {
+            e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf")
+        }) {
+            // A compiled font opens as an editable in-memory UFO.
+            // Save writes that UFO next to the binary — never over
+            // it — and Export compiles from the UFO.
+            let font = import_binary_font(path)?;
+            let name: SharedString = font
+                .font_info
+                .style_name
+                .clone()
+                .unwrap_or_else(|| "Regular".into())
+                .into();
+            let ufo_path = path.with_extension("ufo");
+            let mut model = FontModel::from_font(font, ufo_path.clone());
+            model.dirty = true;
+            let mut project = Self {
+                masters: vec![model],
+                active: 0,
+                master_names: vec![name],
+                axes: Vec::new(),
+                master_locations: Vec::new(),
+                model: None,
+                location: runebender_core::var_model::Location::new(),
+                compat: std::collections::HashMap::new(),
+                export_source: Some(ufo_path),
+                instances: Vec::new(),
+                ds_doc: None,
+                ds_dirty: false,
+                brace: Vec::new(),
+            };
+            project.compute_compat();
             return Ok(project);
         }
         if path.extension().is_some_and(|e| e == "designspace") {
@@ -2142,6 +2180,342 @@ fn roughen_glyph_contours(
         }
     }
     changed
+}
+
+// ---- cubic <-> quadratic conversion ----
+
+/// Rewrite quadratic segments as exact cubics: each offcurve+qcurve
+/// pair (P0, C, P1) becomes the identical cubic with controls at
+/// P0 + 2/3(C-P0) and P1 + 2/3(C-P1). Lossless.
+fn quads_to_cubics(glyph: &mut norad::Glyph) -> bool {
+    use norad::PointType;
+    let mut changed = false;
+    for contour in glyph.contours.iter_mut() {
+        let n = contour.points.len();
+        if n < 3 {
+            continue;
+        }
+        let has_quads = contour
+            .points
+            .iter()
+            .any(|p| p.typ == PointType::QCurve);
+        if !has_quads {
+            continue;
+        }
+        let old = contour.points.clone();
+        let mut points: Vec<norad::ContourPoint> = Vec::with_capacity(n + 4);
+        for (i, p) in old.iter().enumerate() {
+            if p.typ != PointType::QCurve {
+                points.push(p.clone());
+                continue;
+            }
+            // The single offcurve before this qcurve, and the on-point
+            // before that.
+            let ci = (i + n - 1) % n;
+            let oi = (i + n - 2) % n;
+            let (c, p0) = (&old[ci], &old[oi]);
+            if c.typ != PointType::OffCurve || p0.typ == PointType::OffCurve {
+                points.push(p.clone());
+                continue;
+            }
+            // Replace the emitted offcurve with the two cubic ones.
+            let popped = points.pop();
+            debug_assert!(popped
+                .is_some_and(|q| q.typ == PointType::OffCurve));
+            let c1 = (
+                p0.x + (c.x - p0.x) * 2.0 / 3.0,
+                p0.y + (c.y - p0.y) * 2.0 / 3.0,
+            );
+            let c2 = (
+                p.x + (c.x - p.x) * 2.0 / 3.0,
+                p.y + (c.y - p.y) * 2.0 / 3.0,
+            );
+            let off = |x: f64, y: f64| {
+                norad::ContourPoint::new(
+                    x.round(),
+                    y.round(),
+                    PointType::OffCurve,
+                    false,
+                    None,
+                    None,
+                )
+            };
+            points.push(off(c1.0, c1.1));
+            points.push(off(c2.0, c2.1));
+            points.push(norad::ContourPoint::new(
+                p.x, p.y, PointType::Curve, p.smooth, None, None,
+            ));
+            changed = true;
+        }
+        if changed {
+            contour.points = points;
+        }
+    }
+    changed
+}
+
+/// Approximate cubic segments with quadratics: each cubic splits in
+/// halves until one quad (control from the 3/4 rule) sits within
+/// `tolerance` of it, then the quads replace the cubic. The reverse
+/// of quads_to_cubics, lossy by nature — the same trade every
+/// cubic-to-TrueType compiler makes.
+fn cubics_to_quads(glyph: &mut norad::Glyph, tolerance: f64) -> bool {
+    use kurbo::{CubicBez, ParamCurve as _, Point};
+    use norad::PointType;
+    fn approx(cubic: CubicBez, tolerance: f64, out: &mut Vec<(Point, Point)>) {
+        // One-quad candidate: Q = (3(c1+c2) − (p0+p3)) / 4.
+        let q = Point::new(
+            (3.0 * (cubic.p1.x + cubic.p2.x) - (cubic.p0.x + cubic.p3.x)) / 4.0,
+            (3.0 * (cubic.p1.y + cubic.p2.y) - (cubic.p0.y + cubic.p3.y)) / 4.0,
+        );
+        let quad = kurbo::QuadBez::new(cubic.p0, q, cubic.p3);
+        let err = [0.25, 0.5, 0.75]
+            .iter()
+            .map(|&t| cubic.eval(t).distance(quad.eval(t)))
+            .fold(0.0_f64, f64::max);
+        if err <= tolerance || out.len() > 64 {
+            out.push((q, cubic.p3));
+        } else {
+            let (a, b) = cubic.subdivide();
+            approx(a, tolerance, out);
+            approx(b, tolerance, out);
+        }
+    }
+    let mut changed = false;
+    for contour in glyph.contours.iter_mut() {
+        let n = contour.points.len();
+        if n < 4 {
+            continue;
+        }
+        let has_cubics = contour
+            .points
+            .iter()
+            .any(|p| p.typ == PointType::Curve);
+        if !has_cubics {
+            continue;
+        }
+        let old = contour.points.clone();
+        let mut points: Vec<norad::ContourPoint> = Vec::new();
+        for (i, p) in old.iter().enumerate() {
+            if p.typ != PointType::Curve {
+                points.push(p.clone());
+                continue;
+            }
+            let c2i = (i + n - 1) % n;
+            let c1i = (i + n - 2) % n;
+            let p0i = (i + n - 3) % n;
+            let (c2, c1, p0) = (&old[c2i], &old[c1i], &old[p0i]);
+            if c1.typ != PointType::OffCurve
+                || c2.typ != PointType::OffCurve
+                || p0.typ == PointType::OffCurve
+            {
+                points.push(p.clone());
+                continue;
+            }
+            // Drop the two emitted cubic offcurves.
+            points.pop();
+            points.pop();
+            let cubic = CubicBez::new(
+                Point::new(p0.x, p0.y),
+                Point::new(c1.x, c1.y),
+                Point::new(c2.x, c2.y),
+                Point::new(p.x, p.y),
+            );
+            let mut quads = Vec::new();
+            approx(cubic, tolerance, &mut quads);
+            for (k, (control, end)) in quads.iter().enumerate() {
+                points.push(norad::ContourPoint::new(
+                    control.x.round(),
+                    control.y.round(),
+                    PointType::OffCurve,
+                    false,
+                    None,
+                    None,
+                ));
+                let last = k + 1 == quads.len();
+                points.push(norad::ContourPoint::new(
+                    if last { p.x } else { end.x.round() },
+                    if last { p.y } else { end.y.round() },
+                    PointType::QCurve,
+                    if last { p.smooth } else { true },
+                    None,
+                    None,
+                ));
+            }
+            changed = true;
+        }
+        if changed {
+            contour.points = points;
+        }
+    }
+    changed
+}
+
+// ---- compiled-font import (TTF/OTF via skrifa) ----
+
+/// A pen that collects skrifa outline callbacks into UFO contours.
+/// Quadratics stay quadratic (offcurve + qcurve points), cubics stay
+/// cubic; every binary contour is closed.
+#[derive(Default)]
+struct BinaryImportPen {
+    contours: Vec<norad::Contour>,
+    current: Vec<norad::ContourPoint>,
+}
+
+impl BinaryImportPen {
+    fn point(x: f32, y: f32, typ: norad::PointType) -> norad::ContourPoint {
+        norad::ContourPoint::new(
+            (x as f64).round(),
+            (y as f64).round(),
+            typ,
+            false,
+            None,
+            None,
+        )
+    }
+
+    fn finish_contour(&mut self) {
+        if self.current.is_empty() {
+            return;
+        }
+        let points = std::mem::take(&mut self.current);
+        // Closed contour: the leading Move either duplicates the
+        // final on-point (drop it) or becomes an ordinary point.
+        let mut points = points;
+        if points.len() >= 2
+            && points[0].typ == norad::PointType::Move
+        {
+            let (fx, fy) = (points[0].x, points[0].y);
+            let last_matches = points
+                .last()
+                .is_some_and(|l| {
+                    l.typ != norad::PointType::OffCurve
+                        && l.x == fx
+                        && l.y == fy
+                });
+            if last_matches {
+                points.remove(0);
+            } else {
+                points[0].typ = norad::PointType::Line;
+            }
+        }
+        if points.len() >= 2 {
+            self.contours.push(norad::Contour::new(points, None));
+        }
+    }
+}
+
+impl skrifa::outline::OutlinePen for BinaryImportPen {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.finish_contour();
+        self.current
+            .push(Self::point(x, y, norad::PointType::Move));
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.current
+            .push(Self::point(x, y, norad::PointType::Line));
+    }
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        self.current
+            .push(Self::point(cx0, cy0, norad::PointType::OffCurve));
+        self.current
+            .push(Self::point(x, y, norad::PointType::QCurve));
+    }
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        self.current
+            .push(Self::point(cx0, cy0, norad::PointType::OffCurve));
+        self.current
+            .push(Self::point(cx1, cy1, norad::PointType::OffCurve));
+        self.current
+            .push(Self::point(x, y, norad::PointType::Curve));
+    }
+    fn close(&mut self) {
+        self.finish_contour();
+    }
+}
+
+/// Open a compiled TTF or OTF as an editable in-memory UFO: names,
+/// metrics, encodings, and outlines (glyf quadratics kept as UFO
+/// qcurves, CFF cubics kept cubic). Kerning and features are not
+/// decompiled in this slice.
+fn import_binary_font(path: &std::path::Path) -> Result<norad::Font, String> {
+    use skrifa::raw::TableProvider as _;
+    use skrifa::MetadataProvider as _;
+    let bytes = std::fs::read(path).map_err(|e| format!("{e}"))?;
+    let font_ref =
+        skrifa::FontRef::new(&bytes).map_err(|e| format!("{e}"))?;
+    let size = skrifa::instance::Size::unscaled();
+    let location = skrifa::instance::LocationRef::default();
+    let metrics = font_ref.metrics(size, location);
+    let glyph_metrics = font_ref.glyph_metrics(size, location);
+    let english = |id: skrifa::string::StringId| {
+        font_ref
+            .localized_strings(id)
+            .english_or_first()
+            .map(|s| s.chars().collect::<String>())
+    };
+    let mut font = norad::Font::default();
+    let info = &mut font.font_info;
+    info.family_name = english(skrifa::string::StringId::FAMILY_NAME);
+    info.style_name = english(skrifa::string::StringId::SUBFAMILY_NAME);
+    info.units_per_em = norad::fontinfo::NonNegativeIntegerOrFloat::try_from(
+        metrics.units_per_em as f64,
+    )
+    .ok();
+    info.ascender = Some(metrics.ascent as f64);
+    // skrifa's descent is signed; UFO wants it below zero.
+    let descent = metrics.descent as f64;
+    info.descender = Some(if descent > 0.0 { -descent } else { descent });
+    info.x_height = metrics.x_height.map(|v| v as f64);
+    info.cap_height = metrics.cap_height.map(|v| v as f64);
+    // gid → codepoints.
+    let mut encodings: std::collections::HashMap<u32, Vec<char>> =
+        std::collections::HashMap::new();
+    for (codepoint, gid) in font_ref.charmap().mappings() {
+        if let Some(c) = char::from_u32(codepoint) {
+            encodings.entry(gid.to_u32()).or_default().push(c);
+        }
+    }
+    let names = font_ref.glyph_names();
+    let outlines = font_ref.outline_glyphs();
+    let count = font_ref
+        .maxp()
+        .map(|maxp| maxp.num_glyphs() as u32)
+        .map_err(|e| format!("{e}"))?;
+    let mut seen = std::collections::HashSet::new();
+    for raw_gid in 0..count {
+        let gid = skrifa::GlyphId::new(raw_gid);
+        let mut name = names
+            .get(gid)
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| format!("glyph{raw_gid:05}"));
+        if !seen.insert(name.clone()) {
+            name = format!("{name}.gid{raw_gid}");
+            seen.insert(name.clone());
+        }
+        let mut pen = BinaryImportPen::default();
+        if let Some(outline) = outlines.get(gid) {
+            let _ = outline.draw(
+                skrifa::outline::DrawSettings::unhinted(size, location),
+                &mut pen,
+            );
+            pen.finish_contour();
+        }
+        let Ok(glyph_name) = norad::Name::new(&name) else {
+            continue;
+        };
+        let mut glyph = norad::Glyph::new(glyph_name.as_str());
+        glyph.contours = pen.contours;
+        glyph.width = glyph_metrics
+            .advance_width(gid)
+            .unwrap_or(0.0) as f64;
+        if let Some(codepoints) = encodings.get(&raw_gid) {
+            glyph.codepoints =
+                norad::Codepoints::new(codepoints.iter().copied());
+        }
+        font.default_layer_mut().insert_glyph(glyph);
+    }
+    Ok(font)
 }
 
 /// Apply a corner glyph to one on-curve node: the corner's open
@@ -6842,6 +7216,55 @@ impl Workspace {
         self.visible_glyph_layers.insert(layer_name.clone());
         self.status_note =
             Some(format!("Intermediate {layer_name} added for {name}").into());
+    }
+
+    /// Glyph menu: convert the open glyph's curves between cubic
+    /// and quadratic, in every master (structure must stay shared).
+    /// Quads to cubics is exact; the other way approximates within
+    /// upm/1000 units, the tolerance the TrueType compilers use.
+    fn command_convert_curves(&mut self, to_cubic: bool) {
+        let Some(index) = self.current_glyph_index() else { return };
+        if let Mode::Editor(i) = self.mode {
+            self.push_undo_snapshot(i);
+        }
+        let Some(project) = self.project.as_mut() else { return };
+        let name = project.active_font().glyphs[index].name.to_string();
+        let tolerance =
+            (project.active_font().units_per_em / 1000.0).max(0.5);
+        let mut converted = 0usize;
+        for master in project.masters.iter_mut() {
+            let Some(gi) = master.name_map.get(name.as_str()).copied() else {
+                continue;
+            };
+            let ok = master
+                .edit_glyph(gi, |g| {
+                    if to_cubic {
+                        quads_to_cubics(g)
+                    } else {
+                        cubics_to_quads(g, tolerance)
+                    }
+                })
+                .unwrap_or(false);
+            if ok {
+                converted += 1;
+            }
+        }
+        project.compute_compat();
+        self.editor.selected.clear();
+        self.status_note = Some(
+            if converted == 0 {
+                format!(
+                    "Nothing to convert to {}",
+                    if to_cubic { "cubic" } else { "quadratic" }
+                )
+            } else {
+                format!(
+                    "Converted to {} in {converted} master(s)",
+                    if to_cubic { "cubic" } else { "quadratic" }
+                )
+            }
+            .into(),
+        );
     }
 
     /// Apply a corner glyph at the context-menu node, in every
@@ -18259,6 +18682,14 @@ impl Render for Workspace {
                 this.command_sync_metrics();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &QuadsToCubics, _, cx| {
+                this.command_convert_curves(true);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &CubicsToQuads, _, cx| {
+                this.command_convert_curves(false);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &ShowAllMasters, _, cx| {
                 this.show_all_masters = !this.show_all_masters;
                 this.status_note = Some(
@@ -19681,6 +20112,78 @@ mod tests {
             refined.contours[0].points[0].x,
             orig + 40.0,
         );
+    }
+
+    #[test]
+    fn quad_cubic_conversions() {
+        use norad::{Contour, ContourPoint, PointType};
+        // A closed quad shape: line across the bottom, one quadratic
+        // arc over the top through control (50, 50).
+        let pt = |x, y, typ| ContourPoint::new(x, y, typ, false, None, None);
+        let contour = Contour::new(
+            vec![
+                pt(0.0, 0.0, PointType::Line),
+                pt(100.0, 0.0, PointType::Line),
+                pt(75.0, 50.0, PointType::OffCurve),
+                pt(50.0, 60.0, PointType::QCurve),
+                pt(25.0, 50.0, PointType::OffCurve),
+                pt(0.0, 0.0, PointType::QCurve),
+            ],
+            None,
+        );
+        let mut glyph = norad::Glyph::new("quads");
+        glyph.contours = vec![contour];
+        assert!(quads_to_cubics(&mut glyph));
+        let types: Vec<PointType> = glyph.contours[0]
+            .points
+            .iter()
+            .map(|p| p.typ)
+            .collect();
+        assert!(!types.contains(&PointType::QCurve), "{types:?}");
+        // Two quads became two cubics: 2 on + 2 line + 4 off.
+        assert_eq!(
+            types.iter().filter(|t| **t == PointType::OffCurve).count(),
+            4
+        );
+        // Exactness at the quad midpoint: the cubic passes through
+        // the same point the quad did. Quad (100,0)-(75,50)-(50,60)
+        // at t=.5: (75, 40).
+        let bez = runebender_core::glyph_paths::contour_to_bezpath(
+            &glyph.contours[0],
+        );
+        use kurbo::{ParamCurve as _, Shape as _};
+        let close_to = |target: kurbo::Point| {
+            bez.segments().any(|seg| {
+                (0..=10).any(|i| {
+                    seg.eval(i as f64 / 10.0).distance(target) < 1.5
+                })
+            })
+        };
+        assert!(close_to(kurbo::Point::new(75.0, 40.0)));
+
+        // And back: cubics to quads stays within tolerance.
+        let mut back = glyph.clone();
+        assert!(cubics_to_quads(&mut back, 1.0));
+        let types: Vec<PointType> =
+            back.contours[0].points.iter().map(|p| p.typ).collect();
+        assert!(!types.contains(&PointType::Curve), "{types:?}");
+        let bez2 = runebender_core::glyph_paths::contour_to_bezpath(
+            &back.contours[0],
+        );
+        // Sample the round-tripped outline against the cubic one.
+        for seg in bez.segments() {
+            for i in 0..=4 {
+                let p = seg.eval(i as f64 / 4.0);
+                let nearest = bez2
+                    .segments()
+                    .flat_map(|s2| {
+                        (0..=16).map(move |j| s2.eval(j as f64 / 16.0))
+                    })
+                    .map(|q| p.distance(q))
+                    .fold(f64::MAX, f64::min);
+                assert!(nearest < 2.5, "outline drifted {nearest}");
+            }
+        }
     }
 
     #[test]
