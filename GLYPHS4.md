@@ -7,7 +7,9 @@ runebender-web; this file tracks the larger target.
 
 Researched 2026-08-24 from the Glyphs 4 announcement, the 4.0
 changelog (updates.glyphsapp.com/Glyphs4.0-4000.html), the feature
-pages, and the Learn tutorial index.
+pages, and the Learn tutorial index. Audited the same day against
+the full handbook table of contents (handbook.glyphsapp.com),
+which added the items marked (handbook audit) below.
 
 Legend: `[x]` we have it, `[~]` partial, `[ ]` missing.
 Deliberate non-goals are in the last section.
@@ -57,6 +59,8 @@ Deliberate non-goals are in the last section.
 ## Glyph and layer model
 
 - [x] Anchors: add, drag, rename, delete
+- [ ] Ligature caret anchors (caret_1…) and contextual mark
+      attachment (*origin anchors) (handbook audit)
 - [x] Mark attachment preview through composites
 - [x] Background layer per glyph (UFO public.background)
 - [x] Reference glyph underlay
@@ -96,7 +100,9 @@ Deliberate non-goals are in the last section.
       (new in 4)
 - [x] Batch sidebearing editing: the Width/LSB/RSB fields land
       on every glyph in a grid multi-selection
-- [ ] Metrics keys (side bearings linked by formula, "=n+10")
+- [ ] Metrics keys (side bearings linked by formula, "=n+10"),
+      with calculations, constants, and local keys
+- [ ] Kerning group exceptions (handbook audit)
 - [ ] Contextual kerning
 - [x] Auto "kern" feature generation at export (fontc writes
       kern, mark, and mkmk from UFO kerning, groups, and anchors)
@@ -122,6 +128,13 @@ Deliberate non-goals are in the last section.
 - [ ] Reinterpolate a layer from the other masters
 - [ ] Axis particles: generate master and instance grids from
       named stops (new in 4)
+- [ ] Virtual masters (an axis carried by a custom parameter,
+      no full master) (handbook audit)
+- [ ] Show All Masters: every master of the glyph editable in
+      one edit view, with layer selection sync (handbook audit)
+- [ ] Higher-order interpolation: per-node interpolation timing
+      curves (new in 4) (handbook audit)
+- [ ] Compare Fonts / Compare Family windows (handbook audit)
 
 ## Font-level data
 
@@ -136,6 +149,12 @@ Deliberate non-goals are in the last section.
 - [ ] Custom parameters / lib editing
 - [ ] Grid spacing and subdivision settings
 - [x] New font from template
+- [ ] Per-master alignment zones (the metrics' zone half; we
+      edit values only) (handbook audit)
+- [ ] Per-master standard stems (feeds hinting, Auto Stems for
+      the Slanter, and zone displays) (handbook audit)
+- [ ] Stylistic set naming (featureNames blocks) (handbook
+      audit)
 - [x] Add and remove glyphs, missing-glyph generate from
       language coverage
 - [x] Glyph info database: categories, scripts, GF language
@@ -212,6 +231,13 @@ Deliberate non-goals are in the last section.
 - [x] Dark and light themes, theme menu
 - [x] Live file-watch reload
 - [x] Open UFO, designspace, .glyphs
+- [ ] Open compiled TTF/OTF binaries as editable sources
+      (handbook audit)
+- [ ] Vector paste/import from Illustrator and friends (SVG
+      outlines in; we only trace bitmaps) (handbook audit)
+- [ ] Copy glyphs between open fonts (handbook audit)
+- [ ] Smart filters (predicate-based sidebar filters) and custom
+      sidebar categories (handbook audit)
 - [x] Search with scopes, regex, case toggle
 - [x] Grid multi-select with batch mark color
 - [~] Font view detail: we show name and unicode; Glyphs 4 has a
@@ -234,6 +260,12 @@ Deliberate non-goals are in the last section.
 - [ ] Simplify: redraw with fewer points (new in 4; our image
       trace covers part of this)
 - [ ] Transformations panel as one place for all of these
+- [ ] Extrude filter (handbook audit)
+- [ ] Hatch Outline filter (handbook audit)
+- [ ] Roughen filter (handbook audit)
+- [ ] Interpolate with Background (handbook audit)
+- [ ] Transform Metrics (batch metrics arithmetic) (handbook
+      audit)
 
 ## Non-goals
 
