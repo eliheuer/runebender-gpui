@@ -3041,6 +3041,9 @@ enum FontViewMode {
     Grid,
     Detail,
     List,
+    /// The positional-forms matrix: Arabic review, isol/init/
+    /// medi/fina as columns per base letter.
+    Matrix,
 }
 
 /// Built-in sample strings (View > Next Sample String): spacing
@@ -5005,6 +5008,183 @@ impl Workspace {
             );
         }
         list.child(rows).into_any_element()
+    }
+
+    /// The positional-forms matrix (Counterpunch's Matrix Mode, the
+    /// Arabic review surface): one row per base letter that carries
+    /// positional variants, isol/init/medi/fina as columns, each a
+    /// live thumbnail. Click a form to open it; a dash marks a
+    /// missing form.
+    fn glyph_matrix_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(font) = self.font() else {
+            return div().into_any_element();
+        };
+        // Families: base name → indices of [isol, init, medi, fina].
+        let mut families: std::collections::BTreeMap<String, [Option<usize>; 4]> =
+            std::collections::BTreeMap::new();
+        for (i, entry) in font.glyphs.iter().enumerate() {
+            let name = entry.name.as_ref();
+            let (base, slot) = if let Some(b) = name.strip_suffix(".init") {
+                (b, 1)
+            } else if let Some(b) = name.strip_suffix(".medi") {
+                (b, 2)
+            } else if let Some(b) = name.strip_suffix(".fina") {
+                (b, 3)
+            } else {
+                (name, 0)
+            };
+            let family = families.entry(base.to_string()).or_default();
+            family[slot] = Some(i);
+        }
+        families.retain(|_, forms| forms[1..].iter().any(Option::is_some));
+        if families.is_empty() {
+            return div()
+                .p_4()
+                .text_sm()
+                .text_color(t::text_muted())
+                .child("No positional forms (.init/.medi/.fina) in this font")
+                .into_any_element();
+        }
+        const THUMB: f32 = 56.0;
+        let header = |label: &'static str| {
+            div()
+                .w(px(THUMB))
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(t::text_muted())
+                .child(label)
+        };
+        let mut rows = div()
+            .id("glyph-matrix")
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .px_2();
+        rows = rows.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .py_1()
+                .border_b_1()
+                .border_color(t::panel_outline())
+                .child(
+                    div()
+                        .w(px(140.0))
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(t::text_muted())
+                        .child("Base"),
+                )
+                // RTL reading order: isolated at the right end would
+                // be truer, but columns read left-to-right here with
+                // the joining flow explicit in the labels.
+                .child(header("isol"))
+                .child(header("init"))
+                .child(header("medi"))
+                .child(header("fina")),
+        );
+        for (base, forms) in &families {
+            let mut row = div().flex().items_center().gap_2().py_0p5().child(
+                div()
+                    .w(px(140.0))
+                    .flex_shrink_0()
+                    .text_sm()
+                    .text_color(t::text())
+                    .overflow_hidden()
+                    .child(base.clone()),
+            );
+            for (slot, form) in forms.iter().enumerate() {
+                row = row.child(match *form {
+                    Some(index) => {
+                        let entry = &font.glyphs[index];
+                        let (path, advance, asc, desc) = (
+                            entry.path.clone(),
+                            entry.advance,
+                            font.ascender,
+                            font.descender,
+                        );
+                        let selected = self.selected == Some(index);
+                        div()
+                            .id(("matrix-cell", index * 4 + slot))
+                            .w(px(THUMB))
+                            .h(px(THUMB))
+                            .flex_shrink_0()
+                            .rounded_sm()
+                            .border_1()
+                            .border_color(if selected {
+                                t::cell_selected_ring()
+                            } else {
+                                t::cell_border()
+                            })
+                            .cursor_pointer()
+                            .on_click(cx.listener(
+                                move |this, ev: &gpui::ClickEvent, _, cx| {
+                                    this.selected = Some(index);
+                                    this.multi_selected.clear();
+                                    if ev.click_count() >= 2 {
+                                        this.open_editor(index);
+                                    }
+                                    cx.notify();
+                                },
+                            ))
+                            .child(
+                                canvas(
+                                    move |bounds, _, _| bounds,
+                                    move |_,
+                                          bounds: Bounds<gpui::Pixels>,
+                                          window,
+                                          _| {
+                                        let h: f32 =
+                                            bounds.size.height.into();
+                                        let w: f32 = bounds.size.width.into();
+                                        let em = (asc - desc).max(1.0);
+                                        let scale = (h as f64 / em)
+                                            .min(w as f64 / advance.max(1.0));
+                                        let ox = (w as f64 - advance * scale)
+                                            / 2.0;
+                                        let baseline =
+                                            h as f64 + desc * scale;
+                                        let view = Affine::translate((
+                                            ox, baseline,
+                                        ))
+                                            * Affine::scale_non_uniform(
+                                                scale, -scale,
+                                            );
+                                        if let Some(p) = build_fill_path(
+                                            &path,
+                                            view,
+                                            bounds.origin,
+                                        ) {
+                                            window
+                                                .paint_path(p, t::glyph_fill());
+                                        }
+                                    },
+                                )
+                                .size_full(),
+                            )
+                            .into_any_element()
+                    }
+                    None => div()
+                        .w(px(THUMB))
+                        .h(px(THUMB))
+                        .flex_shrink_0()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(t::panel_outline())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(t::text_muted())
+                        .child("–")
+                        .into_any_element(),
+                });
+            }
+            rows = rows.child(row);
+        }
+        rows.into_any_element()
     }
 
     /// Left sidebar tile: search plus the category filter list,
@@ -19017,6 +19197,13 @@ impl Workspace {
                         .child(mode_button(
                             "view-list", "List", FontViewMode::List, current, cx,
                         ))
+                        .child(mode_button(
+                            "view-matrix",
+                            "Forms",
+                            FontViewMode::Matrix,
+                            current,
+                            cx,
+                        ))
                 })
                 .children(self.cell_slider.as_ref().map(|slider| {
                     div().w(px(140.0)).child(flat_slider(slider, cx))
@@ -19839,10 +20026,12 @@ impl Render for Workspace {
                             // List swaps the whole grid for the
                             // property table; Grid and Detail share
                             // the cell pipeline.
-                            if self.font_view_mode == FontViewMode::List {
-                                self.glyph_list_view(cx)
-                            } else {
-                                grid_block.into_any_element()
+                            match self.font_view_mode {
+                                FontViewMode::List => self.glyph_list_view(cx),
+                                FontViewMode::Matrix => {
+                                    self.glyph_matrix_view(cx)
+                                }
+                                _ => grid_block.into_any_element(),
                             }
                         })
                         // One bar per column bottom: the grid's lives
