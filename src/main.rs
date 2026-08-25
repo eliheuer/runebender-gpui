@@ -17736,21 +17736,22 @@ impl Workspace {
                         ),
                 );
                 // A smart part gets its value field: Enter re-places
-                // it at the typed position along the first axis.
+                // it at the typed position — a bare number moves the
+                // first axis, "Height=30" names one.
                 let smart_axis = self.font().and_then(|f| {
                     let glyph =
                         f.font.get_glyph(f.glyphs[index].name.as_ref())?;
                     let base = f
                         .font
                         .get_glyph(glyph.components.get(ci)?.base.as_str())?;
-                    base.lib
+                    let names: Vec<&str> = base
+                        .lib
                         .get("com.schriftgestaltung.Glyphs.smartComponentAxes")?
                         .as_array()?
-                        .first()?
-                        .as_dictionary()?
-                        .get("name")?
-                        .as_string()
-                        .map(str::to_string)
+                        .iter()
+                        .filter_map(|a| a.as_dictionary()?.get("name")?.as_string())
+                        .collect();
+                    (!names.is_empty()).then(|| names.join(" · "))
                 });
                 if let Some(axis) = smart_axis {
                     body = body.child(
@@ -18035,31 +18036,52 @@ impl Workspace {
 
     /// Set the selected smart component's value on its first axis
     /// (the Selection panel's Smart field).
-    fn command_set_smart_value(&mut self, value: f64) {
+    fn command_set_smart_value(&mut self, text: &str) {
         let Mode::Editor(index) = self.mode else { return };
         let Some(ci) = self.editor.selected_component else { return };
         let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
         else {
             return;
         };
-        // The base's first smart axis name.
+        // "30" moves the first axis; "Height=30" names one.
+        let (axis_named, value) = match text.split_once('=') {
+            Some((axis, v)) => (Some(axis.trim()), v.trim().parse::<f64>()),
+            None => (None, text.trim().parse::<f64>()),
+        };
+        let Ok(value) = value else {
+            self.status_note = Some("Smart value: 30 or Height=30".into());
+            return;
+        };
         let axis = self.font().and_then(|f| {
             let glyph = f.font.get_glyph(name.as_str())?;
             let base = f
                 .font
                 .get_glyph(glyph.components.get(ci)?.base.as_str())?;
-            base.lib
+            let names: Vec<String> = base
+                .lib
                 .get("com.schriftgestaltung.Glyphs.smartComponentAxes")?
                 .as_array()?
-                .first()?
-                .as_dictionary()?
-                .get("name")?
-                .as_string()
-                .map(str::to_string)
+                .iter()
+                .filter_map(|a| {
+                    a.as_dictionary()?
+                        .get("name")?
+                        .as_string()
+                        .map(str::to_string)
+                })
+                .collect();
+            match axis_named {
+                Some(want) => names
+                    .iter()
+                    .find(|n| n.eq_ignore_ascii_case(want))
+                    .cloned(),
+                None => names.first().cloned(),
+            }
         });
         let Some(axis) = axis else {
-            self.status_note =
-                Some("Selected component's base is not smart".into());
+            self.status_note = Some(
+                "Selected component's base is not smart (or no such axis)"
+                    .into(),
+            );
             return;
         };
         if let Some(font) = self.font_mut() {
@@ -23062,13 +23084,10 @@ fn main() {
                                 ev,
                                 gpui_component::input::InputEvent::PressEnter { .. }
                             ) {
-                                if let Ok(value) = state
-                                    .read(cx)
-                                    .value()
-                                    .trim()
-                                    .parse::<f64>()
-                                {
-                                    this.command_set_smart_value(value);
+                                let text =
+                                    state.read(cx).value().trim().to_string();
+                                if !text.is_empty() {
+                                    this.command_set_smart_value(&text);
                                     cx.notify();
                                 }
                             }
