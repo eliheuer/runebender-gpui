@@ -88,6 +88,7 @@ gpui::actions!(
         DuplicateRepeat,
         Rotate180,
         RoundCorners,
+        AddExtremes,
         HyperToCubic,
         TraceImage,
         PlaceImage,
@@ -215,6 +216,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Duplicate Selection", DuplicateSelection),
                 MenuItem::action("Duplicate + Repeat", DuplicateRepeat),
                 MenuItem::action("Round Corners", RoundCorners),
+                MenuItem::action("Add Extremes", AddExtremes),
                 MenuItem::action("Hyperbezier to Cubic", HyperToCubic),
                 MenuItem::action("Reverse Contours", ReverseContours),
                 MenuItem::action("Set Start Point", SetStartPoint),
@@ -1786,6 +1788,55 @@ fn fit_curve_handles(
             changed |= write(&mut pts[c1i], nc1);
             changed |= write(&mut pts[c2i], nc2);
         }
+    }
+    changed
+}
+
+/// Insert on-curve points at every curve extremum (horizontal and
+/// vertical tangents), Glyphs' Add Extremes. Targets segments with a
+/// selected point, or the whole glyph when the selection is empty.
+/// Returns true if any point was added.
+fn add_extreme_points(
+    glyph: &mut norad::Glyph,
+    selected: &std::collections::HashSet<(usize, usize)>,
+) -> bool {
+    use kurbo::ParamCurveExtrema as _;
+    let mut changed = false;
+    // One insertion per scan: a split invalidates the segment list.
+    let mut guard = 0;
+    'outer: loop {
+        guard += 1;
+        if guard > 300 {
+            break;
+        }
+        for hit in runebender_core::segment_ops::segments(glyph) {
+            let kurbo::PathSeg::Cubic(cubic) = hit.seg else {
+                continue;
+            };
+            let in_scope = selected.is_empty()
+                || hit.point_ids().iter().any(|id| selected.contains(id));
+            if !in_scope {
+                continue;
+            }
+            for t in cubic.extrema() {
+                // Extrema at (or rounding onto) the endpoints are
+                // already nodes; skipping them also terminates the
+                // rescan loop, because subsegments keep their
+                // extrema at the ends.
+                if !(0.02..=0.98).contains(&t) {
+                    continue;
+                }
+                if runebender_core::segment_ops::insert_point_on_segment(
+                    glyph, &hit, t,
+                )
+                .is_some()
+                {
+                    changed = true;
+                    continue 'outer;
+                }
+            }
+        }
+        break;
     }
     changed
 }
@@ -5839,6 +5890,12 @@ impl Workspace {
                                 cx.notify();
                             },
                         )))
+                        .child(text_op("op-extremes", "Extremes").on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.command_add_extremes();
+                                cx.notify();
+                            }),
+                        ))
                         .child(text_op("op-round", "Round").on_click(cx.listener(
                             |this, _, _, cx| {
                                 this.command_round_corners();
@@ -13759,6 +13816,25 @@ impl Workspace {
         }
     }
 
+    /// Path > Add Extremes.
+    fn command_add_extremes(&mut self) {
+        let Mode::Editor(index) = self.mode else { return };
+        self.push_undo_snapshot(index);
+        let selected = self.editor.selected.clone();
+        let changed = self
+            .font_mut()
+            .and_then(|f| {
+                f.edit_glyph(index, |g| add_extreme_points(g, &selected))
+            })
+            .unwrap_or(false);
+        if !changed {
+            self.editor.undo.pop();
+            self.status_note = Some("No missing extremes".into());
+        } else {
+            self.editor.selected.clear();
+        }
+    }
+
     fn command_boolean(&mut self, op: linesweeper::BinaryOp) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -16493,6 +16569,10 @@ impl Render for Workspace {
                 }
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &AddExtremes, _, cx| {
+                this.command_add_extremes();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &RoundCorners, _, cx| {
                 this.command_round_corners();
                 cx.notify();
@@ -17637,6 +17717,40 @@ mod tests {
             "glyph image reference round-trips"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn add_extremes_inserts_the_dip() {
+        use norad::{Contour, ContourPoint, PointType};
+        // A symmetric dip: extremum (vertical tangent point of the
+        // y-curve) at t=0.5, which is (100, -37.5).
+        let pt = |x, y, typ| ContourPoint::new(x, y, typ, false, None, None);
+        let contour = Contour::new(
+            vec![
+                pt(0.0, 0.0, PointType::Move),
+                pt(50.0, -50.0, PointType::OffCurve),
+                pt(150.0, -50.0, PointType::OffCurve),
+                pt(200.0, 0.0, PointType::Curve),
+            ],
+            None,
+        );
+        let mut glyph = norad::Glyph::new("extremes-test");
+        glyph.contours = vec![contour];
+        let all = std::collections::HashSet::new();
+        assert!(add_extreme_points(&mut glyph, &all));
+        let ons: Vec<(f64, f64)> = glyph.contours[0]
+            .points
+            .iter()
+            .filter(|p| p.typ != PointType::OffCurve)
+            .map(|p| (p.x, p.y))
+            .collect();
+        assert!(
+            ons.iter().any(|&(x, y)| (x - 100.0).abs() <= 1.0
+                && (y + 37.5).abs() <= 1.5),
+            "extremum node added: {ons:?}"
+        );
+        // Second run finds nothing new.
+        assert!(!add_extreme_points(&mut glyph, &all));
     }
 
     #[test]
