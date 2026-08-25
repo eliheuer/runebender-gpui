@@ -3807,6 +3807,9 @@ struct Workspace {
     /// Preview feature overrides: tag → forced on/off. Absent tags
     /// keep the shaper's defaults.
     feature_overrides: std::collections::HashMap<String, bool>,
+    /// Preview shaping locale: (script tag, BCP 47 language), e.g.
+    /// ("arab", "ur"). None = direction-derived defaults.
+    shaping_locale: Option<(String, String)>,
     /// Ease amount field: Enter bakes interpolation timing into a
     /// brace layer at the preview location.
     ease_input: gpui::Entity<gpui_component::input::InputState>,
@@ -8218,6 +8221,64 @@ impl Workspace {
                     })),
             );
         }
+        // Language presets: languagesystem-specific rules (Urdu or
+        // Sindhi locl, Turkish i) only fire with a language set.
+        const LOCALES: [(&str, &str, &str); 8] = [
+            ("Urdu", "arab", "ur"),
+            ("Sindhi", "arab", "sd"),
+            ("Farsi", "arab", "fa"),
+            ("Kashmiri", "arab", "ks"),
+            ("Turkish", "latn", "tr"),
+            ("Dutch", "latn", "nl"),
+            ("Romanian", "latn", "ro"),
+            ("Vietnamese", "latn", "vi"),
+        ];
+        let mut locale_chips = div().flex().flex_wrap().gap_1();
+        for (li, (label, script, lang)) in LOCALES.iter().enumerate() {
+            let lit = self
+                .shaping_locale
+                .as_ref()
+                .is_some_and(|(s, l)| s == script && l == lang);
+            locale_chips = locale_chips.child(
+                div()
+                    .id(("shaping-locale", li))
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_sm()
+                    .border_1()
+                    .text_xs()
+                    .cursor_pointer()
+                    .border_color(if lit {
+                        t::accent()
+                    } else {
+                        t::cell_border()
+                    })
+                    .text_color(if lit { t::accent() } else { t::text_muted() })
+                    .child(*label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let (script, lang) = (
+                            LOCALES[li].1.to_string(),
+                            LOCALES[li].2.to_string(),
+                        );
+                        let already = this
+                            .shaping_locale
+                            .as_ref()
+                            .is_some_and(|(s, l)| *s == script && *l == lang);
+                        this.shaping_locale = (!already)
+                            .then_some((script, lang));
+                        let (script, lang) = match &this.shaping_locale {
+                            Some((s, l)) => {
+                                (Some(s.clone()), Some(l.clone()))
+                            }
+                            None => (None, None),
+                        };
+                        this.edit_buffer.set_shaping_locale(script, lang);
+                        this.edit_buffer.shape_arabic_if_rtl();
+                        this.sync_sort_offset();
+                        cx.notify();
+                    })),
+            );
+        }
         let body = div()
             .flex()
             .flex_col()
@@ -8231,6 +8292,13 @@ impl Workspace {
                 )
                 .child(toggles)
             })
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("Language"),
+            )
+            .child(locale_chips)
             .child(
                 div()
                     .text_xs()
@@ -23227,6 +23295,7 @@ fn main() {
                         shaping_focus: None,
                         show_mark_cloud: false,
                         feature_overrides: Default::default(),
+                        shaping_locale: None,
                         ease_input,
                         extrude_input,
                         roughen_input,
