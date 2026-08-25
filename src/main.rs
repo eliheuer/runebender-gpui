@@ -92,6 +92,7 @@ gpui::actions!(
         SyncMetrics,
         ShowAllMasters,
         BakeMasks,
+        CheckJoining,
         NextSampleString,
         PreviousSampleString,
         HyperToCubic,
@@ -229,6 +230,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Add Extremes", AddExtremes),
                 MenuItem::action("Sync Metrics", SyncMetrics),
                 MenuItem::action("Bake Masks", BakeMasks),
+                MenuItem::action("Check Joining", CheckJoining),
                 MenuItem::action("Hyperbezier to Cubic", HyperToCubic),
                 MenuItem::action("Quadratic to Cubic", QuadsToCubics),
                 MenuItem::action("Cubic to Quadratic", CubicsToQuads),
@@ -2184,6 +2186,53 @@ fn roughen_glyph_contours(
         }
     }
     changed
+}
+
+// ---- joining QA (Arabic connecting-stroke bands) ----
+
+/// The y-extent of a glyph's ink at one joining edge: outline
+/// points (components resolved) at or past x = 0 going left, or at
+/// or past x = advance going right — joining strokes overlap the
+/// edge on purpose (the anti-seam tongue), so the test is
+/// one-sided. None when nothing reaches the edge — for a form that
+/// should join, that is itself the defect.
+fn joining_band(
+    outline: &BezPath,
+    advance: f64,
+    left: bool,
+    tolerance: f64,
+) -> Option<(f64, f64)> {
+    let mut band: Option<(f64, f64)> = None;
+    let mut visit = |p: kurbo::Point| {
+        let reaches = if left {
+            p.x <= tolerance
+        } else {
+            p.x >= advance - tolerance
+        };
+        if !reaches {
+            return;
+        }
+        band = Some(match band {
+            Some((lo, hi)) => (lo.min(p.y), hi.max(p.y)),
+            None => (p.y, p.y),
+        });
+    };
+    for el in outline.elements() {
+        match el {
+            PathEl::MoveTo(p) | PathEl::LineTo(p) => visit(*p),
+            PathEl::QuadTo(c, p) => {
+                visit(*c);
+                visit(*p);
+            }
+            PathEl::CurveTo(c1, c2, p) => {
+                visit(*c1);
+                visit(*c2);
+                visit(*p);
+            }
+            PathEl::ClosePath => {}
+        }
+    }
+    band
 }
 
 // ---- COLRv1 (paint graphs through the ufo2ft colorLayers key) ----
@@ -8105,6 +8154,86 @@ impl Workspace {
         self.visible_glyph_layers.insert(layer_name.clone());
         self.status_note =
             Some(format!("Intermediate {layer_name} added for {name}").into());
+    }
+
+    /// Glyph > Check Joining: for every positional form, measure
+    /// the connecting stroke's band at its joining edges (init and
+    /// medi join at x = 0, medi and fina at x = advance), find the
+    /// font's common band, and select every form that misses it —
+    /// the Arabic joining-line rule, measured instead of eyeballed.
+    fn command_check_joining(&mut self) {
+        let Some(font) = self.font() else { return };
+        let tolerance_edge = 2.0;
+        let tolerance_band = 4.0;
+        // (glyph index, name, band) per joining edge, plus the forms
+        // that should join but never touch their edge.
+        let mut bands: Vec<(usize, f64, f64)> = Vec::new();
+        let mut broken: Vec<String> = Vec::new();
+        for (i, entry) in font.glyphs.iter().enumerate() {
+            let name = entry.name.as_ref();
+            let (joins_left, joins_right) = if name.ends_with(".init") {
+                (true, false)
+            } else if name.ends_with(".medi") {
+                (true, true)
+            } else if name.ends_with(".fina") {
+                (false, true)
+            } else {
+                continue;
+            };
+            let Some(glyph) = font.font.get_glyph(name) else { continue };
+            let outline = runebender_core::glyph_paths::glyph_to_bezpath(
+                glyph, &font.font,
+            );
+            for left in [true, false] {
+                let should = if left { joins_left } else { joins_right };
+                if !should {
+                    continue;
+                }
+                match joining_band(&outline, entry.advance, left, tolerance_edge)
+                {
+                    Some((lo, hi)) => bands.push((i, lo, hi)),
+                    None => broken.push(name.to_string()),
+                }
+            }
+        }
+        if bands.is_empty() && broken.is_empty() {
+            self.status_note =
+                Some("Joining: no positional forms to check".into());
+            return;
+        }
+        // The common band: median of the lows and highs.
+        let median = |mut values: Vec<f64>| {
+            values.sort_by(|a, b| a.total_cmp(b));
+            values[values.len() / 2]
+        };
+        let med_lo = median(bands.iter().map(|(_, lo, _)| *lo).collect());
+        let med_hi = median(bands.iter().map(|(_, _, hi)| *hi).collect());
+        let mut off: Vec<String> = bands
+            .iter()
+            .filter(|(_, lo, hi)| {
+                (lo - med_lo).abs() > tolerance_band
+                    || (hi - med_hi).abs() > tolerance_band
+            })
+            .map(|(i, _, _)| font.glyphs[*i].name.to_string())
+            .collect();
+        off.extend(broken.iter().cloned());
+        off.sort();
+        off.dedup();
+        let count = off.len();
+        self.multi_selected = off.into_iter().collect();
+        self.selected = None;
+        self.status_note = Some(
+            if count == 0 {
+                format!(
+                    "Joining: all forms share the {med_lo:.0}–{med_hi:.0} band"
+                )
+            } else {
+                format!(
+                    "Joining: {count} form(s) off the {med_lo:.0}–{med_hi:.0} band (selected)"
+                )
+            }
+            .into(),
+        );
     }
 
     /// Glyph menu: convert the open glyph's curves between cubic
@@ -20396,6 +20525,10 @@ impl Render for Workspace {
                 this.command_bake_masks();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &CheckJoining, _, cx| {
+                this.command_check_joining();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &QuadsToCubics, _, cx| {
                 this.command_convert_curves(true);
                 cx.notify();
@@ -21898,6 +22031,55 @@ mod tests {
             .and_then(|v| v.as_array())
             .unwrap();
         assert_eq!(stops.len(), 2);
+    }
+
+    #[test]
+    fn joining_bands_measure_the_connecting_stroke() {
+        use norad::{Contour, ContourPoint, PointType};
+        let stroke = Contour::new(
+            [(0.0, 40.0), (200.0, 40.0), (200.0, 120.0), (0.0, 120.0)]
+                .iter()
+                .map(|&(x, y)| {
+                    ContourPoint::new(x, y, PointType::Line, false, None, None)
+                })
+                .collect(),
+            None,
+        );
+        let mut glyph = norad::Glyph::new("joined");
+        glyph.contours = vec![stroke];
+        let path = runebender_core::glyph_paths::contour_to_bezpath(
+            &glyph.contours[0],
+        );
+        assert_eq!(joining_band(&path, 200.0, true, 2.0), Some((40.0, 120.0)));
+        assert_eq!(joining_band(&path, 200.0, false, 2.0), Some((40.0, 120.0)));
+        // Pull the ink off the edge: no band.
+        for p in glyph.contours[0].points.iter_mut() {
+            p.x += 10.0;
+        }
+        let moved = runebender_core::glyph_paths::contour_to_bezpath(
+            &glyph.contours[0],
+        );
+        assert_eq!(joining_band(&moved, 200.0, true, 2.0), None);
+
+        // And the real Arabic set: a medial beh (a composite —
+        // components must resolve) touches both edges.
+        let project = Project::load(&default_font_path()).expect("loads");
+        let font = project.active_font();
+        if let Some(g) = font.font.get_glyph("beh-ar.medi") {
+            let i = font.name_map["beh-ar.medi"];
+            let advance = font.glyphs[i].advance;
+            let outline = runebender_core::glyph_paths::glyph_to_bezpath(
+                g, &font.font,
+            );
+            assert!(
+                joining_band(&outline, advance, true, 2.0).is_some(),
+                "medial joins left"
+            );
+            assert!(
+                joining_band(&outline, advance, false, 2.0).is_some(),
+                "medial joins right"
+            );
+        }
     }
 
     #[test]
