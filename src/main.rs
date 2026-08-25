@@ -1464,6 +1464,62 @@ impl Project {
             }
         }
         glyph.width = advance;
+        // HOI: nodes with an intermediate point follow their exact
+        // quadratic, overriding the piecewise answer the baked brace
+        // layers gave the model — the bake stays for compilers, the
+        // preview is exact.
+        if let (Some(axis), Some((lo, hi))) =
+            (self.axes.first(), self.axis_end_masters())
+        {
+            let curves = self.masters[lo]
+                .font
+                .get_glyph(glyph_name)
+                .map(read_hoi_intermediates)
+                .unwrap_or_default();
+            if !curves.is_empty() {
+                let normalized =
+                    location.get(&axis.name).copied().unwrap_or(0.0);
+                let design = runebender_core::var_model::denormalize_value(
+                    normalized, axis.min, axis.default, axis.max,
+                );
+                let t01 = ((design - axis.min) / (axis.max - axis.min))
+                    .clamp(0.0, 1.0);
+                let (a_glyph, b_glyph) = (
+                    self.masters[lo].font.get_glyph(glyph_name),
+                    self.masters[hi].font.get_glyph(glyph_name),
+                );
+                if let (Some(a_glyph), Some(b_glyph)) = (a_glyph, b_glyph) {
+                    for (&(ci, pi), &q) in &curves {
+                        let (Some(pa), Some(pb)) = (
+                            a_glyph
+                                .contours
+                                .get(ci)
+                                .and_then(|c| c.points.get(pi)),
+                            b_glyph
+                                .contours
+                                .get(ci)
+                                .and_then(|c| c.points.get(pi)),
+                        ) else {
+                            continue;
+                        };
+                        let pos = hoi_quad_at(
+                            (pa.x, pa.y),
+                            (pb.x, pb.y),
+                            q,
+                            t01,
+                        );
+                        if let Some(point) = glyph
+                            .contours
+                            .get_mut(ci)
+                            .and_then(|c| c.points.get_mut(pi))
+                        {
+                            point.x = pos.0;
+                            point.y = pos.1;
+                        }
+                    }
+                }
+            }
+        }
         Some(glyph)
     }
 
@@ -19169,6 +19225,63 @@ mod tests {
         // Empty map clears the key.
         write_hoi_intermediates(&mut glyph, &std::collections::HashMap::new());
         assert!(glyph.lib.get(HOI_INTERMEDIATE_KEY).is_none());
+    }
+
+    #[test]
+    fn hoi_preview_is_exact_without_baking() {
+        // An intermediate point in the lib key alone (no baked brace
+        // layers) must already curve the preview: at mid-axis the
+        // node sits exactly on Q, at quarter-axis on the quadratic.
+        let mut project = Project::load(&default_font_path()).expect("loads");
+        let name = "n";
+        let axis = project.axes[0].clone();
+        let (lo, hi) = project.axis_end_masters().expect("two ends");
+        let a = {
+            let g = project.masters[lo].font.get_glyph(name).unwrap();
+            let p = &g.contours[0].points[0];
+            (p.x, p.y)
+        };
+        let b = {
+            let g = project.masters[hi].font.get_glyph(name).unwrap();
+            let p = &g.contours[0].points[0];
+            (p.x, p.y)
+        };
+        let q = ((a.0 + b.0) / 2.0 + 80.0, (a.1 + b.1) / 2.0 + 40.0);
+        {
+            let g = project.masters[lo]
+                .font
+                .get_glyph_mut(name)
+                .unwrap();
+            let mut map = std::collections::HashMap::new();
+            map.insert((0usize, 0usize), q);
+            write_hoi_intermediates(g, &map);
+        }
+        let at = |project: &Project, design: f64| {
+            let mut location = runebender_core::var_model::Location::new();
+            location.insert(
+                axis.name.clone(),
+                runebender_core::var_model::normalize_value(
+                    design, axis.min, axis.default, axis.max,
+                ),
+            );
+            let g = project.interpolated_at(name, &location).unwrap();
+            let p = &g.contours[0].points[0];
+            (p.x, p.y)
+        };
+        let mid_design = axis.min + (axis.max - axis.min) * 0.5;
+        let mid = at(&project, mid_design);
+        assert!(
+            (mid.0 - q.0).abs() < 1e-6 && (mid.1 - q.1).abs() < 1e-6,
+            "mid-axis sits on Q: {mid:?} vs {q:?}"
+        );
+        let quarter_design = axis.min + (axis.max - axis.min) * 0.25;
+        let quarter = at(&project, quarter_design);
+        let expected = hoi_quad_at(a, b, q, 0.25);
+        assert!(
+            (quarter.0 - expected.0).abs() < 1e-6
+                && (quarter.1 - expected.1).abs() < 1e-6,
+            "quarter-axis on the quadratic: {quarter:?} vs {expected:?}"
+        );
     }
 
     #[test]
