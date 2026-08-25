@@ -3618,6 +3618,8 @@ struct Workspace {
     /// The intermediate point being dragged right now (id, Q),
     /// painted live and committed + baked on mouse-up.
     hoi_live: Option<((usize, usize), (f64, f64))>,
+    /// The shaping inspector's focused cluster (carrier sort index).
+    shaping_focus: Option<usize>,
     /// Ease amount field: Enter bakes interpolation timing into a
     /// brace layer at the preview location.
     ease_input: gpui::Entity<gpui_component::input::InputState>,
@@ -7239,6 +7241,181 @@ impl Workspace {
                     cx.notify();
                 },
             )))
+    }
+
+    /// Shaping section (editor mode): the buffer's characters in
+    /// logical order against the shaped glyphs, cluster-linked —
+    /// Fontra's inspector, on the shared text engine. Click a chip
+    /// to cross-highlight its cluster; double-click a glyph chip to
+    /// open that glyph for editing inside the shaped run.
+    fn shaping_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        use runebender_core::text::{TextDirection, TextSortKind};
+        let count = self.edit_buffer.len();
+        if count < 2 {
+            return self.section(
+                cx,
+                "Shaping",
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("Type around the glyph to inspect shaping"),
+            );
+        }
+        // Carrier per sort: an absorbed sort (eaten by a ligature)
+        // belongs to the last unabsorbed sort before it.
+        let mut carrier_of: Vec<usize> = Vec::with_capacity(count);
+        let mut last_carrier = 0usize;
+        for i in 0..count {
+            let absorbed = self
+                .edit_buffer
+                .sort(i)
+                .is_some_and(|s| s.is_absorbed());
+            if !absorbed {
+                last_carrier = i;
+            }
+            carrier_of.push(last_carrier);
+        }
+        let focus = self.shaping_focus;
+        let chip = |id: (&'static str, usize),
+                    label: SharedString,
+                    sub: SharedString,
+                    lit: bool,
+                    dim: bool,
+                    cx: &mut Context<Self>,
+                    carrier: usize,
+                    open_on_double: bool| {
+            div()
+                .id(id)
+                .px_1()
+                .py_0p5()
+                .rounded_sm()
+                .border_1()
+                .border_color(if lit { t::accent() } else { t::cell_border() })
+                .flex()
+                .flex_col()
+                .items_center()
+                .cursor_pointer()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(if dim {
+                            t::text_muted()
+                        } else if lit {
+                            t::accent()
+                        } else {
+                            t::text()
+                        })
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(t::text_muted())
+                        .child(sub),
+                )
+                .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                    this.shaping_focus = Some(carrier);
+                    if open_on_double && ev.click_count() >= 2 {
+                        this.edit_buffer.activate_sort(carrier);
+                        let name = this
+                            .edit_buffer
+                            .sort(carrier)
+                            .and_then(|s| s.glyph_name())
+                            .map(str::to_string);
+                        if let Some(glyph) = name.and_then(|n| {
+                            this.font()
+                                .and_then(|f| f.name_map.get(&n).copied())
+                        }) {
+                            this.mode = Mode::Editor(glyph);
+                            this.selected = Some(glyph);
+                            this.editor.selected.clear();
+                            this.editor.selected_anchors.clear();
+                        }
+                        this.sync_sort_offset();
+                    }
+                    cx.notify();
+                }))
+        };
+        // Characters, logical order.
+        let mut chars_row = div().flex().flex_wrap().gap_1();
+        for i in 0..count {
+            let Some(sort) = self.edit_buffer.sort(i) else { continue };
+            let TextSortKind::Glyph { codepoint, .. } = &sort.kind else {
+                continue;
+            };
+            let carrier = carrier_of[i];
+            let lit = focus == Some(carrier);
+            let (label, sub): (SharedString, SharedString) = match codepoint {
+                Some(c) => (
+                    c.to_string().into(),
+                    format!("{:04X}", *c as u32).into(),
+                ),
+                None => ("·".into(), "—".into()),
+            };
+            chars_row = chars_row.child(chip(
+                ("shape-char", i),
+                label,
+                sub,
+                lit,
+                sort.is_absorbed(),
+                cx,
+                carrier,
+                false,
+            ));
+        }
+        // Glyphs: the unabsorbed sorts, visually ordered for a
+        // single RTL line (Fontra shows output left-to-right).
+        let mut glyph_indices: Vec<usize> = (0..count)
+            .filter(|&i| {
+                self.edit_buffer
+                    .sort(i)
+                    .is_some_and(|s| !s.is_absorbed() && s.glyph_name().is_some())
+            })
+            .collect();
+        if self.edit_buffer.line_count() == 1
+            && self.edit_buffer.resolved_line_direction(0)
+                == TextDirection::RightToLeft
+        {
+            glyph_indices.reverse();
+        }
+        let mut glyphs_row = div().flex().flex_wrap().gap_1();
+        for &i in &glyph_indices {
+            let Some(sort) = self.edit_buffer.sort(i) else { continue };
+            let TextSortKind::Glyph { name, advance_width, .. } = &sort.kind
+            else {
+                continue;
+            };
+            let lit = focus == Some(i);
+            glyphs_row = glyphs_row.child(chip(
+                ("shape-glyph", i),
+                name.clone().into(),
+                format!("{advance_width:.0}").into(),
+                lit,
+                false,
+                cx,
+                i,
+                true,
+            ));
+        }
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("Characters (logical)"),
+            )
+            .child(chars_row)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("Glyphs (visual)"),
+            )
+            .child(glyphs_row);
+        self.section(cx, "Shaping", body)
     }
 
     /// Transformations section for the right sidebar (editor mode).
@@ -17529,7 +17706,10 @@ impl Workspace {
                     ),
             )
             .when(
-                in_editor && self.editor.tool == Tool::Text,
+                // Always up in the editor, the Glyphs bottom-corner
+                // toggle: direction is a property of the review, not
+                // of the text tool.
+                in_editor,
                 |el| el.child(self.direction_toolbar(cx)),
             )
             .when(in_editor, |el| el.child(self.header_tools(cx)))
@@ -19650,6 +19830,7 @@ impl Render for Workspace {
                     .child(self.curves_section(cx))
                     .child(self.background_section(cx))
                     .child(self.color_section(cx))
+                    .child(self.shaping_section(cx))
                     .child(self.layers_section(cx))
                     .children(self.axes_section(cx))
             })
@@ -21005,6 +21186,7 @@ fn main() {
                         font_view_mode: FontViewMode::Grid,
                         show_trajectories: false,
                         hoi_live: None,
+                        shaping_focus: None,
                         ease_input,
                         extrude_input,
                         roughen_input,
