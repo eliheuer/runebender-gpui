@@ -148,8 +148,10 @@ Deliberate non-goals are in the last section.
       named stops (new in 4)
 - [ ] Virtual masters (an axis carried by a custom parameter,
       no full master) (handbook audit)
-- [ ] Show All Masters: every master of the glyph editable in
-      one edit view, with layer selection sync (handbook audit)
+- [~] Show All Masters: every master overlaid, any master's node
+      clickable (the click switches master with the node
+      selected). Simultaneous multi-master dragging and layer
+      selection sync come later (handbook audit)
 - [~] Higher-order interpolation (researched 2026-08-25 against
       Underware's HOI case study, the Glyphs 4 handbook, and the
       forum): the Trajectories view draws node paths with
