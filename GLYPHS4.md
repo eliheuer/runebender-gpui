@@ -265,9 +265,12 @@ Deliberate non-goals are in the last section.
       UFO layers, edited through the Glyph Layers swap arrows.
       Verified compiling to COLR + CPAL through ufo2ft. Remaining:
       per-glyph mapping overrides, palette reordering
-- [ ] COLRv1 with gradients (paint graph model; a much bigger
-      lift — ufo2ft consumes COLR_v1-style lib data via
-      colorLayers with paints)
+- [~] COLRv1: To v1 converts the whole font's color layers to
+      explicit paint graphs (PaintColrLayers/PaintGlyph/solid),
+      and per-layer linear gradients upgrade individual paints —
+      shapes verified compiling to COLR version 1 through ufo2ft.
+      Radial/sweep, transforms, blend modes, and a gradient
+      canvas preview come later
 - (sbix and SVG-in-OT are non-goals; see below)
 
 ## Application shell
