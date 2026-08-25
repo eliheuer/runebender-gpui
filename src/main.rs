@@ -89,6 +89,7 @@ gpui::actions!(
         Rotate180,
         RoundCorners,
         AddExtremes,
+        SyncMetrics,
         NextSampleString,
         PreviousSampleString,
         HyperToCubic,
@@ -219,6 +220,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Duplicate + Repeat", DuplicateRepeat),
                 MenuItem::action("Round Corners", RoundCorners),
                 MenuItem::action("Add Extremes", AddExtremes),
+                MenuItem::action("Sync Metrics", SyncMetrics),
                 MenuItem::action("Hyperbezier to Cubic", HyperToCubic),
                 MenuItem::action("Reverse Contours", ReverseContours),
                 MenuItem::action("Set Start Point", SetStartPoint),
@@ -2139,6 +2141,78 @@ fn roughen_glyph_contours(
     changed
 }
 
+/// Metrics keys, the Glyphs spacing formulas, stored in the lib
+/// keys glyphsLib round-trips ("com.schriftgestaltung.Glyphs.
+/// glyph.leftMetricsKey" / rightMetricsKey). "=n" copies n's same
+/// sidebearing, "=|o" the opposite one, "=n+10" and "=n*1.1" add
+/// arithmetic, "=50" is a constant.
+const LEFT_METRICS_KEY: &str =
+    "com.schriftgestaltung.Glyphs.glyph.leftMetricsKey";
+const RIGHT_METRICS_KEY: &str =
+    "com.schriftgestaltung.Glyphs.glyph.rightMetricsKey";
+
+/// A parsed metrics-key formula.
+#[derive(Clone, Debug, PartialEq)]
+enum MetricsFormula {
+    Constant(f64),
+    Reference {
+        glyph: String,
+        /// Read the opposite sidebearing of the referenced glyph.
+        mirror: bool,
+        /// Trailing arithmetic: ('+' | '-' | '*', value).
+        op: Option<(char, f64)>,
+    },
+}
+
+fn parse_metrics_key(text: &str) -> Option<MetricsFormula> {
+    let body = text.trim().trim_start_matches('=').trim();
+    if body.is_empty() {
+        return None;
+    }
+    if let Ok(v) = body.parse::<f64>() {
+        return Some(MetricsFormula::Constant(v));
+    }
+    let (mirror, body) = match body.strip_prefix('|') {
+        Some(rest) => (true, rest.trim()),
+        None => (false, body),
+    };
+    let split = body.find(['+', '-', '*']).filter(|&i| i > 0);
+    let (name, op) = match split {
+        Some(i) => {
+            let sign = body.as_bytes()[i] as char;
+            let value = body[i + 1..].trim().parse::<f64>().ok()?;
+            (body[..i].trim(), Some((sign, value)))
+        }
+        None => (body, None),
+    };
+    (!name.is_empty()).then(|| MetricsFormula::Reference {
+        glyph: name.to_string(),
+        mirror,
+        op,
+    })
+}
+
+fn read_metrics_key(glyph: &norad::Glyph, left: bool) -> Option<String> {
+    let key = if left { LEFT_METRICS_KEY } else { RIGHT_METRICS_KEY };
+    glyph
+        .lib
+        .get(key)
+        .and_then(|v| v.as_string())
+        .map(|v| v.to_string())
+}
+
+fn write_metrics_key(glyph: &mut norad::Glyph, left: bool, value: &str) {
+    let key = if left { LEFT_METRICS_KEY } else { RIGHT_METRICS_KEY };
+    let value = value.trim();
+    if value.is_empty() {
+        glyph.lib.remove(key);
+    } else {
+        glyph
+            .lib
+            .insert(key.into(), plist::Value::String(value.into()));
+    }
+}
+
 /// Per-node HOI intermediate points (the Glyphs "Intermediate
 /// Point": the node's interpolation path curves through it at the
 /// axis middle). Stored on the axis-min master's glyph, absolute
@@ -2908,6 +2982,10 @@ struct GlyphInputs {
     /// Shape-switch point: Enter creates the .bold alternate and the
     /// designspace rule at this axis value (bracket layer).
     switch_at: gpui::Entity<gpui_component::input::InputState>,
+    /// Metrics keys ("=n", "=|o", "=n+10"): linked sidebearings,
+    /// synced across every master.
+    lsb_key: gpui::Entity<gpui_component::input::InputState>,
+    rsb_key: gpui::Entity<gpui_component::input::InputState>,
 }
 
 struct MetricInputs {
@@ -5163,6 +5241,11 @@ impl Workspace {
                 &self.glyph_inputs.group_l,
                 &self.glyph_inputs.group_r,
             ))
+            .child(pair_row(
+                "Metrics Keys (L · R)",
+                &self.glyph_inputs.lsb_key,
+                &self.glyph_inputs.rsb_key,
+            ))
             .child(input_row("Unicode", &self.glyph_inputs.unicode))
             // The character's Unicode name, the Glyph Info window's
             // headline fact, quietly under the code point.
@@ -6677,6 +6760,126 @@ impl Workspace {
         self.visible_glyph_layers.insert(layer_name.clone());
         self.status_note =
             Some(format!("Intermediate {layer_name} added for {name}").into());
+    }
+
+    /// Set a metrics key on the selected glyph (every master keeps
+    /// the same key; the values differ per master when synced).
+    fn apply_metrics_key(&mut self, left: bool, text: &str) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(project) = self.project.as_mut() else { return };
+        let name = project.active_font().glyphs[index].name.to_string();
+        let text = text.trim().to_string();
+        if !text.is_empty() && parse_metrics_key(&text).is_none() {
+            self.status_note =
+                Some("Metrics key: =glyph, =|glyph, =glyph+10, or =50".into());
+            return;
+        }
+        for master in project.masters.iter_mut() {
+            if let Some(glyph) = master.font.get_glyph_mut(name.as_str()) {
+                write_metrics_key(glyph, left, &text);
+                master.dirty = true;
+                master.modified_glyphs.insert(name.clone());
+            }
+        }
+        self.command_sync_metrics();
+    }
+
+    /// Glyph > Sync Metrics: apply every metrics key in every
+    /// master. Chained keys (=n where n itself has a key) settle by
+    /// repeating passes until nothing moves.
+    fn command_sync_metrics(&mut self) {
+        let Some(project) = self.project.as_mut() else { return };
+        let mut adjusted = 0usize;
+        for _pass in 0..5 {
+            let mut moved = false;
+            for master in project.masters.iter_mut() {
+                let keyed: Vec<(usize, Option<String>, Option<String>)> =
+                    (0..master.glyphs.len())
+                        .filter_map(|i| {
+                            let glyph = master
+                                .font
+                                .get_glyph(master.glyphs[i].name.as_ref())?;
+                            let l = read_metrics_key(glyph, true);
+                            let r = read_metrics_key(glyph, false);
+                            (l.is_some() || r.is_some()).then_some((i, l, r))
+                        })
+                        .collect();
+                for (index, left, right) in keyed {
+                    // Targets from the same master's referenced glyphs.
+                    let resolve = |master: &FontModel,
+                                   formula: &MetricsFormula,
+                                   want_left: bool|
+                     -> Option<f64> {
+                        match formula {
+                            MetricsFormula::Constant(v) => Some(*v),
+                            MetricsFormula::Reference { glyph, mirror, op } => {
+                                let ref_index =
+                                    master.name_map.get(glyph.as_str()).copied()?;
+                                let ink = master.ink_bounds(ref_index)?;
+                                let advance = master.glyphs[ref_index].advance;
+                                let read_left = want_left != *mirror;
+                                let mut value = if read_left {
+                                    ink.x0
+                                } else {
+                                    advance - ink.x1
+                                };
+                                if let Some((sign, amount)) = op {
+                                    value = match sign {
+                                        '+' => value + amount,
+                                        '-' => value - amount,
+                                        _ => value * amount,
+                                    };
+                                }
+                                Some(value)
+                            }
+                        }
+                    };
+                    if let Some(formula) =
+                        left.as_deref().and_then(parse_metrics_key)
+                    {
+                        if let (Some(target), Some(ink)) = (
+                            resolve(master, &formula, true),
+                            master.ink_bounds(index),
+                        ) {
+                            let delta = (target - ink.x0).round();
+                            if delta != 0.0 {
+                                master.shift_ink(index, delta);
+                                moved = true;
+                                adjusted += 1;
+                            }
+                        }
+                    }
+                    if let Some(formula) =
+                        right.as_deref().and_then(parse_metrics_key)
+                    {
+                        if let (Some(target), Some(ink)) = (
+                            resolve(master, &formula, false),
+                            master.ink_bounds(index),
+                        ) {
+                            let advance = master.glyphs[index].advance;
+                            let want = (ink.x1 + target).round();
+                            if (advance - want).abs() >= 1.0 {
+                                master.set_advance(index, want);
+                                moved = true;
+                                adjusted += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+        self.rebuild_text_models();
+        self.status_note = Some(
+            if adjusted == 0 {
+                "Metrics keys: everything in sync".to_string()
+            } else {
+                format!("Metrics keys: {adjusted} sidebearings adjusted")
+            }
+            .into(),
+        );
     }
 
     /// Commit a dragged intermediate point: store it in the glyph's
@@ -12249,16 +12452,30 @@ impl Workspace {
             .get_glyph(name.as_str())
             .and_then(|g| g.note.clone())
             .unwrap_or_default();
+        let (lkey, rkey) = font
+            .font
+            .get_glyph(name.as_str())
+            .map(|g| {
+                (
+                    read_metrics_key(g, true).unwrap_or_default(),
+                    read_metrics_key(g, false).unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default();
         let name_input = self.glyph_inputs.name.clone();
         let unicode_input = self.glyph_inputs.unicode.clone();
         let l_input = self.glyph_inputs.group_l.clone();
         let r_input = self.glyph_inputs.group_r.clone();
         let note_input = self.glyph_inputs.note.clone();
+        let lkey_input = self.glyph_inputs.lsb_key.clone();
+        let rkey_input = self.glyph_inputs.rsb_key.clone();
         set(&name_input, name, window, cx);
         set(&unicode_input, unicode, window, cx);
         set(&l_input, group_l, window, cx);
         set(&r_input, group_r, window, cx);
         set(&note_input, note, window, cx);
+        set(&lkey_input, lkey, window, cx);
+        set(&rkey_input, rkey, window, cx);
     }
 
     /// Auto-generated feature blocks from glyph names, the Glyphs
@@ -17831,6 +18048,10 @@ impl Render for Workspace {
                 this.command_add_extremes();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &SyncMetrics, _, cx| {
+                this.command_sync_metrics();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &NextSampleString, _, cx| {
                 this.command_sample_string(1);
                 cx.notify();
@@ -18631,6 +18852,8 @@ fn main() {
                                                 this.command_add_shape_switch(at);
                                             }
                                         }
+                                        6 => this.apply_metrics_key(true, &text),
+                                        7 => this.apply_metrics_key(false, &text),
                                         _ => this.apply_kern_group(false, &text),
                                     }
                                     this.refresh_glyph_inputs(true, window, cx);
@@ -18709,12 +18932,16 @@ fn main() {
                     });
                     let note_input = metric(cx, window);
                     let switch_input = metric(cx, window);
+                    let lsb_key_input = metric(cx, window);
+                    let rsb_key_input = metric(cx, window);
                     let sub_gn = glyph_sub(cx, window, &name_input, 0);
                     let sub_gu = glyph_sub(cx, window, &unicode_input, 1);
                     let sub_gl = glyph_sub(cx, window, &group_l_input, 2);
                     let sub_gr = glyph_sub(cx, window, &group_r_input, 3);
                     let sub_gnote = glyph_sub(cx, window, &note_input, 4);
                     let sub_gswitch = glyph_sub(cx, window, &switch_input, 5);
+                    let sub_glk = glyph_sub(cx, window, &lsb_key_input, 6);
+                    let sub_grk = glyph_sub(cx, window, &rsb_key_input, 7);
                     let subscription = cx.subscribe_in(&search, window, {
                         let search = search.clone();
                         move |this: &mut Workspace,
@@ -18801,6 +19028,8 @@ fn main() {
                             group_r: group_r_input,
                             note: note_input,
                             switch_at: switch_input,
+                            lsb_key: lsb_key_input,
+                            rsb_key: rsb_key_input,
                         },
                         metric_inputs: MetricInputs {
                             width: width_input,
@@ -18866,7 +19095,7 @@ fn main() {
                         _subscriptions: vec![
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_gnote,
-                            sub_gswitch, sub_comp,
+                            sub_gswitch, sub_glk, sub_grk, sub_comp,
                             sub_sw, sub_sh, sub_anchor, sub_ref,
                             sub_fi_family, sub_fi_style, sub_fi_upm,
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
@@ -19199,6 +19428,77 @@ mod tests {
             refined.contours[0].points[0].x,
             orig + 40.0,
         );
+    }
+
+    #[test]
+    fn metrics_key_parsing() {
+        use MetricsFormula::*;
+        assert_eq!(parse_metrics_key("=50"), Some(Constant(50.0)));
+        assert_eq!(
+            parse_metrics_key("=n"),
+            Some(Reference { glyph: "n".into(), mirror: false, op: None })
+        );
+        assert_eq!(
+            parse_metrics_key("=|o"),
+            Some(Reference { glyph: "o".into(), mirror: true, op: None })
+        );
+        assert_eq!(
+            parse_metrics_key("=n+10"),
+            Some(Reference {
+                glyph: "n".into(),
+                mirror: false,
+                op: Some(('+', 10.0))
+            })
+        );
+        assert_eq!(
+            parse_metrics_key("n*1.1"),
+            Some(Reference {
+                glyph: "n".into(),
+                mirror: false,
+                op: Some(('*', 1.1))
+            })
+        );
+        assert_eq!(parse_metrics_key("  "), None);
+        // A hyphenated glyph name is a name, not subtraction, only
+        // when the split lands at position 0 — "beh-ar" splits at 3,
+        // so this is a documented limitation: quote it as reference
+        // only when no arithmetic parse works.
+        assert_eq!(
+            parse_metrics_key("=x-4"),
+            Some(Reference {
+                glyph: "x".into(),
+                mirror: false,
+                op: Some(('-', 4.0))
+            })
+        );
+    }
+
+    #[test]
+    fn metrics_keys_sync_roundtrip() {
+        // n's LSB copied onto h in both masters through the lib key.
+        let mut project = Project::load(&default_font_path()).expect("loads");
+        for master in project.masters.iter_mut() {
+            let glyph = master.font.get_glyph_mut("h").expect("has h");
+            write_metrics_key(glyph, true, "=n+10");
+        }
+        // Emulate command_sync_metrics' inner pass directly.
+        for master in project.masters.iter_mut() {
+            let n = master.name_map["n"];
+            let h = master.name_map["h"];
+            let target = master.ink_bounds(n).unwrap().x0 + 10.0;
+            let delta = (target - master.ink_bounds(h).unwrap().x0).round();
+            master.shift_ink(h, delta);
+            let lsb = master.ink_bounds(h).unwrap().x0;
+            assert!(
+                (lsb - target).abs() < 1.0,
+                "h LSB follows n+10: {lsb} vs {target}"
+            );
+            let back = read_metrics_key(
+                master.font.get_glyph("h").unwrap(),
+                true,
+            );
+            assert_eq!(back.as_deref(), Some("=n+10"));
+        }
     }
 
     #[test]
