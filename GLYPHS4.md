@@ -49,8 +49,11 @@ Deliberate non-goals are in the last section.
       via pen and knife; no explicit open/close commands
       (handbook audit)
 - [ ] Focus and lock nodes or paths (handbook audit)
-- [ ] Masking: a path attribute that subtracts a shape from the
-      layers below at export (handbook audit)
+- [~] Masking: Make Mask on a contour cuts it from the preview
+      fill (accent-stroked); Bake Masks makes it real in every
+      master. Live-through-export needs a compiler that reads
+      the attribute, so baking is the contract here (handbook
+      audit)
 - [~] Annotations: right-click drops arrows, circles, and text
       notes at design-space points (lib-key stored, never
       exported), right-click a mark deletes it. A dedicated tool
