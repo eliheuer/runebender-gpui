@@ -15407,6 +15407,28 @@ impl Workspace {
                 return out;
             }
         }
+        // New block. An insertion marker (Fontra's convention, one
+        // line reading "# Automatic Code") controls where generated
+        // code lands among hand-written blocks: each new block goes
+        // in just above the marker, so call order is kept and the
+        // marker stays for the next Generate.
+        for (offset, line) in fea.lines().map({
+            let mut pos = 0usize;
+            move |line| {
+                let at = pos;
+                pos += line.len() + 1;
+                (at, line)
+            }
+        }) {
+            if line.trim() == "# Automatic Code" {
+                let mut out = String::with_capacity(fea.len() + block.len());
+                out.push_str(&fea[..offset]);
+                out.push_str(&block);
+                out.push('\n');
+                out.push_str(&fea[offset..]);
+                return out;
+            }
+        }
         let mut out = fea.trim_end().to_string();
         if !out.is_empty() {
             out.push_str("\n\n");
@@ -23513,6 +23535,35 @@ mod tests {
             .and_then(|v| v.as_array())
             .unwrap();
         assert_eq!(stops.len(), 2);
+    }
+
+    #[test]
+    fn feature_blocks_insert_at_automatic_code_marker() {
+        let fea = "feature ss01 {\n    sub a by a.alt;\n} ss01;\n\n                   # Automatic Code\n\nfeature kern {\n} kern;\n";
+        let one = Workspace::replace_feature_block(
+            fea, "init", "    sub beh-ar by beh-ar.init;\n",
+        );
+        let two = Workspace::replace_feature_block(
+            &one, "liga", "    sub f i by fi;\n",
+        );
+        // Both new blocks land above the marker, in call order, and
+        // the marker survives for the next run.
+        let init = two.find("feature init").unwrap();
+        let liga = two.find("feature liga").unwrap();
+        let marker = two.find("# Automatic Code").unwrap();
+        let ss01 = two.find("feature ss01").unwrap();
+        assert!(ss01 < init && init < liga && liga < marker);
+        // Replacing an existing block still edits it in place.
+        let three = Workspace::replace_feature_block(
+            &two, "ss01", "    sub a by a.bold;\n",
+        );
+        assert_eq!(three.matches("feature ss01").count(), 1);
+        assert!(three.contains("a.bold"));
+        // Without a marker, new blocks append at the end.
+        let plain = Workspace::replace_feature_block(
+            "feature kern {\n} kern;\n", "liga", "    sub f i by fi;\n",
+        );
+        assert!(plain.trim_end().ends_with("} liga;"));
     }
 
     #[test]
