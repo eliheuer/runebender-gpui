@@ -274,8 +274,10 @@ Deliberate non-goals are in the last section.
 - [x] Cubic <-> quadratic conversion (Glyph menu, every master):
       exact to cubic, upm/1000 approximation to quadratic;
       mixed and quadratic outlines edit natively
-- [ ] Vector paste/import from Illustrator and friends (SVG
-      outlines in; we only trace bitmaps) (handbook audit)
+- [~] Vector import: Glyph > Import SVG reads path outlines,
+      flips and fits them into the em, appends undoably.
+      Clipboard paste and transform support come later
+      (handbook audit)
 - [ ] Copy glyphs between open fonts (handbook audit)
 - [ ] Smart filters (predicate-based sidebar filters) and custom
       sidebar categories (handbook audit)
