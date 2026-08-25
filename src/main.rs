@@ -3383,6 +3383,9 @@ struct EditorState {
     sidebearing_hover: Option<bool>,
     /// Guide under the cursor: (local, index).
     guide_hover: Option<(bool, usize)>,
+    /// Locked nodes (session-scoped): unselectable and undraggable
+    /// until unlocked — Glyphs' node locking.
+    locked_points: std::collections::HashSet<(usize, usize)>,
     /// Mouse position in window coords, for pen previews.
     pointer: Option<Point<gpui::Pixels>>,
     viewport: ViewPort,
@@ -3423,6 +3426,7 @@ impl EditorState {
             selected_component: None,
             sidebearing_hover: None,
             guide_hover: None,
+            locked_points: std::collections::HashSet::new(),
             pointer: None,
             viewport: ViewPort::new(),
             initialized: false,
@@ -9508,6 +9512,23 @@ impl Workspace {
                 cx,
             ));
         }
+        if let Some(node) = menu.start_point {
+            let locked = self.editor.locked_points.contains(&node);
+            list = list.child(item(
+                ("cm", 19),
+                if locked { "Unlock Node" } else { "Lock Node" }.into(),
+                "node-lock",
+                cx,
+            ));
+        }
+        if !self.editor.locked_points.is_empty() {
+            list = list.child(item(
+                ("cm", 20),
+                "Unlock All Nodes".into(),
+                "node-unlock-all",
+                cx,
+            ));
+        }
         if menu.contour.is_some() {
             let is_mask = menu
                 .contour
@@ -10012,6 +10033,7 @@ impl Workspace {
         let transform = self.editor.transform();
         let zoom = self.editor.zoom();
         let selected_points = self.editor.selected.clone();
+        let locked_points = self.editor.locked_points.clone();
         let marquee = match &self.editor.drag {
             Some(Drag::Marquee { start, current, .. }) => Some((*start, *current)),
             _ => None,
@@ -11434,7 +11456,12 @@ impl Workspace {
                                 let center = to_screen(p.x, p.y);
                                 let is_selected =
                                     selected_points.contains(&(p.contour, p.index));
-                                let (ring, inner) = if is_selected {
+                                let is_locked = locked_points
+                                    .contains(&(p.contour, p.index));
+                                let (ring, inner) = if is_locked {
+                                    // Locked nodes read as inert.
+                                    (t::point_readonly(), t::point_readonly())
+                                } else if is_selected {
                                     (t::point_selected_ring(), t::point_selected())
                                 } else if p.hyper {
                                     (t::point_hyper_outer(), t::point_inner())
@@ -12802,6 +12829,17 @@ impl Workspace {
                     self.command_toggle_mask(ci);
                 }
             }
+            "node-lock" => {
+                if let Some(node) = menu.start_point {
+                    if !self.editor.locked_points.remove(&node) {
+                        self.editor.locked_points.insert(node);
+                        self.editor.selected.remove(&node);
+                    }
+                }
+            }
+            "node-unlock-all" => {
+                self.editor.locked_points.clear();
+            }
             "set-start" => {
                 if let Some((ci, pi)) = menu.start_point {
                     self.push_undo_snapshot(index);
@@ -13189,7 +13227,10 @@ impl Workspace {
                 let dist = ((x - dx).powi(2) + (y - dy).powi(2)).sqrt();
                 (dist, *id)
             })
-            .filter(|(dist, _)| *dist <= point_tolerance)
+            .filter(|(dist, id)| {
+                *dist <= point_tolerance
+                    && !self.editor.locked_points.contains(id)
+            })
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, id)| id);
 
@@ -13958,7 +13999,8 @@ impl Workspace {
                 .points
                 .iter()
                 .filter(|p| inside(p.x, p.y))
-                .map(|p| (p.contour, p.index)),
+                .map(|p| (p.contour, p.index))
+                .filter(|id| !self.editor.locked_points.contains(id)),
         );
         let mut anchors = base_anchors.to_vec();
         for (i, (_, x, y)) in entry.anchors.iter().enumerate() {
