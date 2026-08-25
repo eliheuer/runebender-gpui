@@ -2186,6 +2186,90 @@ fn roughen_glyph_contours(
     changed
 }
 
+// ---- COLRv1 (paint graphs through the ufo2ft colorLayers key) ----
+
+/// The explicit color-layers key, fontTools buildCOLR's input.
+/// Once present, ufo2ft skips its own layer exploding — so writing
+/// any v1 entry means exploding every color glyph ourselves.
+const COLOR_LAYERS_EXPLICIT_KEY: &str =
+    "com.github.googlei18n.ufo2ft.colorLayers";
+
+/// A COLRv1 linear-gradient paint dict in fontTools' unbuilt form:
+/// two palette stops, running from `p0` to `p1` (x2/y2 is the
+/// required rotation vector, perpendicular to the gradient).
+fn linear_gradient_paint(
+    stop0: usize,
+    stop1: usize,
+    p0: (f64, f64),
+    p1: (f64, f64),
+) -> plist::Value {
+    let stop = |offset: f64, palette: usize| {
+        let mut dict = plist::Dictionary::new();
+        dict.insert("StopOffset".into(), plist::Value::Real(offset));
+        dict.insert(
+            "PaletteIndex".into(),
+            plist::Value::Integer((palette as u64).into()),
+        );
+        dict.insert("Alpha".into(), plist::Value::Real(1.0));
+        plist::Value::Dictionary(dict)
+    };
+    let mut color_line = plist::Dictionary::new();
+    color_line.insert(
+        "ColorStop".into(),
+        plist::Value::Array(vec![stop(0.0, stop0), stop(1.0, stop1)]),
+    );
+    color_line.insert("Extend".into(), plist::Value::String("pad".into()));
+    let mut paint = plist::Dictionary::new();
+    // PaintLinearGradient.
+    paint.insert("Format".into(), plist::Value::Integer(4u64.into()));
+    paint.insert("ColorLine".into(), plist::Value::Dictionary(color_line));
+    paint.insert("x0".into(), plist::Value::Real(p0.0));
+    paint.insert("y0".into(), plist::Value::Real(p0.1));
+    paint.insert("x1".into(), plist::Value::Real(p1.0));
+    paint.insert("y1".into(), plist::Value::Real(p1.1));
+    // Rotation vector: perpendicular to p0->p1.
+    paint.insert(
+        "x2".into(),
+        plist::Value::Real(p0.0 + (p1.1 - p0.1)),
+    );
+    paint.insert(
+        "y2".into(),
+        plist::Value::Real(p0.1 - (p1.0 - p0.0)),
+    );
+    plist::Value::Dictionary(paint)
+}
+
+/// A PaintGlyph layer wrapping a child paint (Format 10), and the
+/// solid child (Format 2) — the shapes verified through ufo2ft's
+/// buildCOLR: the glyph's root is PaintColrLayers (Format 1) with
+/// these as Layers.
+fn paint_glyph_layer(glyph: &str, child: plist::Value) -> plist::Value {
+    let mut dict = plist::Dictionary::new();
+    dict.insert("Format".into(), plist::Value::Integer(10u64.into()));
+    dict.insert("Glyph".into(), plist::Value::String(glyph.into()));
+    dict.insert("Paint".into(), child);
+    plist::Value::Dictionary(dict)
+}
+
+fn paint_solid(palette: usize) -> plist::Value {
+    let mut dict = plist::Dictionary::new();
+    dict.insert("Format".into(), plist::Value::Integer(2u64.into()));
+    dict.insert(
+        "PaletteIndex".into(),
+        plist::Value::Integer((palette as u64).into()),
+    );
+    dict.insert("Alpha".into(), plist::Value::Real(1.0));
+    plist::Value::Dictionary(dict)
+}
+
+/// Does this font carry explicit (v1) color layers for the glyph?
+fn has_v1_entry(font: &norad::Font, glyph: &str) -> bool {
+    font.lib
+        .get(COLOR_LAYERS_EXPLICIT_KEY)
+        .and_then(|v| v.as_dictionary())
+        .is_some_and(|d| d.contains_key(glyph))
+}
+
 // ---- masks (subtracting contours, the Glyphs path attribute) ----
 
 /// Contour indices marked as masks: shapes that cut away from the
@@ -14652,6 +14736,155 @@ impl Workspace {
         }
     }
 
+    /// Color section's "To v1" button: explode every color glyph's
+    /// layers into real suffixed glyphs and write the explicit
+    /// colorLayers structures (solid paints), the COLRv1 baseline.
+    /// From here ufo2ft's own exploding is off; gradients upgrade
+    /// individual paints.
+    fn command_convert_to_colrv1(&mut self) {
+        let Some(project) = self.project.as_mut() else { return };
+        let mut exploded = 0usize;
+        for master in project.masters.iter_mut() {
+            let mapping = read_color_mapping(&master.font);
+            if mapping.is_empty() {
+                continue;
+            }
+            // Which glyphs have color-layer copies at all.
+            let color_glyphs: Vec<String> = master
+                .font
+                .default_layer()
+                .iter()
+                .map(|g| g.name().to_string())
+                .filter(|name| {
+                    !name.contains(".color.")
+                        && mapping.iter().any(|(layer, _)| {
+                            master
+                                .font
+                                .layers
+                                .get(layer)
+                                .is_some_and(|l| l.contains_glyph(name))
+                        })
+                })
+                .collect();
+            let mut layers_dict = plist::Dictionary::new();
+            for name in &color_glyphs {
+                let mut rows: Vec<plist::Value> = Vec::new();
+                for (layer, color) in &mapping {
+                    let Some(copy) = master
+                        .font
+                        .layers
+                        .get(layer)
+                        .and_then(|l| l.get_glyph(name.as_str()))
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    let suffixed = format!("{name}.{layer}");
+                    if master.font.get_glyph(suffixed.as_str()).is_none() {
+                        let mut real = norad::Glyph::new(suffixed.as_str());
+                        real.width = copy.width;
+                        real.contours = copy.contours.clone();
+                        real.components = copy.components.clone();
+                        master.font.default_layer_mut().insert_glyph(real);
+                    }
+                    rows.push(paint_glyph_layer(
+                        &suffixed,
+                        paint_solid(*color),
+                    ));
+                }
+                if !rows.is_empty() {
+                    let mut root = plist::Dictionary::new();
+                    root.insert(
+                        "Format".into(),
+                        plist::Value::Integer(1u64.into()),
+                    );
+                    root.insert("Layers".into(), plist::Value::Array(rows));
+                    layers_dict.insert(
+                        name.clone(),
+                        plist::Value::Dictionary(root),
+                    );
+                    exploded += 1;
+                }
+            }
+            if !layers_dict.is_empty() {
+                master.font.lib.insert(
+                    COLOR_LAYERS_EXPLICIT_KEY.into(),
+                    plist::Value::Dictionary(layers_dict),
+                );
+                master.dirty = true;
+            }
+            master.refresh_from_font();
+        }
+        self.sidebar_counts = None;
+        self.status_note = Some(
+            if exploded == 0 {
+                "No color layers to convert".to_string()
+            } else {
+                format!("COLRv1: {exploded} glyph entr(ies) written")
+            }
+            .into(),
+        );
+    }
+
+    /// Turn one of the selected glyph's color layers into a linear
+    /// gradient: from the row's color at the baseline to the
+    /// selected swatch at the ascender. Runs the v1 conversion
+    /// first when needed.
+    fn command_layer_gradient(&mut self, row: usize) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if !self
+            .font()
+            .is_some_and(|f| has_v1_entry(&f.font, &name))
+        {
+            self.command_convert_to_colrv1();
+        }
+        let stop1 = self.color_selected;
+        let Some(project) = self.project.as_mut() else { return };
+        let mut changed = 0usize;
+        for master in project.masters.iter_mut() {
+            let (ascender, mapping) =
+                (master.ascender, read_color_mapping(&master.font));
+            let Some((_, stop0)) = mapping.get(row) else { continue };
+            let paint = linear_gradient_paint(
+                *stop0,
+                stop1,
+                (0.0, 0.0),
+                (0.0, ascender),
+            );
+            let Some(layer) = master
+                .font
+                .lib
+                .get_mut(COLOR_LAYERS_EXPLICIT_KEY)
+                .and_then(|v| v.as_dictionary_mut())
+                .and_then(|d| d.get_mut(name.as_str()))
+                .and_then(|v| v.as_dictionary_mut())
+                .and_then(|root| root.get_mut("Layers"))
+                .and_then(|v| v.as_array_mut())
+                .and_then(|layers| layers.get_mut(row))
+                .and_then(|v| v.as_dictionary_mut())
+            else {
+                continue;
+            };
+            layer.insert("Paint".into(), paint);
+            changed += 1;
+            master.dirty = true;
+        }
+        self.status_note = Some(
+            if changed == 0 {
+                "Gradient: convert to v1 first (To v1)".to_string()
+            } else {
+                format!(
+                    "Layer {row}: linear gradient to color {stop1} in {changed} master(s)"
+                )
+            }
+            .into(),
+        );
+    }
+
     /// Color section: the CPAL palette, the layer mapping, and the
     /// stacked-preview toggle (COLRv0 through the ufo2ft lib keys).
     fn color_section(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -14740,6 +14973,20 @@ impl Workspace {
                     )
                     .child(
                         div()
+                            .id(("color-layer-grad", i))
+                            .px_1()
+                            .text_xs()
+                            .cursor_pointer()
+                            .text_color(t::text_muted())
+                            .hover(|el| el.text_color(t::text()))
+                            .child("◐")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.command_layer_gradient(i);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
                             .id(("color-layer-del", i))
                             .px_1()
                             .cursor_pointer()
@@ -14778,6 +15025,23 @@ impl Workspace {
                             .child("+ Color Layer")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.command_add_color_layer();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("color-to-v1")
+                            .px_2()
+                            .py_0p5()
+                            .rounded_sm()
+                            .text_sm()
+                            .cursor_pointer()
+                            .border_1()
+                            .border_color(t::cell_border())
+                            .text_color(t::text())
+                            .child("To v1")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.command_convert_to_colrv1();
                                 cx.notify();
                             })),
                     )
@@ -21092,6 +21356,34 @@ mod tests {
             refined.contours[0].points[0].x,
             orig + 40.0,
         );
+    }
+
+    #[test]
+    fn colrv1_paint_shapes() {
+        // The exact structures verified against ufo2ft's buildCOLR:
+        // PaintColrLayers root (1), PaintGlyph layers (10), solid (2)
+        // and linear-gradient (4) children.
+        let solid = paint_solid(3);
+        let d = solid.as_dictionary().unwrap();
+        assert_eq!(d.get("Format").unwrap().as_signed_integer(), Some(2));
+        assert_eq!(d.get("PaletteIndex").unwrap().as_signed_integer(), Some(3));
+        let layer = paint_glyph_layer("A.color.0", solid);
+        let d = layer.as_dictionary().unwrap();
+        assert_eq!(d.get("Format").unwrap().as_signed_integer(), Some(10));
+        assert_eq!(d.get("Glyph").unwrap().as_string(), Some("A.color.0"));
+        let grad = linear_gradient_paint(1, 0, (0.0, 0.0), (0.0, 800.0));
+        let d = grad.as_dictionary().unwrap();
+        assert_eq!(d.get("Format").unwrap().as_signed_integer(), Some(4));
+        // Rotation vector is perpendicular to the vertical gradient.
+        assert_eq!(d.get("x2").unwrap().as_real(), Some(800.0));
+        assert_eq!(d.get("y2").unwrap().as_real(), Some(0.0));
+        let stops = d
+            .get("ColorLine")
+            .and_then(|v| v.as_dictionary())
+            .and_then(|c| c.get("ColorStop"))
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(stops.len(), 2);
     }
 
     #[test]
