@@ -55,8 +55,10 @@ init/medi/fina, mark anchors) is the working test font.
    measures every form's connecting band (components resolved,
    overlap tongues respected), selects the ones off the common
    band.
-9. RTL kerning audit: confirm pair direction, group sides, and
-   drag gestures are correct in RTL runs; fix what is not.
+9. [done 2026-08-26] RTL kerning audit: storage and application
+   were correct (logical-order pairs, swapped lookup per bidi
+   run); the manual kern drag was sign-inverted in RTL lines —
+   fixed in core (8245365) with a two-direction test.
 10. In-place component editing (Counterpunch): edit the base
     inside the composite, in context.
 
