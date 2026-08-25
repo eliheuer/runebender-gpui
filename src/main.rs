@@ -89,6 +89,8 @@ gpui::actions!(
         Rotate180,
         RoundCorners,
         AddExtremes,
+        NextSampleString,
+        PreviousSampleString,
         HyperToCubic,
         TraceImage,
         PlaceImage,
@@ -246,6 +248,12 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Next Master", NextMaster),
                 MenuItem::action("Previous Master", PreviousMaster),
+                MenuItem::separator(),
+                MenuItem::action("Next Sample String", NextSampleString),
+                MenuItem::action(
+                    "Previous Sample String",
+                    PreviousSampleString,
+                ),
                 MenuItem::separator(),
                 MenuItem::Submenu(Menu {
                     name: "Measure".into(),
@@ -1841,6 +1849,18 @@ fn add_extreme_points(
     changed
 }
 
+/// Built-in sample strings (View > Next Sample String): spacing
+/// control strings and kern words, cycled around the open glyph.
+const SAMPLE_STRINGS: &[&str] = &[
+    "HHOHOHOO",
+    "nnonoonoo",
+    "hamburgefonstiv",
+    "HAMBURGEFONSTIV",
+    "0123456789",
+    "AVATAR Wave Toy Vy",
+    "((\"quoted\")) [j] {f}!?",
+];
+
 // ---- color fonts (COLRv0 via the ufo2ft lib keys) ----
 //
 // The build contract is ufo2ft's: `colorPalettes` in the font lib is a
@@ -2376,6 +2396,8 @@ struct Workspace {
     color_selected: usize,
     /// Paint the color layers stacked in the editor.
     show_color_preview: bool,
+    /// Which built-in sample string the buffer shows.
+    sample_index: usize,
     /// The Instances editor field under the axis sliders: Enter
     /// renames the instance at the preview location, or adds one.
     instance_name_input: gpui::Entity<gpui_component::input::InputState>,
@@ -13934,6 +13956,30 @@ impl Workspace {
         }
     }
 
+    /// View > Next/Previous Sample String: rebuild the text buffer
+    /// as sample text around the open glyph.
+    fn command_sample_string(&mut self, step: isize) {
+        let Mode::Editor(index) = self.mode else { return };
+        let Some(font) = self.font() else { return };
+        let entry = &font.glyphs[index];
+        let (name, codepoint, advance) =
+            (entry.name.to_string(), entry.codepoint, entry.advance);
+        let count = SAMPLE_STRINGS.len() as isize;
+        self.sample_index =
+            (self.sample_index as isize + step).rem_euclid(count) as usize;
+        let sample = SAMPLE_STRINGS[self.sample_index];
+        self.edit_buffer.clear();
+        // The open glyph leads; the sample text follows it.
+        self.edit_buffer.insert_glyph(&name, codepoint, advance);
+        self.edit_buffer.activate_sort(0);
+        for c in sample.chars() {
+            self.edit_buffer.insert_character(c);
+        }
+        self.edit_buffer.activate_sort(0);
+        self.sync_sort_offset();
+        self.status_note = Some(format!("Sample: {sample}").into());
+    }
+
     /// Path > Add Extremes.
     fn command_add_extremes(&mut self) {
         let Mode::Editor(index) = self.mode else { return };
@@ -16691,6 +16737,14 @@ impl Render for Workspace {
                 this.command_add_extremes();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &NextSampleString, _, cx| {
+                this.command_sample_string(1);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &PreviousSampleString, _, cx| {
+                this.command_sample_string(-1);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &RoundCorners, _, cx| {
                 this.command_round_corners();
                 cx.notify();
@@ -17629,6 +17683,7 @@ fn main() {
                         color_hex_input,
                         color_selected: 0,
                         show_color_preview: true,
+                        sample_index: 0,
                         instance_name_input,
                         features_input,
                         features_edited: false,
