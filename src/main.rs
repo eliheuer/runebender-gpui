@@ -90,6 +90,7 @@ gpui::actions!(
         RoundCorners,
         AddExtremes,
         SyncMetrics,
+        ShowAllMasters,
         NextSampleString,
         PreviousSampleString,
         HyperToCubic,
@@ -194,6 +195,8 @@ fn app_menus() -> Vec<gpui::Menu> {
             items: vec![
                 MenuItem::action("Undo", Undo),
                 MenuItem::action("Redo", Redo),
+                MenuItem::separator(),
+                MenuItem::action("Show All Masters", ShowAllMasters),
                 MenuItem::separator(),
                 MenuItem::action("Copy Contours", CopyContours),
                 MenuItem::action("Paste Contours", PasteContours),
@@ -2800,6 +2803,10 @@ struct Workspace {
     /// Masters drawn as dim reference underlays in the editor
     /// (the layer rows' eye toggles).
     reference_layers: std::collections::HashSet<usize>,
+    /// Edit > Show All Masters: every master overlaid in the edit
+    /// view, any master's node clickable (the click switches to that
+    /// master with the node selected).
+    show_all_masters: bool,
     /// Left sidebar hidden (header toggle, like the Glyphs one).
     left_collapsed: bool,
     /// In-window menu bar for platforms without a native one
@@ -8007,7 +8014,12 @@ impl Workspace {
             .project
             .as_ref()
             .map(|p| {
-                self.reference_layers
+                let shown: Vec<usize> = if self.show_all_masters {
+                    (0..p.masters.len()).collect()
+                } else {
+                    self.reference_layers.iter().copied().collect()
+                };
+                shown
                     .iter()
                     .filter(|&&i| i != p.active && i < p.masters.len())
                     .filter_map(|&i| {
@@ -11316,6 +11328,53 @@ impl Workspace {
                         orig,
                     });
                     return;
+                }
+                // Show All Masters: a node of another master under
+                // the click switches to that master with the node
+                // selected — the editable-overlay gesture.
+                if self.show_all_masters {
+                    let hit: Option<(usize, (usize, usize))> = self
+                        .project
+                        .as_ref()
+                        .and_then(|p| {
+                            let name = &p.active_font().glyphs[index].name;
+                            let mut best: Option<(f64, usize, (usize, usize))> =
+                                None;
+                            for (m, master) in p.masters.iter().enumerate() {
+                                if m == p.active {
+                                    continue;
+                                }
+                                let Some(glyph) = master
+                                    .glyphs
+                                    .iter()
+                                    .find(|g| g.name == *name)
+                                else {
+                                    continue;
+                                };
+                                for point in glyph.points.iter() {
+                                    let dist = ((point.x - dx).powi(2)
+                                        + (point.y - dy).powi(2))
+                                    .sqrt();
+                                    if dist <= point_tolerance
+                                        && best
+                                            .is_none_or(|(d, ..)| dist < d)
+                                    {
+                                        best = Some((
+                                            dist,
+                                            m,
+                                            (point.contour, point.index),
+                                        ));
+                                    }
+                                }
+                            }
+                            best.map(|(_, m, id)| (m, id))
+                        });
+                    if let Some((m, id)) = hit {
+                        self.switch_master(m);
+                        self.editor.selected.clear();
+                        self.editor.selected.insert(id);
+                        return;
+                    }
                 }
                 // Guides underlie everything: a guide drag starts
                 // only when no point, segment, or component claimed
@@ -18052,6 +18111,18 @@ impl Render for Workspace {
                 this.command_sync_metrics();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &ShowAllMasters, _, cx| {
+                this.show_all_masters = !this.show_all_masters;
+                this.status_note = Some(
+                    if this.show_all_masters {
+                        "All masters shown · click any master's node to edit it"
+                    } else {
+                        "Showing the active master"
+                    }
+                    .into(),
+                );
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &NextSampleString, _, cx| {
                 this.command_sample_string(1);
                 cx.notify();
@@ -18997,6 +19068,7 @@ fn main() {
                         edit_buffer: runebender_core::text::TextBuffer::new(),
                         collapsed_sections: std::collections::HashSet::new(),
                         reference_layers: std::collections::HashSet::new(),
+                        show_all_masters: false,
                         left_collapsed: false,
                         #[cfg(not(target_os = "macos"))]
                         app_menu_bar: app_menu_bar.clone(),
