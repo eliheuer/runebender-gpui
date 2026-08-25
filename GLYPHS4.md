@@ -72,11 +72,14 @@ Deliberate non-goals are in the last section.
 - [x] Components: place, drag, decompose one or all, open base on
       double click, lock
 - [x] Component auto-alignment from anchors, live
-- [~] Smart components: parts with a first axis render
-      interpolated at their placed value (core), authored via the
-      Glyph panel's Smart Axis field and placed via the Selection
-      panel's value field, glyphsLib-keyed. Multi-axis, smart
-      handles, and the settings dialogs come later
+- [~] Smart components: parts render interpolated at their
+      placed values (core), authored via the Glyph panel's Smart
+      Axis field and placed via the Selection panel's value
+      field, glyphsLib-keyed. Multi-axis lands 2026-08-25: pole
+      layers mark their top axes ({Width: 2, Height: 2} is a
+      corner pole) and blend by the corner-delta model — one
+      axis linear, full corners bilinear (unit-tested). Smart
+      handles and the settings dialogs come later
 - [~] Corner components: Apply Corner… on a node splices the
       _corner glyph's path with Glyphs' sheared fit, in every
       master. Baked (no UFO compiler expands corner metadata);
