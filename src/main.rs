@@ -3719,6 +3719,10 @@ struct Workspace {
     corner_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Note text typed in the context menu (Annotate: Note…).
     annotation_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Smart-axis definition on the open part glyph ("Width,0,100").
+    smart_axis_input: gpui::Entity<gpui_component::input::InputState>,
+    /// The selected smart component's value on its first axis.
+    smart_value_input: gpui::Entity<gpui_component::input::InputState>,
     anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
@@ -6486,6 +6490,23 @@ impl Workspace {
                 },
             )
             .child(input_row("Note", &self.glyph_inputs.note))
+            // A part glyph's smart axis ("Width,0,100"): defines the
+            // axis and seeds the top pole layer.
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(t::text_muted())
+                            .child("Smart Axis (name,min,max)"),
+                    )
+                    .child(gpui_component::input::Input::new(
+                        &self.glyph_smart_axis_ref(),
+                    )),
+            )
             // Bracket layers: the shape switch on this glyph, or the
             // field that creates one at a typed axis value.
             .child({
@@ -16570,6 +16591,42 @@ impl Workspace {
                                 })),
                         ),
                 );
+                // A smart part gets its value field: Enter re-places
+                // it at the typed position along the first axis.
+                let smart_axis = self.font().and_then(|f| {
+                    let glyph =
+                        f.font.get_glyph(f.glyphs[index].name.as_ref())?;
+                    let base = f
+                        .font
+                        .get_glyph(glyph.components.get(ci)?.base.as_str())?;
+                    base.lib
+                        .get("com.schriftgestaltung.Glyphs.smartComponentAxes")?
+                        .as_array()?
+                        .first()?
+                        .as_dictionary()?
+                        .get("name")?
+                        .as_string()
+                        .map(str::to_string)
+                });
+                if let Some(axis) = smart_axis {
+                    body = body.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(t::text_muted())
+                                    .child(format!("Smart {axis}")),
+                            )
+                            .child(div().w(px(64.0)).child(
+                                gpui_component::input::Input::new(
+                                    &self.smart_value_input,
+                                ),
+                            )),
+                    );
+                }
             }
         }
         self.section(cx, "Coordinates", body)
@@ -16753,6 +16810,146 @@ impl Workspace {
         self.status_note = Some(
             format!("Placed {file_name} · {img_w:.0}×{img_h:.0}px").into(),
         );
+    }
+
+    fn glyph_smart_axis_ref(
+        &self,
+    ) -> gpui::Entity<gpui_component::input::InputState> {
+        self.smart_axis_input.clone()
+    }
+
+    /// "Smart Axis" on a part glyph: "Width,0,100" writes the
+    /// glyphsLib smartComponentAxes entry, marks the default glyph
+    /// as the bottom pole, and seeds a part.top layer copy marked
+    /// as the top — edit it through the swap arrows, place the part
+    /// with a value through the Selection panel.
+    fn command_make_smart_axis(&mut self, text: &str) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let mut parts = text.split(',').map(str::trim);
+        let Some(name) = parts.next().filter(|n| !n.is_empty()) else {
+            return;
+        };
+        let bottom = parts
+            .next()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let top = parts
+            .next()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(100.0);
+        let Some(glyph_name) =
+            self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if let Some(font) = self.font_mut() {
+            let Some(source) = font.font.get_glyph(glyph_name.as_str()).cloned()
+            else {
+                return;
+            };
+            // The axis entry, glyphsLib-shaped.
+            let mut axis = plist::Dictionary::new();
+            axis.insert("name".into(), plist::Value::String(name.into()));
+            axis.insert("bottomName".into(), plist::Value::String(String::new()));
+            axis.insert("bottomValue".into(), plist::Value::Real(bottom));
+            axis.insert("topName".into(), plist::Value::String(String::new()));
+            axis.insert("topValue".into(), plist::Value::Real(top));
+            if let Some(glyph) = font.font.get_glyph_mut(glyph_name.as_str()) {
+                glyph.lib.insert(
+                    "com.schriftgestaltung.Glyphs.smartComponentAxes".into(),
+                    plist::Value::Array(vec![plist::Value::Dictionary(axis)]),
+                );
+            }
+            // Seed the top pole as a layer copy, marked.
+            if let Ok(layer) = font.font.layers.get_or_create_layer("part.top")
+            {
+                let mut copy = norad::Glyph::new(glyph_name.as_str());
+                copy.width = source.width;
+                copy.contours = source.contours.clone();
+                let mut pole = plist::Dictionary::new();
+                pole.insert(
+                    name.to_string(),
+                    plist::Value::Integer(2u64.into()),
+                );
+                copy.lib.insert(
+                    "com.runebender.partSelection".into(),
+                    plist::Value::Dictionary(pole),
+                );
+                layer.insert_glyph(copy);
+            }
+            font.dirty = true;
+            font.modified_glyphs.insert(glyph_name.clone());
+        }
+        self.visible_glyph_layers.insert("part.top".into());
+        self.status_note = Some(
+            format!(
+                "{glyph_name} is a smart part: {name} {bottom:.0}–{top:.0} · edit part.top via the swap arrows"
+            )
+            .into(),
+        );
+    }
+
+    /// Set the selected smart component's value on its first axis
+    /// (the Selection panel's Smart field).
+    fn command_set_smart_value(&mut self, value: f64) {
+        let Mode::Editor(index) = self.mode else { return };
+        let Some(ci) = self.editor.selected_component else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        // The base's first smart axis name.
+        let axis = self.font().and_then(|f| {
+            let glyph = f.font.get_glyph(name.as_str())?;
+            let base = f
+                .font
+                .get_glyph(glyph.components.get(ci)?.base.as_str())?;
+            base.lib
+                .get("com.schriftgestaltung.Glyphs.smartComponentAxes")?
+                .as_array()?
+                .first()?
+                .as_dictionary()?
+                .get("name")?
+                .as_string()
+                .map(str::to_string)
+        });
+        let Some(axis) = axis else {
+            self.status_note =
+                Some("Selected component's base is not smart".into());
+            return;
+        };
+        if let Some(font) = self.font_mut() {
+            let component_count = font
+                .font
+                .get_glyph(name.as_str())
+                .map(|g| g.components.len())
+                .unwrap_or(0);
+            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
+                const KEY: &str =
+                    "com.schriftgestaltung.Glyphs.componentsSmartComponentValues";
+                let mut rows: Vec<plist::Value> = glyph
+                    .lib
+                    .get(KEY)
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                rows.resize(
+                    component_count,
+                    plist::Value::Dictionary(plist::Dictionary::new()),
+                );
+                if let Some(entry) =
+                    rows.get_mut(ci).and_then(|v| v.as_dictionary_mut())
+                {
+                    entry.insert(axis.clone(), plist::Value::Real(value));
+                }
+                glyph.lib.insert(KEY.into(), plist::Value::Array(rows));
+                font.dirty = true;
+            }
+            font.modified_glyphs.insert(name.clone());
+            font.refresh_from_font();
+        }
+        self.status_note =
+            Some(format!("{axis} = {value:.0} on the component").into());
     }
 
     /// Flip a contour's mask flag on the open glyph (active master;
@@ -21537,6 +21734,54 @@ fn main() {
                             }
                         }
                     });
+                    let smart_axis_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("Width,0,100")
+                    });
+                    let sub_smart_axis = cx.subscribe_in(&smart_axis_input, window, {
+                        let state = smart_axis_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text = state.read(cx).value().to_string();
+                                this.command_make_smart_axis(&text);
+                                cx.notify();
+                            }
+                        }
+                    });
+                    let smart_value_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("value")
+                    });
+                    let sub_smart_value = cx.subscribe_in(&smart_value_input, window, {
+                        let state = smart_value_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              _,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                if let Ok(value) = state
+                                    .read(cx)
+                                    .value()
+                                    .trim()
+                                    .parse::<f64>()
+                                {
+                                    this.command_set_smart_value(value);
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    });
                     let annotation_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("note text")
@@ -21686,6 +21931,8 @@ fn main() {
                         component_name_input: component_name_input.clone(),
                         corner_name_input: corner_name_input.clone(),
                         annotation_input: annotation_input.clone(),
+                        smart_axis_input,
+                        smart_value_input,
                         anchor_name_input: anchor_name_input.clone(),
                         glyph_image_cache: Default::default(),
                         glyph_inputs: GlyphInputs {
@@ -21767,7 +22014,8 @@ fn main() {
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_gnote,
                             sub_gswitch, sub_glk, sub_grk, sub_comp,
-                            sub_corner, sub_note,
+                            sub_corner, sub_note, sub_smart_axis,
+                            sub_smart_value,
                             sub_sw, sub_sh, sub_anchor, sub_ref,
                             sub_fi_family, sub_fi_style, sub_fi_upm,
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
