@@ -59,7 +59,20 @@ init/medi/fina, mark anchors) is the working test font.
    run); the manual kern drag was sign-inverted in RTL lines —
    fixed in core (8245365) with a two-direction test.
 10. In-place component editing (Counterpunch): edit the base
-    inside the composite, in context.
+    inside the composite, in context. Deliberately left for a
+    supervised session — it rewires selection, coordinate
+    mapping, and undo, too deep to land without QA.
+
+## Status 2026-08-26
+
+Nine of ten landed in one pass; the RTL kerning audit also found
+and fixed a real sign-inversion bug in the manual kern drag
+(runebender-core 8245365). QA checklist for the next session:
+type Arabic in the editor and work the Shaping section (chips,
+cluster highlighting, double-click into a glyph, feature
+toggles), run Glyph > Check Joining on Virtua, open the Forms
+view, toggle the mark cloud on a base letter, and kern an Arabic
+pair by dragging in both directions.
 
 Items 1–3 are Fontra's lead; 4, 7, 8 are the Glyphs Arabic
 workflow; 5, 6, 10 are Counterpunch's identity. 1–5 are the
