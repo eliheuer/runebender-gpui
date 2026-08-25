@@ -16093,6 +16093,128 @@ impl Workspace {
         )
     }
 
+    /// Compare section (grid mode): every master against the active
+    /// one — glyph count, structural incompatibilities, differing
+    /// advances, kerning pair count, and the vertical metrics that
+    /// disagree. The Glyphs Compare Fonts window's job, inside one
+    /// project.
+    fn compare_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(project) = self.project.as_ref() else {
+            return self.section(cx, "Compare", div());
+        };
+        if project.masters.len() < 2 {
+            return self.section(
+                cx,
+                "Compare",
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("One master · nothing to compare"),
+            );
+        }
+        let active = project.active;
+        let reference = &project.masters[active];
+        let incompatible =
+            project.compat.values().filter(|ok| !**ok).count();
+        let mut rows = div().flex().flex_col().gap_1();
+        for (i, master) in project.masters.iter().enumerate() {
+            if i == active {
+                continue;
+            }
+            let missing = reference
+                .glyphs
+                .iter()
+                .filter(|g| !master.name_map.contains_key(g.name.as_ref()))
+                .count();
+            let advance_diffs = reference
+                .glyphs
+                .iter()
+                .filter(|g| {
+                    master
+                        .name_map
+                        .get(g.name.as_ref())
+                        .map(|&j| {
+                            (master.glyphs[j].advance - g.advance).abs() > 0.5
+                        })
+                        .unwrap_or(false)
+                })
+                .count();
+            let pair_count = |m: &FontModel| {
+                m.font
+                    .kerning
+                    .values()
+                    .map(|seconds| seconds.len())
+                    .sum::<usize>()
+            };
+            let metrics_diff = {
+                let mut diffs: Vec<&str> = Vec::new();
+                if (master.ascender - reference.ascender).abs() > 0.5 {
+                    diffs.push("asc");
+                }
+                if (master.descender - reference.descender).abs() > 0.5 {
+                    diffs.push("desc");
+                }
+                if master.x_height != reference.x_height {
+                    diffs.push("xh");
+                }
+                if master.cap_height != reference.cap_height {
+                    diffs.push("cap");
+                }
+                diffs
+            };
+            rows = rows.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(t::text())
+                            .child(format!(
+                                "{} vs {}",
+                                project.master_names[i],
+                                project.master_names[active]
+                            )),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(t::text_muted())
+                            .child(format!(
+                                "{} glyphs · {} missing · {} advance diffs · kerning {} vs {}{}",
+                                master.glyphs.len(),
+                                missing,
+                                advance_diffs,
+                                pair_count(master),
+                                pair_count(reference),
+                                if metrics_diff.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(
+                                        " · metrics differ: {}",
+                                        metrics_diff.join(", ")
+                                    )
+                                },
+                            )),
+                    ),
+            );
+        }
+        rows = rows.child(
+            div()
+                .text_xs()
+                .text_color(if incompatible == 0 {
+                    t::text_muted()
+                } else {
+                    t::status_yellow()
+                })
+                .child(format!(
+                    "{incompatible} structurally incompatible glyph(s)"
+                )),
+        );
+        self.section(cx, "Compare", rows)
+    }
+
     /// Dimensions section (grid mode): measured stems and bars for
     /// the reference glyphs, per master. Glyphs' Dimensions palette
     /// is hand-typed; these are measured from the outlines.
@@ -20902,6 +21024,7 @@ impl Render for Workspace {
                     .child(self.dimensions_section(cx))
                     .child(self.kerning_section(cx))
                     .child(self.groups_section(cx))
+                    .child(self.compare_section(cx))
                     .child(self.features_section(cx))
                     .child(self.layers_section(cx))
                     .child(self.glyph_preview_panel())
