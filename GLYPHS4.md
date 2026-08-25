@@ -423,3 +423,37 @@ building the matching pieces here.
 - Slanter filter: Geometric Slant, Cursivy, stems (Auto Stems),
   Slant and Rotate. Offset Curve filter: Horizontal, Vertical
   (linkable), Make Stroke, Position %, Keep Compatible, cap style.
+
+## QA checklist — session 2026-08-25
+
+Landed tonight, each with unit tests where the logic allows;
+these are the hands-on checks:
+
+1. **Insert Node Here** — in the editor, right-click the middle
+   of a segment; the segment splits at the click and the new
+   node is selected. Undo restores it.
+2. **Open / Close Contour** — right-click an on-curve point >
+   Open Contour Here: the contour opens with that point as the
+   start. Right-click a point of an open contour > Close
+   Contour seals it again.
+3. **Saved filters** — type a query in the font-view search
+   (try `w>600` or `cat:mark`), then click the "Save …" row at
+   the foot of Filters. The saved row filters, counts, and
+   deletes via the hover ×. Survives save/reopen (font lib,
+   com.runebender.savedFilters).
+4. **# Automatic Code marker** — put a line reading
+   `# Automatic Code` in features.fea between two hand-written
+   blocks; Generate inserts its new blocks just above the
+   marker instead of appending at the end.
+5. **Production Name** — glyph panel, under Unicode: set e.g.
+   `uni0627` on alef-ar; lands in public.postscriptNames in
+   every master. Clearing the field removes it.
+6. **Language chips** — Shaping panel, Language row: with an
+   `arab URD` languagesystem rule in features.fea, the Urdu
+   chip makes it fire in the preview; no chip returns to
+   defaults.
+7. **Multi-axis smart components** — open
+   ~/Desktop/SmartBoxDemo.ufo, type B (boxdemo): the placed
+   part blends Width and Height bilinearly through its corner
+   pole layer (expect a 275x212.5 box at 50/50; edit the
+   values in the Selection panel).
