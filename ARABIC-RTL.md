@@ -51,10 +51,10 @@ init/medi/fina, mark anchors) is the working test font.
 7. [done 2026-08-26] Mark cloud: the Background section's
    toggle ghosts every attachable mark on the glyph's anchors,
    live while the anchor drags.
-8. Joining-line QA: check that connecting strokes meet at the
-   same height across init/medi/fina (the Glyphs tutorial's
-   segment-component overlap concern; Virtua's DESIGN.md has
-   the same rule).
+8. [done 2026-08-26] Joining-line QA: Glyph > Check Joining
+   measures every form's connecting band (components resolved,
+   overlap tongues respected), selects the ones off the common
+   band.
 9. RTL kerning audit: confirm pair direction, group sides, and
    drag gestures are correct in RTL runs; fix what is not.
 10. In-place component editing (Counterpunch): edit the base
