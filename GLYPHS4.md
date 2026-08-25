@@ -94,8 +94,10 @@ Deliberate non-goals are in the last section.
 ## Glyph and layer model
 
 - [x] Anchors: add, drag, rename, delete
-- [ ] Ligature caret anchors (caret_1…) and contextual mark
-      attachment (*origin anchors) (handbook audit)
+- [~] Ligature caret anchors (2026-08-25): caret_1… anchors on
+      a ligature generate a GDEF table (LigatureCaretByPos)
+      through Generate, fea-rs-verified. Contextual mark
+      attachment (*origin anchors) remains (handbook audit)
 - [x] Mark attachment preview through composites
 - [x] Background layer per glyph (UFO public.background)
 - [x] Reference glyph underlay
@@ -237,7 +239,8 @@ Deliberate non-goals are in the last section.
       from fontc at export; the Features section's Generate button
       writes init/medi/fina from name suffixes and liga from
       underscore names. ccmp comes later
-- [ ] Feature preview toggles in the editor
+- [x] Feature preview toggles in the editor (Shaping panel
+      chips, default → off → on, plus language-locale chips)
 - [ ] Classes and prefixes management
 - [ ] Tokens / feature variations
 

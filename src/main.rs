@@ -15521,6 +15521,43 @@ impl Workspace {
             }
             blocks.push(("liga".to_string(), rules));
         }
+        // Ligature caret positions: caret_1, caret_2... anchors on a
+        // ligature give editing carets between its parts (GDEF
+        // LigatureCaretByPos), the Glyphs anchor convention.
+        let mut caret_rules = String::new();
+        for glyph in font.default_layer().iter() {
+            let mut carets: Vec<(u32, f64)> = glyph
+                .anchors
+                .iter()
+                .filter_map(|a| {
+                    let n = a
+                        .name
+                        .as_ref()?
+                        .as_str()
+                        .strip_prefix("caret_")?
+                        .parse::<u32>()
+                        .ok()?;
+                    Some((n, a.x))
+                })
+                .collect();
+            if carets.is_empty() {
+                continue;
+            }
+            carets.sort_by_key(|(n, _)| *n);
+            let positions: Vec<String> = carets
+                .iter()
+                .map(|(_, x)| format!("{x:.0}"))
+                .collect();
+            caret_rules.push_str(&format!(
+                "    LigatureCaretByPos {} {};
+",
+                glyph.name(),
+                positions.join(" ")
+            ));
+        }
+        if !caret_rules.is_empty() {
+            blocks.push(("table GDEF".to_string(), caret_rules));
+        }
         blocks
     }
 
@@ -15528,9 +15565,20 @@ impl Workspace {
     /// source. The terminator `} X;` is required syntax, so the block
     /// span is found textually.
     fn replace_feature_block(fea: &str, tag: &str, body: &str) -> String {
-        let block = format!("feature {tag} {{\n{body}}} {tag};\n");
-        let open = format!("feature {tag} ");
-        let close = format!("}} {tag};");
+        // A tag of "table GDEF" replaces a table block instead;
+        // both share the `} NAME;` terminator grammar.
+        let (open, close, block) = match tag.strip_prefix("table ") {
+            Some(name) => (
+                format!("table {name} "),
+                format!("}} {name};"),
+                format!("table {name} {{\n{body}}} {name};\n"),
+            ),
+            None => (
+                format!("feature {tag} "),
+                format!("}} {tag};"),
+                format!("feature {tag} {{\n{body}}} {tag};\n"),
+            ),
+        };
         if let (Some(start), Some(end)) =
             (fea.find(&open), fea.find(&close))
         {
@@ -23728,6 +23776,38 @@ mod tests {
     }
 
     #[test]
+    fn caret_anchors_generate_a_gdef_table() {
+        let mut font = norad::Font::new();
+        let mut liga = norad::Glyph::new("f_i");
+        liga.anchors.push(norad::Anchor::new(
+            620.0,
+            0.0,
+            Some(norad::Name::new("caret_1").unwrap()),
+            None,
+            None,
+        ));
+        font.default_layer_mut().insert_glyph(liga);
+        let blocks = Workspace::generated_feature_blocks(&font);
+        let gdef = blocks
+            .iter()
+            .find(|(tag, _)| tag == "table GDEF")
+            .expect("GDEF block generated");
+        assert!(gdef.1.contains("LigatureCaretByPos f_i 620;"));
+        // The table block writes and replaces through the shared
+        // grammar.
+        let fea = Workspace::replace_feature_block("", "table GDEF", &gdef.1);
+        assert!(fea.starts_with("table GDEF {"));
+        assert!(fea.trim_end().ends_with("} GDEF;"));
+        let again = Workspace::replace_feature_block(
+            &fea,
+            "table GDEF",
+            "    LigatureCaretByPos f_i 300;\n",
+        );
+        assert_eq!(again.matches("table GDEF").count(), 1);
+        assert!(again.contains("300;"));
+    }
+
+    #[test]
     fn production_names_read_from_lib() {
         let mut font = norad::Font::new();
         assert_eq!(read_production_name(&font, "uni0627"), None);
@@ -24402,9 +24482,19 @@ mod tests {
             m.anchors.push(anchor(0.0, 0.0, "_top"));
             m.anchors.push(anchor(0.0, 300.0, "top"));
         }
+        // Ligature carets on f_i feed the GDEF table.
+        {
+            let g = font.default_layer_mut().get_glyph_mut("f_i").unwrap();
+            g.anchors.push(norad::Anchor::new(
+                480.0, 0.0,
+                Some(norad::Name::new("caret_1").unwrap()),
+                None, None,
+            ));
+        }
         let blocks = Workspace::generated_feature_blocks(&font);
         let tags: Vec<&str> = blocks.iter().map(|(t, _)| t.as_str()).collect();
         assert!(tags.contains(&"mark") && tags.contains(&"mkmk"), "{tags:?}");
+        assert!(tags.contains(&"table GDEF"), "{tags:?}");
         let mark = &blocks.iter().find(|(t, _)| t == "mark").unwrap().1;
         assert!(mark.contains("markClass acutecomb <anchor 0 0> @MC_top;"), "{mark}");
         assert!(mark.contains("pos base a <anchor 250 700> mark @MC_top;"));
