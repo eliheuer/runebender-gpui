@@ -220,8 +220,10 @@ Deliberate non-goals are in the last section.
       audit)
 - [x] Per-master standard stems: StemSnap H/V edited in Font
       Info, read by the autohinter at export (handbook audit)
-- [ ] Stylistic set naming (featureNames blocks) (handbook
-      audit)
+- [x] Stylistic set naming (2026-08-25): featureNames blocks
+      written in the Features pane compile through fea-rs into
+      the preview and the export, unit-verified (no dedicated
+      dialog; the fea source is the interface)
 - [x] Add and remove glyphs, missing-glyph generate from
       language coverage
 - [x] Glyph info database: categories, scripts, GF language

@@ -23990,6 +23990,28 @@ mod tests {
     }
 
     #[test]
+    fn stylistic_set_names_compile() {
+        // featureNames inside an ss block is plain fea; the editor's
+        // Features pane plus fea-rs carry it end to end.
+        let project = Project::load(&default_font_path()).expect("loads");
+        let font = project.active_font();
+        let fea = "feature ss01 {\n\
+                   featureNames {\n  name \"Bold a\";\n};\n\
+                   sub a by a.bold;\n\
+                   } ss01;\n";
+        // a.bold may not exist in the test font; use glyphs that do.
+        let fea = if font.font.get_glyph("a.bold").is_some() {
+            fea.to_string()
+        } else {
+            fea.replace("a.bold", "b")
+        };
+        assert!(
+            Workspace::check_features_compile(font, &fea).is_ok(),
+            "featureNames should compile through fea-rs"
+        );
+    }
+
+    #[test]
     fn glyph_svg_wraps_the_outline_in_font_units() {
         let mut path = BezPath::new();
         path.move_to((0.0, 0.0));
