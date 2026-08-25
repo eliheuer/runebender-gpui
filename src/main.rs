@@ -91,6 +91,7 @@ gpui::actions!(
         AddExtremes,
         SyncMetrics,
         ShowAllMasters,
+        BakeMasks,
         NextSampleString,
         PreviousSampleString,
         HyperToCubic,
@@ -227,6 +228,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Round Corners", RoundCorners),
                 MenuItem::action("Add Extremes", AddExtremes),
                 MenuItem::action("Sync Metrics", SyncMetrics),
+                MenuItem::action("Bake Masks", BakeMasks),
                 MenuItem::action("Hyperbezier to Cubic", HyperToCubic),
                 MenuItem::action("Quadratic to Cubic", QuadsToCubics),
                 MenuItem::action("Cubic to Quadratic", CubicsToQuads),
@@ -2182,6 +2184,88 @@ fn roughen_glyph_contours(
         }
     }
     changed
+}
+
+// ---- masks (subtracting contours, the Glyphs path attribute) ----
+
+/// Contour indices marked as masks: shapes that cut away from the
+/// rest of the glyph. Live in a lib key; previews subtract them,
+/// Bake Masks makes the subtraction real (external compilers only
+/// see baked outlines).
+const MASKS_KEY: &str = "com.runebender.masks";
+
+fn read_masks(glyph: &norad::Glyph) -> std::collections::HashSet<usize> {
+    glyph
+        .lib
+        .get(MASKS_KEY)
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|v| v.as_signed_integer())
+                .filter(|&i| i >= 0)
+                .map(|i| i as usize)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_masks(glyph: &mut norad::Glyph, masks: &std::collections::HashSet<usize>) {
+    if masks.is_empty() {
+        glyph.lib.remove(MASKS_KEY);
+        return;
+    }
+    let mut sorted: Vec<usize> = masks.iter().copied().collect();
+    sorted.sort_unstable();
+    glyph.lib.insert(
+        MASKS_KEY.into(),
+        plist::Value::Array(
+            sorted
+                .into_iter()
+                .map(|i| plist::Value::Integer((i as u64).into()))
+                .collect(),
+        ),
+    );
+}
+
+/// Cut the mask contours out of the rest and drop them: the final
+/// outline every compiler understands. Returns false when the glyph
+/// has no masks or the boolean fails.
+fn bake_masks(glyph: &mut norad::Glyph) -> bool {
+    let masks = read_masks(glyph);
+    if masks.is_empty() || masks.len() >= glyph.contours.len() {
+        return false;
+    }
+    let mut keep = BezPath::new();
+    let mut cut = BezPath::new();
+    for (ci, contour) in glyph.contours.iter().enumerate() {
+        let path = runebender_core::glyph_paths::contour_to_bezpath(contour);
+        let target = if masks.contains(&ci) { &mut cut } else { &mut keep };
+        target.extend(path.elements().iter().copied());
+    }
+    let Ok(result) = linesweeper::binary_op(
+        &keep,
+        &cut,
+        linesweeper::FillRule::NonZero,
+        linesweeper::BinaryOp::Difference,
+    ) else {
+        return false;
+    };
+    let empty = std::collections::HashMap::new();
+    let mut contours = Vec::new();
+    for contour in result.contours() {
+        if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(
+            &contour.path,
+            &empty,
+        ) {
+            contours.push(c);
+        }
+    }
+    if contours.is_empty() {
+        return false;
+    }
+    glyph.contours = contours;
+    write_masks(glyph, &std::collections::HashSet::new());
+    true
 }
 
 // ---- annotations (canvas notes, arrows, circles) ----
@@ -8722,6 +8806,24 @@ impl Workspace {
                 cx,
             ));
         }
+        if menu.contour.is_some() {
+            let is_mask = menu
+                .contour
+                .zip(self.font())
+                .and_then(|(ci, f)| {
+                    let g = f.font.get_glyph(
+                        f.glyphs[self.current_glyph_index()?].name.as_ref(),
+                    )?;
+                    Some(read_masks(g).contains(&ci))
+                })
+                .unwrap_or(false);
+            list = list.child(item(
+                ("cm", 18),
+                if is_mask { "Remove Mask" } else { "Make Mask" }.into(),
+                "mask-toggle",
+                cx,
+            ));
+        }
         if menu.start_point.is_some() {
             list = list.child(item(
                 ("cm", 3),
@@ -9082,6 +9184,24 @@ impl Workspace {
                 })
             })
             .flatten();
+        // Mask contours: drawn in the accent as a warning, and cut
+        // out of the space-hold preview fill.
+        let mask_paths: Vec<Arc<BezPath>> = font
+            .font
+            .get_glyph(entry.name.as_ref())
+            .map(|g| {
+                read_masks(g)
+                    .into_iter()
+                    .filter_map(|ci| {
+                        g.contours.get(ci).map(|c| {
+                            Arc::new(
+                                runebender_core::glyph_paths::contour_to_bezpath(c),
+                            )
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         // Annotations: working marks pinned to design-space points.
         let annotations: Vec<Annotation> = font
             .font
@@ -9990,6 +10110,33 @@ impl Workspace {
                             if preview_mode {
                                 let mut combined = outline.as_ref().clone();
                                 combined.extend(component_path.elements().iter().cloned());
+                                // The masked preview is the truth the
+                                // Bake Masks command makes permanent.
+                                if !mask_paths.is_empty() {
+                                    let mut cut = BezPath::new();
+                                    for m in &mask_paths {
+                                        cut.extend(
+                                            m.elements().iter().copied(),
+                                        );
+                                    }
+                                    if let Ok(result) = linesweeper::binary_op(
+                                        &combined,
+                                        &cut,
+                                        linesweeper::FillRule::NonZero,
+                                        linesweeper::BinaryOp::Difference,
+                                    ) {
+                                        combined = BezPath::new();
+                                        for contour in result.contours() {
+                                            combined.extend(
+                                                contour
+                                                    .path
+                                                    .elements()
+                                                    .iter()
+                                                    .copied(),
+                                            );
+                                        }
+                                    }
+                                }
                                 if let Some(p) =
                                     build_fill_path(&combined, transform, origin)
                                 {
@@ -10348,6 +10495,18 @@ impl Workspace {
                                     PathBuilder::stroke(px(1.0)),
                                 ) {
                                     window.paint_path(p, t::metric_quiet());
+                                }
+                            }
+                            // Mask contours read as cuts: the local-
+                            // guide accent over the normal stroke.
+                            for path in &mask_paths {
+                                if let Some(p) = build_path(
+                                    path,
+                                    transform,
+                                    origin,
+                                    PathBuilder::stroke(px(2.0)),
+                                ) {
+                                    window.paint_path(p, t::guide_local());
                                 }
                             }
                             // Curvature comb, behind the outline so points
@@ -11888,6 +12047,11 @@ impl Workspace {
             "annotation-delete" => {
                 if let Some(i) = menu.annotation {
                     self.command_delete_annotation(i);
+                }
+            }
+            "mask-toggle" => {
+                if let Some(ci) = menu.contour {
+                    self.command_toggle_mask(ci);
                 }
             }
             "set-start" => {
@@ -15600,6 +15764,57 @@ impl Workspace {
         self.show_background = true;
         self.status_note = Some(
             format!("Placed {file_name} · {img_w:.0}×{img_h:.0}px").into(),
+        );
+    }
+
+    /// Flip a contour's mask flag on the open glyph (active master;
+    /// mask sets are per master like everything the lib carries).
+    fn command_toggle_mask(&mut self, ci: usize) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        if let Some(font) = self.font_mut() {
+            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
+                let mut masks = read_masks(glyph);
+                if !masks.remove(&ci) {
+                    masks.insert(ci);
+                }
+                write_masks(glyph, &masks);
+                font.dirty = true;
+                font.modified_glyphs.insert(name);
+            }
+        }
+    }
+
+    /// Glyph > Bake Masks: make the subtraction real in every
+    /// master, so the exported outline matches the preview.
+    fn command_bake_masks(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        if let Mode::Editor(i) = self.mode {
+            self.push_undo_snapshot(i);
+        }
+        let Some(project) = self.project.as_mut() else { return };
+        let name = project.active_font().glyphs[index].name.to_string();
+        let mut baked = 0usize;
+        for master in project.masters.iter_mut() {
+            let Some(gi) = master.name_map.get(name.as_str()).copied() else {
+                continue;
+            };
+            if master.edit_glyph(gi, bake_masks).unwrap_or(false) {
+                baked += 1;
+            }
+        }
+        project.compute_compat();
+        self.editor.selected.clear();
+        self.status_note = Some(
+            if baked == 0 {
+                "No masks to bake".to_string()
+            } else {
+                format!("Masks baked in {baked} master(s)")
+            }
+            .into(),
         );
     }
 
@@ -19401,6 +19616,10 @@ impl Render for Workspace {
                 this.command_sync_metrics();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &BakeMasks, _, cx| {
+                this.command_bake_masks();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &QuadsToCubics, _, cx| {
                 this.command_convert_curves(true);
                 cx.notify();
@@ -20872,6 +21091,46 @@ mod tests {
             "brace layer pins the outline at its location: {} vs {}",
             refined.contours[0].points[0].x,
             orig + 40.0,
+        );
+    }
+
+    #[test]
+    fn masks_roundtrip_and_bake() {
+        use norad::{Contour, ContourPoint, PointType};
+        let square = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            Contour::new(
+                [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+                    .iter()
+                    .map(|&(x, y)| {
+                        ContourPoint::new(x, y, PointType::Line, false, None, None)
+                    })
+                    .collect(),
+                None,
+            )
+        };
+        let mut glyph = norad::Glyph::new("mask-test");
+        // A big square with a smaller mask square overlapping its
+        // right edge.
+        glyph.contours =
+            vec![square(0.0, 0.0, 100.0, 100.0), square(60.0, 20.0, 140.0, 80.0)];
+        let mut masks = std::collections::HashSet::new();
+        masks.insert(1usize);
+        write_masks(&mut glyph, &masks);
+        assert_eq!(read_masks(&glyph), masks);
+        assert!(bake_masks(&mut glyph));
+        // The bite is real: no point reaches past x=60 inside the
+        // mask's y-band, and the mask key is cleared.
+        assert!(read_masks(&glyph).is_empty());
+        let max_x_in_band = glyph
+            .contours
+            .iter()
+            .flat_map(|c| c.points.iter())
+            .filter(|p| p.y > 25.0 && p.y < 75.0)
+            .map(|p| p.x)
+            .fold(f64::MIN, f64::max);
+        assert!(
+            max_x_in_band <= 61.0,
+            "mask cut the right side: {max_x_in_band}"
         );
     }
 
