@@ -153,7 +153,8 @@ Deliberate non-goals are in the last section.
       velocity dots, and each node carries a draggable knob —
       drag it to bend the path into the quadratic through that
       intermediate point (Glyphs' Intermediate Point), drag back
-      to the middle for Linear. Stored in a glyph lib key as the
+      to the middle for Linear. The Show-velocity ribbon runs
+      along every path (per-step blocks, thickness = speed). Stored in a glyph lib key as the
       editable truth and auto-baked to brace layers at
       t=0.25/0.5/0.75, so any compiler follows. The Ease field
       remains as bulk timing. Later: cubic handles and rotation
