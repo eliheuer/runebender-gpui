@@ -199,7 +199,10 @@ Deliberate non-goals are in the last section.
 - [x] Glyph info database: categories, scripts, GF language
       coverage (core `category` and `sidebar` modules)
 - [ ] Batch rename with find and replace
-- [ ] List view: glyph metadata as an editable table
+- [~] List view: the property table (mark, name, Unicode, width,
+      LSB/RSB, groups, category) with grid selection semantics;
+      editing goes through the Glyph panel. Inline cell editing
+      comes later
 
 ## OpenType features
 
@@ -286,8 +289,9 @@ Deliberate non-goals are in the last section.
       sidebar categories (handbook audit)
 - [x] Search with scopes, regex, case toggle
 - [x] Grid multi-select with batch mark color
-- [~] Font view detail: we show name and unicode; Glyphs 4 has a
-      detail mode with category, script, and custom columns
+- [x] Font view modes: Grid / Detail / List switcher in the
+      bottom bar — Detail adds category and advance to every
+      cell, the Glyphs 4 detail grid
 - [~] Character info: the Glyph panel shows the encoded
       character's Unicode name. A full lookup window comes later
 - [ ] Settings window (we have the theme menu only)
