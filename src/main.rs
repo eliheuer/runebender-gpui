@@ -2437,6 +2437,44 @@ fn bake_masks(glyph: &mut norad::Glyph) -> bool {
 /// Editor annotations, the Glyphs annotation tool's marks: arrows,
 /// circles, plus/minus, and text notes pinned to design-space
 /// points. Stored in a glyph lib key; never exported.
+/// Saved sidebar filters: searches the user pinned, stored in the
+/// font lib as an array of {name, query} dicts. Glyphs calls these
+/// smart filters; ours reuse the search-field predicate language.
+const SAVED_FILTERS_KEY: &str = "com.runebender.savedFilters";
+
+fn read_saved_filters(font: &norad::Font) -> Vec<(String, String)> {
+    let Some(plist::Value::Array(rows)) = font.lib.get(SAVED_FILTERS_KEY)
+    else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter_map(|row| {
+            let dict = row.as_dictionary()?;
+            let name = dict.get("name")?.as_string()?.to_string();
+            let query = dict.get("query")?.as_string()?.to_string();
+            Some((name, query))
+        })
+        .collect()
+}
+
+fn write_saved_filters(font: &mut norad::Font, filters: &[(String, String)]) {
+    if filters.is_empty() {
+        font.lib.remove(SAVED_FILTERS_KEY);
+        return;
+    }
+    let rows = filters
+        .iter()
+        .map(|(name, query)| {
+            let mut dict = plist::Dictionary::new();
+            dict.insert("name".into(), plist::Value::String(name.clone()));
+            dict.insert("query".into(), plist::Value::String(query.clone()));
+            plist::Value::Dictionary(dict)
+        })
+        .collect();
+    font.lib
+        .insert(SAVED_FILTERS_KEY.into(), plist::Value::Array(rows));
+}
+
 const ANNOTATIONS_KEY: &str = "com.runebender.annotations";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -3588,6 +3626,8 @@ enum SidebarFilter {
     LanguageGroup(usize),
     Language(usize, usize),
     Builtin(usize),
+    /// A user-saved search (index into the font's saved-filter list).
+    Saved(usize),
 }
 
 /// Glyph counts for every sidebar row, computed once per font state.
@@ -3602,6 +3642,7 @@ struct SidebarCounts {
     /// not target-bearing.
     missing: Vec<Vec<usize>>,
     builtins: Vec<usize>,
+    saved: Vec<usize>,
 }
 
 /// One edit tab: the open glyph (by name, so it survives renames
@@ -5352,6 +5393,18 @@ impl Workspace {
         let category = codepoint.map(GC::from_codepoint).unwrap_or(GC::Other);
         match filter {
             SidebarFilter::All => true,
+            SidebarFilter::Saved(si) => {
+                let saved = read_saved_filters(&font.font);
+                let Some((_, query)) = saved.get(*si) else {
+                    return false;
+                };
+                match parse_search_predicates(query) {
+                    Some(preds) => {
+                        Self::glyph_matches_preds(font, name, codepoint, &preds)
+                    }
+                    None => name.contains(query.trim()),
+                }
+            }
             SidebarFilter::Category(c) => category == *c,
             SidebarFilter::Subfilter(c, sub) => {
                 category == *c
@@ -5519,6 +5572,26 @@ impl Workspace {
                 },
             })
             .collect();
+        let saved = self
+            .font()
+            .map(|font| {
+                read_saved_filters(&font.font)
+                    .iter()
+                    .map(|(_, query)| {
+                        let preds = parse_search_predicates(query);
+                        glyphs
+                            .iter()
+                            .filter(|(name, cp, _)| match &preds {
+                                Some(preds) => Self::glyph_matches_preds(
+                                    font, name, *cp, preds,
+                                ),
+                                None => name.contains(query.trim()),
+                            })
+                            .count()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         self.sidebar_counts = Some(SidebarCounts {
             total: glyphs.len(),
             categories,
@@ -5527,6 +5600,7 @@ impl Workspace {
             languages,
             missing,
             builtins,
+            saved,
         });
         self.rebuild_sidebar_matches();
     }
@@ -5741,20 +5815,19 @@ impl Workspace {
 
     /// Does a glyph match the sidebar search, honoring scope, regex,
     /// and case options (web glyphMatchesSidebarSearch)?
-    fn search_matches(&self, name: &str, codepoint: Option<char>) -> bool {
-        let query = self.search_query.trim();
-        if query.is_empty() {
-            return true;
-        }
-        // Predicate queries filter on glyph data (all terms must
-        // hold); anything else falls through to text search.
-        if let Some(preds) = &self.search_predicates {
-            let Some(font) = self.font() else { return true };
-            let Some(&index) = font.name_map.get(name) else {
-                return false;
-            };
-            let entry = &font.glyphs[index];
-            return preds.iter().all(|pred| match pred {
+    /// Evaluate a parsed predicate list against one glyph. Shared by
+    /// the search field and saved sidebar filters.
+    fn glyph_matches_preds(
+        font: &FontModel,
+        name: &str,
+        codepoint: Option<char>,
+        preds: &[SearchPred],
+    ) -> bool {
+        let Some(&index) = font.name_map.get(name) else {
+            return false;
+        };
+        let entry = &font.glyphs[index];
+        preds.iter().all(|pred| match pred {
                 SearchPred::Width(order, value) => {
                     let diff = entry.advance - value;
                     match order {
@@ -5792,7 +5865,19 @@ impl Workspace {
                         "note" => g.note.is_some(),
                         _ => false,
                     }),
-            });
+            })
+    }
+
+    fn search_matches(&self, name: &str, codepoint: Option<char>) -> bool {
+        let query = self.search_query.trim();
+        if query.is_empty() {
+            return true;
+        }
+        // Predicate queries filter on glyph data (all terms must
+        // hold); anything else falls through to text search.
+        if let Some(preds) = &self.search_predicates {
+            let Some(font) = self.font() else { return true };
+            return Self::glyph_matches_preds(font, name, codepoint, preds);
         }
         // Only build the codepoint haystacks the mode actually reads.
         let hex;
@@ -6073,6 +6158,47 @@ impl Workspace {
             )
             .into(),
         );
+    }
+
+    /// Pin the current search query as a saved filter in the font lib.
+    fn save_current_search_as_filter(&mut self) {
+        let query = self.search_query.trim().to_string();
+        if query.is_empty() {
+            return;
+        }
+        let Some(font) = self.font_mut() else { return };
+        let mut saved = read_saved_filters(&font.font);
+        if saved.iter().any(|(_, q)| *q == query) {
+            return;
+        }
+        saved.push((query.clone(), query));
+        write_saved_filters(&mut font.font, &saved);
+        font.dirty = true;
+        let index = saved.len() - 1;
+        self.sidebar_counts = None;
+        self.set_sidebar_filter(SidebarFilter::Saved(index));
+    }
+
+    /// Remove one saved filter, keeping the selection sensible.
+    fn delete_saved_filter(&mut self, si: usize) {
+        let Some(font) = self.font_mut() else { return };
+        let mut saved = read_saved_filters(&font.font);
+        if si >= saved.len() {
+            return;
+        }
+        saved.remove(si);
+        write_saved_filters(&mut font.font, &saved);
+        font.dirty = true;
+        self.sidebar_counts = None;
+        match self.sidebar_filter {
+            SidebarFilter::Saved(active) if active == si => {
+                self.set_sidebar_filter(SidebarFilter::All);
+            }
+            SidebarFilter::Saved(active) if active > si => {
+                self.set_sidebar_filter(SidebarFilter::Saved(active - 1));
+            }
+            _ => self.rebuild_sidebar_matches(),
+        }
     }
 
     /// Select a sidebar row.
@@ -6408,6 +6534,101 @@ impl Workspace {
                 SidebarFilter::Builtin(bi),
                 cx,
             ));
+        }
+        // Saved searches (Glyphs' smart filters): pinned queries from
+        // the search field, stored in the font lib.
+        let saved_defs = self
+            .font()
+            .map(|f| read_saved_filters(&f.font))
+            .unwrap_or_default();
+        for (si, (label, _)) in saved_defs.iter().enumerate() {
+            let count =
+                counts.and_then(|c| c.saved.get(si).copied()).unwrap_or(0);
+            let active = self.sidebar_filter == SidebarFilter::Saved(si);
+            filters = filters.child(
+                div()
+                    .id(("saved-filter", si))
+                    .group("saved-filter")
+                    .h(px(20.0))
+                    .px_2()
+                    .rounded_sm()
+                    .text_sm()
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .when(active, |el| {
+                        el.border_1()
+                            .border_color(t::accent())
+                            .text_color(t::accent())
+                    })
+                    .when(!active, |el| el.text_color(t::text()))
+                    .child(
+                        div()
+                            .w(px(16.0))
+                            .text_color(if active {
+                                t::accent()
+                            } else {
+                                t::text_muted()
+                            })
+                            .child("⌕"),
+                    )
+                    .child(div().flex_1().child(SharedString::from(
+                        label.clone(),
+                    )))
+                    .child(
+                        div()
+                            .id(("saved-filter-del", si))
+                            .text_color(t::text_muted())
+                            .invisible()
+                            .group_hover("saved-filter", |el| el.visible())
+                            .child("×")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.delete_saved_filter(si);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_color(if active {
+                                t::accent()
+                            } else {
+                                t::text_muted()
+                            })
+                            .child(SharedString::from(format!("{count}"))),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_sidebar_filter(SidebarFilter::Saved(si));
+                        cx.notify();
+                    })),
+            );
+        }
+        let pending_query = self.search_query.trim().to_string();
+        if !pending_query.is_empty()
+            && !saved_defs.iter().any(|(_, q)| *q == pending_query)
+        {
+            filters = filters.child(
+                div()
+                    .id("save-search-filter")
+                    .h(px(20.0))
+                    .px_2()
+                    .rounded_sm()
+                    .text_sm()
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_color(t::text_muted())
+                    .child(div().w(px(16.0)).child("+"))
+                    .child(div().flex_1().child(SharedString::from(format!(
+                        "Save \u{201c}{pending_query}\u{201d}"
+                    ))))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.save_current_search_as_filter();
+                        cx.notify();
+                    })),
+            );
         }
 
         div()
@@ -23292,6 +23513,20 @@ mod tests {
             .and_then(|v| v.as_array())
             .unwrap();
         assert_eq!(stops.len(), 2);
+    }
+
+    #[test]
+    fn saved_filters_roundtrip() {
+        let mut font = norad::Font::new();
+        assert!(read_saved_filters(&font).is_empty());
+        let filters = vec![
+            ("wide".to_string(), "w>600".to_string()),
+            ("marks".to_string(), "cat:mark".to_string()),
+        ];
+        write_saved_filters(&mut font, &filters);
+        assert_eq!(read_saved_filters(&font), filters);
+        write_saved_filters(&mut font, &[]);
+        assert!(font.lib.get(SAVED_FILTERS_KEY).is_none());
     }
 
     #[test]
