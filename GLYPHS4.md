@@ -41,8 +41,10 @@ Deliberate non-goals are in the last section.
 - [ ] Pixel tool for pixel fonts
 - [x] Fit Curve (Curves section): handles set to a percentage of
       the tangent-intersection maximum, Glyphs' scale
-- [ ] Add extremes and inflections (Path menu + filter;
-      shift-click adds a node on a segment) (handbook audit)
+- [~] Add extremes: Glyph > Add Extremes inserts nodes at every
+      horizontal and vertical tangent, selection-scoped.
+      Inflections and shift-click-to-add come later (handbook
+      audit)
 - [ ] Open and close paths, re-segment outlines — partly here
       via pen and knife; no explicit open/close commands
       (handbook audit)
