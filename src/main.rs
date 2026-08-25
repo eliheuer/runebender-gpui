@@ -3084,6 +3084,46 @@ fn hoi_quad_at(
     )
 }
 
+/// One parsed search predicate (the Counterpunch dynamic-filter
+/// idea as search syntax): `w>600`, `cat:Mark`, `mark:red`,
+/// `enc:no`, `comp:beh-ar`, `has:anchors`.
+#[derive(Clone, Debug, PartialEq)]
+enum SearchPred {
+    Width(std::cmp::Ordering, f64),
+    Category(String),
+    MarkLabel(String),
+    Encoded(bool),
+    UsesComponent(String),
+    Has(String),
+}
+
+fn parse_search_predicates(query: &str) -> Option<Vec<SearchPred>> {
+    let mut preds = Vec::new();
+    for term in query.split_whitespace() {
+        let pred = if let Some(rest) = term.strip_prefix("w>") {
+            SearchPred::Width(std::cmp::Ordering::Greater, rest.parse().ok()?)
+        } else if let Some(rest) = term.strip_prefix("w<") {
+            SearchPred::Width(std::cmp::Ordering::Less, rest.parse().ok()?)
+        } else if let Some(rest) = term.strip_prefix("w=") {
+            SearchPred::Width(std::cmp::Ordering::Equal, rest.parse().ok()?)
+        } else if let Some(rest) = term.strip_prefix("cat:") {
+            SearchPred::Category(rest.to_lowercase())
+        } else if let Some(rest) = term.strip_prefix("mark:") {
+            SearchPred::MarkLabel(rest.to_lowercase())
+        } else if let Some(rest) = term.strip_prefix("enc:") {
+            SearchPred::Encoded(matches!(rest, "yes" | "y" | "true"))
+        } else if let Some(rest) = term.strip_prefix("comp:") {
+            SearchPred::UsesComponent(rest.to_string())
+        } else if let Some(rest) = term.strip_prefix("has:") {
+            SearchPred::Has(rest.to_lowercase())
+        } else {
+            return None; // any plain term: not a predicate query
+        };
+        preds.push(pred);
+    }
+    (!preds.is_empty()).then_some(preds)
+}
+
 /// Font View's three modes (Glyphs 4): grid, detail, list.
 #[derive(Clone, Copy, PartialEq)]
 enum FontViewMode {
@@ -3730,6 +3770,8 @@ struct Workspace {
     group_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// New avar pair on the first axis: "user,design".
     axis_map_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Parsed predicate query, rebuilt when the search changes.
+    search_predicates: Option<Vec<SearchPred>>,
     /// The selected smart component's value on its first axis.
     smart_value_input: gpui::Entity<gpui_component::input::InputState>,
     anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
@@ -5673,6 +5715,54 @@ impl Workspace {
         if query.is_empty() {
             return true;
         }
+        // Predicate queries filter on glyph data (all terms must
+        // hold); anything else falls through to text search.
+        if let Some(preds) = &self.search_predicates {
+            let Some(font) = self.font() else { return true };
+            let Some(&index) = font.name_map.get(name) else {
+                return false;
+            };
+            let entry = &font.glyphs[index];
+            return preds.iter().all(|pred| match pred {
+                SearchPred::Width(order, value) => {
+                    let diff = entry.advance - value;
+                    match order {
+                        std::cmp::Ordering::Greater => diff > 0.5,
+                        std::cmp::Ordering::Less => diff < -0.5,
+                        std::cmp::Ordering::Equal => diff.abs() <= 0.5,
+                    }
+                }
+                SearchPred::Category(want) => codepoint
+                    .map(|c| {
+                        runebender_core::category::GlyphCategory::from_codepoint(c)
+                            .display_name()
+                            .to_lowercase()
+                            .starts_with(want.as_str())
+                    })
+                    .unwrap_or(want == "unencoded"),
+                SearchPred::MarkLabel(want) => match entry.mark.as_deref() {
+                    Some(label) => label.to_lowercase() == *want,
+                    None => want == "none",
+                },
+                SearchPred::Encoded(want) => codepoint.is_some() == *want,
+                SearchPred::UsesComponent(base) => font
+                    .font
+                    .get_glyph(name)
+                    .is_some_and(|g| {
+                        g.components.iter().any(|c| c.base.as_str() == base)
+                    }),
+                SearchPred::Has(what) => font
+                    .font
+                    .get_glyph(name)
+                    .is_some_and(|g| match what.as_str() {
+                        "contours" => !g.contours.is_empty(),
+                        "components" => !g.components.is_empty(),
+                        "anchors" => !g.anchors.is_empty(),
+                        "note" => g.note.is_some(),
+                        _ => false,
+                    }),
+            });
+        }
         // Only build the codepoint haystacks the mode actually reads.
         let hex;
         let chars;
@@ -5880,6 +5970,7 @@ impl Workspace {
     fn rebuild_search_regex(&mut self) {
         self.search_re = None;
         let query = self.search_query.trim();
+        self.search_predicates = parse_search_predicates(query);
         if !self.search_regex || query.is_empty() {
             return;
         }
@@ -22700,6 +22791,7 @@ fn main() {
                         show_color_preview: true,
                         sample_index: 0,
                         font_view_mode: FontViewMode::Grid,
+                        search_predicates: None,
                         show_trajectories: false,
                         hoi_live: None,
                         shaping_focus: None,
@@ -23085,6 +23177,33 @@ mod tests {
             .and_then(|v| v.as_array())
             .unwrap();
         assert_eq!(stops.len(), 2);
+    }
+
+    #[test]
+    fn search_predicates_parse_and_reject() {
+        use std::cmp::Ordering;
+        assert_eq!(
+            parse_search_predicates("w>600"),
+            Some(vec![SearchPred::Width(Ordering::Greater, 600.0)])
+        );
+        assert_eq!(
+            parse_search_predicates("cat:mark enc:no"),
+            Some(vec![
+                SearchPred::Category("mark".into()),
+                SearchPred::Encoded(false),
+            ])
+        );
+        assert_eq!(
+            parse_search_predicates("comp:beh-ar has:anchors"),
+            Some(vec![
+                SearchPred::UsesComponent("beh-ar".into()),
+                SearchPred::Has("anchors".into()),
+            ])
+        );
+        // Plain text stays plain text.
+        assert_eq!(parse_search_predicates("beh"), None);
+        assert_eq!(parse_search_predicates("w>abc"), None);
+        assert_eq!(parse_search_predicates(""), None);
     }
 
     #[test]
