@@ -2144,6 +2144,77 @@ fn roughen_glyph_contours(
     changed
 }
 
+/// Apply a corner glyph to one on-curve node: the corner's open
+/// path, drawn around its origin, is mapped into the node's frame —
+/// corner-space x runs back along the incoming segment, y forward
+/// along the outgoing one (Glyphs' fit, which shears the corner to
+/// unequal angles) — and spliced in place of the node. Both
+/// neighbors must be on-curve (line corners) in this first slice.
+/// The result is a plain outline: pipelines see baked points.
+fn apply_corner_at(
+    glyph: &mut norad::Glyph,
+    corner: &norad::Glyph,
+    ci: usize,
+    pi: usize,
+) -> bool {
+    use norad::PointType;
+    let Some(corner_contour) = corner.contours.first() else {
+        return false;
+    };
+    if corner_contour.points.len() < 2 {
+        return false;
+    }
+    let Some(contour) = glyph.contours.get(ci) else {
+        return false;
+    };
+    let n = contour.points.len();
+    if n < 3 || pi >= n {
+        return false;
+    }
+    let point = &contour.points[pi];
+    if point.typ == PointType::OffCurve {
+        return false;
+    }
+    let prev = &contour.points[(pi + n - 1) % n];
+    let next = &contour.points[(pi + 1) % n];
+    if prev.typ == PointType::OffCurve || next.typ == PointType::OffCurve {
+        return false; // curve corners come later
+    }
+    let node = (point.x, point.y);
+    let len_in = ((node.0 - prev.x).powi(2) + (node.1 - prev.y).powi(2)).sqrt();
+    let len_out = ((next.x - node.0).powi(2) + (next.y - node.1).powi(2)).sqrt();
+    if len_in < 1e-6 || len_out < 1e-6 {
+        return false;
+    }
+    let u = ((node.0 - prev.x) / len_in, (node.1 - prev.y) / len_in);
+    let v = ((next.x - node.0) / len_out, (next.y - node.1) / len_out);
+    let mapped: Vec<norad::ContourPoint> = corner_contour
+        .points
+        .iter()
+        .map(|p| {
+            let (x, y) = (
+                node.0 + p.x * u.0 + p.y * v.0,
+                node.1 + p.x * u.1 + p.y * v.1,
+            );
+            let typ = match p.typ {
+                PointType::Move => PointType::Line,
+                other => other,
+            };
+            norad::ContourPoint::new(
+                x.round(),
+                y.round(),
+                typ,
+                p.smooth,
+                None,
+                None,
+            )
+        })
+        .collect();
+    let contour = glyph.contours.get_mut(ci).expect("checked");
+    contour.points.splice(pi..=pi, mapped);
+    true
+}
+
 /// Metrics keys, the Glyphs spacing formulas, stored in the lib
 /// keys glyphsLib round-trips ("com.schriftgestaltung.Glyphs.
 /// glyph.leftMetricsKey" / rightMetricsKey). "=n" copies n's same
@@ -2545,6 +2616,8 @@ struct ContextMenu {
     component: Option<(usize, bool)>,
     has_components: bool,
     adding_component: bool,
+    /// Inline corner-name input mode (Apply Corner…).
+    applying_corner: bool,
     /// Guide under the click: (local, index).
     guide: Option<(bool, usize)>,
 }
@@ -2888,6 +2961,8 @@ struct Workspace {
     reference_glyph: Option<String>,
     reference_glyph_input: gpui::Entity<gpui_component::input::InputState>,
     component_name_input: gpui::Entity<gpui_component::input::InputState>,
+    /// Corner-glyph name typed in the context menu (Apply Corner…).
+    corner_name_input: gpui::Entity<gpui_component::input::InputState>,
     anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
@@ -6769,6 +6844,54 @@ impl Workspace {
             Some(format!("Intermediate {layer_name} added for {name}").into());
     }
 
+    /// Apply a corner glyph at the context-menu node, in every
+    /// master (all masters must keep the same structure). The name
+    /// accepts "chamfer" or "_corner.chamfer".
+    fn command_apply_corner(&mut self, node: (usize, usize), name: &str) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(project) = self.project.as_mut() else { return };
+        let glyph_name = project.active_font().glyphs[index].name.to_string();
+        let corner_name = if name.starts_with("_corner.") {
+            name.to_string()
+        } else {
+            format!("_corner.{name}")
+        };
+        let mut applied = 0usize;
+        for master in project.masters.iter_mut() {
+            let Some(corner) =
+                master.font.get_glyph(corner_name.as_str()).cloned()
+            else {
+                continue;
+            };
+            let Some(gi) = master.name_map.get(glyph_name.as_str()).copied()
+            else {
+                continue;
+            };
+            let ok = master
+                .edit_glyph(gi, |g| {
+                    apply_corner_at(g, &corner, node.0, node.1)
+                })
+                .unwrap_or(false);
+            if ok {
+                applied += 1;
+            }
+        }
+        if applied == 0 {
+            self.status_note = Some(
+                format!(
+                    "No corner applied · needs a {corner_name} glyph and a line corner"
+                )
+                .into(),
+            );
+            return;
+        }
+        project.compute_compat();
+        self.editor.selected.clear();
+        self.status_note = Some(
+            format!("{corner_name} applied in {applied} master(s)").into(),
+        );
+    }
+
     /// Set a metrics key on the selected glyph (every master keeps
     /// the same key; the values differ per master when synced).
     fn apply_metrics_key(&mut self, left: bool, text: &str) {
@@ -7794,6 +7917,24 @@ impl Workspace {
                 ("cm", 2),
                 "Add Component…".into(),
                 "add-component",
+                cx,
+            ));
+        }
+        if menu.applying_corner {
+            list = list.child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .w(px(180.0))
+                    .child(gpui_component::input::Input::new(
+                        &self.corner_name_input,
+                    )),
+            );
+        } else if menu.start_point.is_some() {
+            list = list.child(item(
+                ("cm", 14),
+                "Apply Corner…".into(),
+                "apply-corner",
                 cx,
             ));
         }
@@ -10654,6 +10795,7 @@ impl Workspace {
             component,
             has_components,
             adding_component: false,
+            applying_corner: false,
             guide: self.guide_hit(dx, dy, tolerance),
         });
     }
@@ -10760,6 +10902,12 @@ impl Workspace {
                 // the name field.
                 self.context_menu = Some(ContextMenu {
                     adding_component: true,
+                    ..menu
+                });
+            }
+            "apply-corner" => {
+                self.context_menu = Some(ContextMenu {
+                    applying_corner: true,
                     ..menu
                 });
             }
@@ -18981,6 +19129,37 @@ fn main() {
                             }
                         }
                     });
+                    let corner_name_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("corner name")
+                    });
+                    let sub_corner = cx.subscribe_in(&corner_name_input, window, {
+                        let state = corner_name_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              window,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text = state.read(cx).value().to_string();
+                                let node = this
+                                    .context_menu
+                                    .as_ref()
+                                    .and_then(|m| m.start_point);
+                                this.context_menu = None;
+                                if let Some(node) = node {
+                                    this.command_apply_corner(node, text.trim());
+                                }
+                                state.update(cx, |st, cx| {
+                                    st.set_value(String::new(), window, cx);
+                                });
+                                cx.notify();
+                            }
+                        }
+                    });
                     let sub_comp = cx.subscribe_in(&component_name_input, window, {
                         let state = component_name_input.clone();
                         move |this: &mut Workspace,
@@ -19091,6 +19270,7 @@ fn main() {
                         reference_glyph: None,
                         reference_glyph_input: reference_glyph_input.clone(),
                         component_name_input: component_name_input.clone(),
+                        corner_name_input: corner_name_input.clone(),
                         anchor_name_input: anchor_name_input.clone(),
                         glyph_image_cache: Default::default(),
                         glyph_inputs: GlyphInputs {
@@ -19168,6 +19348,7 @@ fn main() {
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_gnote,
                             sub_gswitch, sub_glk, sub_grk, sub_comp,
+                            sub_corner,
                             sub_sw, sub_sh, sub_anchor, sub_ref,
                             sub_fi_family, sub_fi_style, sub_fi_upm,
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
@@ -19500,6 +19681,57 @@ mod tests {
             refined.contours[0].points[0].x,
             orig + 40.0,
         );
+    }
+
+    #[test]
+    fn corner_splices_the_chamfer() {
+        use norad::{Contour, ContourPoint, PointType};
+        // The ComponentDemo chamfer: open path (-60, 0) -> (0, 60)
+        // around the origin.
+        let corner_contour = Contour::new(
+            vec![
+                ContourPoint::new(-60.0, 0.0, PointType::Move, false, None, None),
+                ContourPoint::new(0.0, 60.0, PointType::Line, false, None, None),
+            ],
+            None,
+        );
+        let mut corner = norad::Glyph::new("_corner.chamfer");
+        corner.contours = vec![corner_contour];
+        // A square; apply at (100, 0): incoming runs +x, outgoing +y.
+        let square = Contour::new(
+            [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
+                .iter()
+                .map(|&(x, y)| {
+                    ContourPoint::new(x, y, PointType::Line, false, None, None)
+                })
+                .collect(),
+            None,
+        );
+        let mut glyph = norad::Glyph::new("square");
+        glyph.contours = vec![square];
+        assert!(apply_corner_at(&mut glyph, &corner, 0, 1));
+        let pts: Vec<(f64, f64)> = glyph.contours[0]
+            .points
+            .iter()
+            .map(|p| (p.x, p.y))
+            .collect();
+        // The node (100, 0) became two: 60 back along the incoming
+        // (+x) segment, and 60 up along the outgoing (+y) one.
+        assert_eq!(pts.len(), 5);
+        assert!(pts.contains(&(40.0, 0.0)), "{pts:?}");
+        assert!(pts.contains(&(100.0, 60.0)), "{pts:?}");
+        assert!(!pts.contains(&(100.0, 0.0)), "original corner replaced");
+        // Refuses off-curve neighbors and short segments untouched.
+        let mut tiny = norad::Glyph::new("tiny");
+        tiny.contours = vec![Contour::new(
+            vec![
+                ContourPoint::new(0.0, 0.0, PointType::Line, false, None, None),
+                ContourPoint::new(0.0, 0.0, PointType::Line, false, None, None),
+                ContourPoint::new(1.0, 1.0, PointType::Line, false, None, None),
+            ],
+            None,
+        )];
+        assert!(!apply_corner_at(&mut tiny, &corner, 0, 1));
     }
 
     #[test]
