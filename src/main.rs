@@ -14333,6 +14333,55 @@ impl Workspace {
                 blocks.push(("curs".to_string(), body));
             }
         }
+        // Composition (ccmp): a composite-only glyph whose
+        // components all exist, with at least one combining mark
+        // after the base, substitutes from its parts — edit the base
+        // and the mark once, the composed form follows (the
+        // composition-first workflow). Longest sequences first.
+        {
+            let is_mark = |name: &str| {
+                font.default_layer()
+                    .get_glyph(name)
+                    .and_then(|g| g.codepoints.iter().next())
+                    .is_some_and(|c| {
+                        matches!(
+                            runebender_core::category::GlyphCategory::from_codepoint(c),
+                            runebender_core::category::GlyphCategory::Mark
+                        )
+                    })
+            };
+            let mut compositions: Vec<(String, Vec<String>)> = font
+                .default_layer()
+                .iter()
+                .filter(|g| {
+                    g.contours.is_empty()
+                        && g.components.len() >= 2
+                        && !g.name().contains('.')
+                })
+                .filter_map(|g| {
+                    let parts: Vec<String> = g
+                        .components
+                        .iter()
+                        .map(|c| c.base.to_string())
+                        .collect();
+                    (parts.iter().all(|p| names.contains(p.as_str()))
+                        && parts[1..].iter().any(|p| is_mark(p)))
+                    .then(|| (g.name().to_string(), parts))
+                })
+                .collect();
+            compositions
+                .sort_by_key(|(_, parts)| std::cmp::Reverse(parts.len()));
+            if !compositions.is_empty() {
+                let mut rules = String::new();
+                for (name, parts) in compositions {
+                    rules.push_str(&format!(
+                        "    sub {} by {name};\n",
+                        parts.join(" ")
+                    ));
+                }
+                blocks.push(("ccmp".to_string(), rules));
+            }
+        }
         // Ligatures: longest first, so f_f_i wins over f_f.
         let mut ligatures: Vec<(&str, Vec<&str>)> = names
             .iter()
@@ -22293,8 +22342,36 @@ mod tests {
                 None, None,
             ));
         }
+        // A mark composition: aacute = a + acutecomb (a Mark).
+        {
+            let mut acute = norad::Glyph::new("acutecomb");
+            acute.codepoints = norad::Codepoints::new(['\u{0301}']);
+            font.default_layer_mut().insert_glyph(acute);
+            let mut aacute = norad::Glyph::new("aacute");
+            aacute.codepoints = norad::Codepoints::new(['\u{00E1}']);
+            aacute.components.push(norad::Component::new(
+                norad::Name::new("a").unwrap(),
+                norad::AffineTransform::default(),
+                None,
+            ));
+            aacute.components.push(norad::Component::new(
+                norad::Name::new("acutecomb").unwrap(),
+                norad::AffineTransform::default(),
+                None,
+            ));
+            font.default_layer_mut().insert_glyph(aacute);
+            let mut base_a = norad::Glyph::new("a");
+            base_a.codepoints = norad::Codepoints::new(['a']);
+            font.default_layer_mut().insert_glyph(base_a);
+        }
         let blocks = Workspace::generated_feature_blocks(&font);
         let tags: Vec<&str> = blocks.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(tags.contains(&"ccmp"), "{tags:?}");
+        let ccmp = &blocks.iter().find(|(t, _)| t == "ccmp").unwrap().1;
+        assert!(
+            ccmp.contains("sub a acutecomb by aacute;"),
+            "{ccmp}"
+        );
         assert!(tags.contains(&"init") && tags.contains(&"medi"));
         let curs = &blocks.iter().find(|(t, _)| t == "curs").unwrap().1;
         assert!(curs.contains(
