@@ -98,6 +98,7 @@ gpui::actions!(
         CubicsToQuads,
         TraceImage,
         PlaceImage,
+        ImportSvg,
         RemoveImage,
         Harmonize,
         Balance,
@@ -239,6 +240,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Trace Image…", TraceImage),
                 MenuItem::action("Place Image…", PlaceImage),
+                MenuItem::action("Import SVG…", ImportSvg),
                 MenuItem::action("Remove Image", RemoveImage),
                 MenuItem::separator(),
                 MenuItem::action("Harmonize", Harmonize),
@@ -2180,6 +2182,75 @@ fn roughen_glyph_contours(
         }
     }
     changed
+}
+
+// ---- SVG outline import ----
+
+/// Pull every path's `d` attribute out of an SVG document, parse
+/// with kurbo, flip to font coordinates (SVG runs y-down), and fit
+/// the whole drawing between `descender` and `ascender`. Fills,
+/// strokes, groups, and transforms are ignored: this is the
+/// Illustrator-outline paste, not a renderer.
+fn svg_to_contours(
+    svg_text: &str,
+    ascender: f64,
+    descender: f64,
+) -> Result<Vec<norad::Contour>, String> {
+    let mut combined = BezPath::new();
+    let mut rest = svg_text;
+    while let Some(at) = rest.find(" d=") {
+        let after = &rest[at + 3..];
+        let Some(quote) = after.chars().next().filter(|c| *c == '"' || *c == '\'')
+        else {
+            rest = after;
+            continue;
+        };
+        let body = &after[1..];
+        let Some(end) = body.find(quote) else { break };
+        let data = &body[..end];
+        let path = BezPath::from_svg(data)
+            .map_err(|e| format!("SVG path: {e}"))?;
+        combined.extend(path.elements().iter().copied());
+        rest = &body[end..];
+    }
+    if combined.elements().is_empty() {
+        return Err("no <path d=\"…\"> outlines in the SVG".into());
+    }
+    use kurbo::Shape as _;
+    let bbox = combined.bounding_box();
+    if bbox.height() < 1e-6 {
+        return Err("SVG outlines have no height".into());
+    }
+    let scale = (ascender - descender) / bbox.height();
+    // Flip and fit: SVG top lands on the ascender.
+    let fitted = Affine::translate((0.0, ascender))
+        * Affine::scale_non_uniform(scale, -scale)
+        * Affine::translate((-bbox.x0, -bbox.y0))
+        * combined;
+    let empty = std::collections::HashMap::new();
+    let mut contours = Vec::new();
+    let mut sub = BezPath::new();
+    for el in fitted.elements() {
+        if matches!(el, PathEl::MoveTo(_)) && !sub.elements().is_empty() {
+            if let Some(c) =
+                runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty)
+            {
+                contours.push(c);
+            }
+            sub = BezPath::new();
+        }
+        sub.push(*el);
+    }
+    if !sub.elements().is_empty() {
+        if let Some(c) =
+            runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty)
+        {
+            contours.push(c);
+        }
+    }
+    (!contours.is_empty())
+        .then_some(contours)
+        .ok_or_else(|| "SVG outlines did not convert".into())
 }
 
 // ---- cubic <-> quadratic conversion ----
@@ -15047,6 +15118,67 @@ impl Workspace {
         );
     }
 
+    /// Glyph > Import SVG…: parse the file's path outlines and add
+    /// them to the open glyph, fitted between descender and
+    /// ascender, appended so existing drawing survives (undoable).
+    fn command_import_svg(&mut self, cx: &mut Context<Self>) {
+        let Mode::Editor(index) = self.mode else { return };
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Import".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let text = std::fs::read_to_string(&path);
+            this.update(cx, |workspace, cx| {
+                let (ascender, descender) = match workspace.font() {
+                    Some(f) => (f.ascender, f.descender),
+                    None => return,
+                };
+                match text
+                    .map_err(|e| format!("{e}"))
+                    .and_then(|t| svg_to_contours(&t, ascender, descender))
+                {
+                    Ok(contours) => {
+                        workspace.push_undo_snapshot(index);
+                        let added = contours.len();
+                        let ok = workspace
+                            .font_mut()
+                            .and_then(|f| {
+                                f.edit_glyph(index, |g| {
+                                    g.contours.extend(contours);
+                                    true
+                                })
+                            })
+                            .unwrap_or(false);
+                        if ok {
+                            workspace.status_note = Some(
+                                format!("Imported {added} SVG contour(s)")
+                                    .into(),
+                            );
+                        } else {
+                            workspace.editor.undo.pop();
+                        }
+                    }
+                    Err(e) => {
+                        workspace.status_note =
+                            Some(format!("SVG import: {e}").into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Glyph > Remove Image: unlink this glyph's background image.
     /// The stored file stays; other glyphs may reference it.
     fn command_remove_image(&mut self) {
@@ -18717,6 +18849,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &PlaceImage, _, cx| {
                 this.command_place_image(cx);
             }))
+            .on_action(cx.listener(|this, _: &ImportSvg, _, cx| {
+                this.command_import_svg(cx);
+            }))
             .on_action(cx.listener(|this, _: &RemoveImage, _, cx| {
                 this.command_remove_image();
                 cx.notify();
@@ -20112,6 +20247,35 @@ mod tests {
             refined.contours[0].points[0].x,
             orig + 40.0,
         );
+    }
+
+    #[test]
+    fn svg_import_fits_and_flips() {
+        // A 10x20 SVG rectangle path lands between descender and
+        // ascender, y flipped, aspect kept.
+        let svg = r#"<svg xmlns="x" viewBox="0 0 10 20">
+            <g><path fill="red" d="M0,0 L10,0 L10,20 L0,20 Z"/></g>
+        </svg>"#;
+        let contours = svg_to_contours(svg, 800.0, -200.0).expect("parses");
+        assert_eq!(contours.len(), 1);
+        let ys: Vec<f64> = contours[0].points.iter().map(|p| p.y).collect();
+        let xs: Vec<f64> = contours[0].points.iter().map(|p| p.x).collect();
+        let (min_y, max_y) =
+            ys.iter().fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
+        let (min_x, max_x) =
+            xs.iter().fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
+        assert_eq!((min_y, max_y), (-200.0, 800.0), "fills the em");
+        assert_eq!(min_x, 0.0);
+        assert!((max_x - 500.0).abs() < 1.0, "aspect kept: {max_x}");
+        // Curves survive.
+        let curvy = r#"<path d="M0 0 C 10 0 20 10 20 20 L 0 20 Z"/>"#;
+        let c = svg_to_contours(curvy, 800.0, -200.0).expect("parses curves");
+        assert!(c[0]
+            .points
+            .iter()
+            .any(|p| p.typ == norad::PointType::OffCurve));
+        // No path data errors cleanly.
+        assert!(svg_to_contours("<svg></svg>", 800.0, -200.0).is_err());
     }
 
     #[test]
