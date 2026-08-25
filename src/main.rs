@@ -3724,6 +3724,8 @@ struct Workspace {
     /// New kerning group from the grid selection: "o" (kern1) or
     /// "|o" (kern2).
     group_name_input: gpui::Entity<gpui_component::input::InputState>,
+    /// New avar pair on the first axis: "user,design".
+    axis_map_input: gpui::Entity<gpui_component::input::InputState>,
     /// The selected smart component's value on its first axis.
     smart_value_input: gpui::Entity<gpui_component::input::InputState>,
     anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
@@ -18815,6 +18817,47 @@ impl Workspace {
                 &self.instance_name_input,
             ));
         }
+        // Axis mappings (avar): user → design pairs on the first
+        // axis, the Glyphs Axis Mappings story. "400,430" adds or
+        // replaces the pair at that input; × removes.
+        if let Some(doc) = project.ds_doc.as_ref() {
+            if let Some(axis) = doc.axes.first() {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(t::text_muted())
+                        .child(format!("Mappings ({} user → design)", axis.tag)),
+                );
+                if let Some(map) = axis.map.as_ref() {
+                    let mut rows = div().flex().flex_wrap().gap_1();
+                    for (i, m) in map.iter().enumerate() {
+                        rows = rows.child(
+                            div()
+                                .id(("axis-map", i))
+                                .px_1()
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(t::cell_border())
+                                .text_xs()
+                                .text_color(t::text())
+                                .cursor_pointer()
+                                .child(format!(
+                                    "{:.0}→{:.0} ×",
+                                    m.input, m.output
+                                ))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.command_remove_axis_mapping(i);
+                                    cx.notify();
+                                })),
+                        );
+                    }
+                    body = body.child(rows);
+                }
+                body = body.child(div().w(px(110.0)).child(
+                    gpui_component::input::Input::new(&self.axis_map_input),
+                ));
+            }
+        }
         // HOI: the trajectory view and the timing ease, the
         // higher-order interpolation corner of the panel.
         body = body.child(
@@ -18885,6 +18928,42 @@ impl Workspace {
                 } else {
                     (format!("{family} {style}"), "regular".to_string())
                 }
+            }
+        }
+    }
+
+    /// Add (or replace) one avar mapping pair on the first axis:
+    /// user-space input → design-space output, written into the
+    /// designspace and saved with it.
+    fn command_add_axis_mapping(&mut self, input: f32, output: f32) {
+        let Some(project) = self.project.as_mut() else { return };
+        let Some(doc) = project.ds_doc.as_mut() else {
+            self.status_note =
+                Some("Axis mappings need a designspace project".into());
+            return;
+        };
+        let Some(axis) = doc.axes.first_mut() else { return };
+        let map = axis.map.get_or_insert_with(Vec::new);
+        map.retain(|m| (m.input - input).abs() > 0.01);
+        map.push(norad::designspace::AxisMapping { input, output });
+        map.sort_by(|a, b| a.input.total_cmp(&b.input));
+        project.ds_dirty = true;
+        self.status_note = Some(
+            format!("Axis map: {input:.0} → {output:.0}").into(),
+        );
+    }
+
+    fn command_remove_axis_mapping(&mut self, index: usize) {
+        let Some(project) = self.project.as_mut() else { return };
+        let Some(doc) = project.ds_doc.as_mut() else { return };
+        let Some(axis) = doc.axes.first_mut() else { return };
+        if let Some(map) = axis.map.as_mut() {
+            if index < map.len() {
+                map.remove(index);
+                if map.is_empty() {
+                    axis.map = None;
+                }
+                project.ds_dirty = true;
             }
         }
     }
@@ -21978,6 +22057,39 @@ fn main() {
                             }
                         }
                     });
+                    let axis_map_input = cx.new(|cx| {
+                        gpui_component::input::InputState::new(window, cx)
+                            .placeholder("400,430")
+                    });
+                    let sub_axis_map = cx.subscribe_in(&axis_map_input, window, {
+                        let state = axis_map_input.clone();
+                        move |this: &mut Workspace,
+                              _,
+                              ev: &gpui_component::input::InputEvent,
+                              window,
+                              cx| {
+                            if matches!(
+                                ev,
+                                gpui_component::input::InputEvent::PressEnter { .. }
+                            ) {
+                                let text = state.read(cx).value().to_string();
+                                let mut parts =
+                                    text.split(',').map(str::trim);
+                                if let (Some(Ok(input)), Some(Ok(output))) = (
+                                    parts.next().map(str::parse::<f32>),
+                                    parts.next().map(str::parse::<f32>),
+                                ) {
+                                    this.command_add_axis_mapping(
+                                        input, output,
+                                    );
+                                    state.update(cx, |st, cx| {
+                                        st.set_value(String::new(), window, cx);
+                                    });
+                                }
+                                cx.notify();
+                            }
+                        }
+                    });
                     let smart_value_input = cx.new(|cx| {
                         gpui_component::input::InputState::new(window, cx)
                             .placeholder("value")
@@ -22157,6 +22269,7 @@ fn main() {
                         smart_axis_input,
                         smart_value_input,
                         group_name_input,
+                        axis_map_input,
                         anchor_name_input: anchor_name_input.clone(),
                         glyph_image_cache: Default::default(),
                         glyph_inputs: GlyphInputs {
@@ -22239,7 +22352,7 @@ fn main() {
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_gnote,
                             sub_gswitch, sub_glk, sub_grk, sub_comp,
                             sub_corner, sub_note, sub_smart_axis,
-                            sub_smart_value, sub_group_name,
+                            sub_smart_value, sub_group_name, sub_axis_map,
                             sub_sw, sub_sh, sub_anchor, sub_ref,
                             sub_fi_family, sub_fi_style, sub_fi_upm,
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
