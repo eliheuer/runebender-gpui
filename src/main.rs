@@ -14682,6 +14682,103 @@ impl Workspace {
                 blocks.push(("curs".to_string(), body));
             }
         }
+        // Mark positioning (mark + mkmk) from anchors, the way
+        // Fontra emulates it live: every anchor family X with marks
+        // carrying _X gets a markClass; bases with X position them,
+        // marks that also carry X stack them. The shaped preview
+        // then places vowel marks exactly as the compiled font will.
+        {
+            use std::collections::BTreeMap;
+            // anchor name -> (marks: name, _X pos), (bases: name, X pos),
+            // (mark carriers: name, X pos).
+            let mut families: BTreeMap<
+                String,
+                (Vec<(String, f64, f64)>, Vec<(String, f64, f64)>, Vec<(String, f64, f64)>),
+            > = BTreeMap::new();
+            for glyph in font.default_layer().iter() {
+                let is_mark_glyph = glyph
+                    .anchors
+                    .iter()
+                    .any(|a| {
+                        a.name
+                            .as_ref()
+                            .is_some_and(|n| n.as_str().starts_with('_'))
+                    });
+                for anchor in &glyph.anchors {
+                    let Some(name) =
+                        anchor.name.as_ref().map(|n| n.as_str())
+                    else {
+                        continue;
+                    };
+                    if name == "entry" || name == "exit" {
+                        continue;
+                    }
+                    if let Some(base_name) = name.strip_prefix('_') {
+                        families
+                            .entry(base_name.to_string())
+                            .or_default()
+                            .0
+                            .push((
+                                glyph.name().to_string(),
+                                anchor.x,
+                                anchor.y,
+                            ));
+                    } else {
+                        let entry =
+                            families.entry(name.to_string()).or_default();
+                        let record = (
+                            glyph.name().to_string(),
+                            anchor.x,
+                            anchor.y,
+                        );
+                        if is_mark_glyph {
+                            entry.2.push(record);
+                        } else {
+                            entry.1.push(record);
+                        }
+                    }
+                }
+            }
+            let mut mark_rules = String::new();
+            let mut mkmk_rules = String::new();
+            let mut classes = String::new();
+            for (family, (marks, bases, carriers)) in &families {
+                if marks.is_empty() || (bases.is_empty() && carriers.is_empty())
+                {
+                    continue;
+                }
+                for (mark, x, y) in marks {
+                    classes.push_str(&format!(
+                        "    markClass {mark} <anchor {x:.0} {y:.0}> @MC_{family};\n"
+                    ));
+                }
+                for (base, x, y) in bases {
+                    mark_rules.push_str(&format!(
+                        "    pos base {base} <anchor {x:.0} {y:.0}> mark @MC_{family};\n"
+                    ));
+                }
+                for (carrier, x, y) in carriers {
+                    mkmk_rules.push_str(&format!(
+                        "    pos mark {carrier} <anchor {x:.0} {y:.0}> mark @MC_{family};\n"
+                    ));
+                }
+            }
+            if !mark_rules.is_empty() {
+                blocks.push((
+                    "mark".to_string(),
+                    format!("{classes}{mark_rules}"),
+                ));
+            }
+            if !mkmk_rules.is_empty() {
+                let body = if mark_rules.is_empty() {
+                    format!("{classes}{mkmk_rules}")
+                } else {
+                    // Classes already defined in the mark block.
+                    mkmk_rules.clone()
+                };
+                blocks.push(("mkmk".to_string(), body));
+            }
+        }
         // Composition (ccmp): a composite-only glyph whose
         // components all exist, with at least one combining mark
         // after the base, substitutes from its parts — edit the base
@@ -23450,8 +23547,47 @@ mod tests {
             base_a.codepoints = norad::Codepoints::new(['a']);
             font.default_layer_mut().insert_glyph(base_a);
         }
+        // Anchors for mark positioning: a base with top, a mark
+        // with _top, and a stacking mark carrying both.
+        {
+            let anchor = |x: f64, y: f64, name: &str| {
+                norad::Anchor::new(
+                    x, y,
+                    Some(norad::Name::new(name).unwrap()),
+                    None, None,
+                )
+            };
+            let g = font.default_layer_mut().get_glyph_mut("a").unwrap();
+            g.anchors.push(anchor(250.0, 700.0, "top"));
+            let m = font.default_layer_mut().get_glyph_mut("acutecomb").unwrap();
+            m.anchors.push(anchor(0.0, 0.0, "_top"));
+            m.anchors.push(anchor(0.0, 300.0, "top"));
+        }
         let blocks = Workspace::generated_feature_blocks(&font);
         let tags: Vec<&str> = blocks.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(tags.contains(&"mark") && tags.contains(&"mkmk"), "{tags:?}");
+        let mark = &blocks.iter().find(|(t, _)| t == "mark").unwrap().1;
+        assert!(mark.contains("markClass acutecomb <anchor 0 0> @MC_top;"), "{mark}");
+        assert!(mark.contains("pos base a <anchor 250 700> mark @MC_top;"));
+        let mkmk = &blocks.iter().find(|(t, _)| t == "mkmk").unwrap().1;
+        assert!(mkmk.contains("pos mark acutecomb <anchor 0 300> mark @MC_top;"));
+        // The whole generated set must compile through fea-rs —
+        // markClass inside a feature block included.
+        {
+            let mut fea = String::new();
+            for (tag, body) in &blocks {
+                fea = Workspace::replace_feature_block(&fea, tag, body);
+            }
+            let mut model = FontModel::from_font(
+                font.clone(),
+                std::env::temp_dir().join("feagen-scratch.ufo"),
+            );
+            model.font.features = fea.clone();
+            assert!(
+                Workspace::check_features_compile(&model, &fea).is_ok(),
+                "generated features compile"
+            );
+        }
         assert!(tags.contains(&"ccmp"), "{tags:?}");
         let ccmp = &blocks.iter().find(|(t, _)| t == "ccmp").unwrap().1;
         assert!(
