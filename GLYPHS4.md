@@ -51,8 +51,11 @@ Deliberate non-goals are in the last section.
 - [ ] Focus and lock nodes or paths (handbook audit)
 - [ ] Masking: a path attribute that subtracts a shape from the
       layers below at export (handbook audit)
-- [ ] Annotation tool: text notes, arrows, circles, plus/minus
-      marks on the canvas (handbook audit)
+- [~] Annotations: right-click drops arrows, circles, and text
+      notes at design-space points (lib-key stored, never
+      exported), right-click a mark deletes it. A dedicated tool
+      with rotatable arrows and plus/minus cursors comes later
+      (handbook audit)
 - [~] Sample strings: View menu cycles built-in spacing and
       kerning texts around the open glyph. Custom string lists
       come later (handbook audit)
