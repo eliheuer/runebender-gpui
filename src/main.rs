@@ -3623,6 +3623,9 @@ struct Workspace {
     hoi_live: Option<((usize, usize), (f64, f64))>,
     /// The shaping inspector's focused cluster (carrier sort index).
     shaping_focus: Option<usize>,
+    /// Ghost every attachable mark on the open glyph's anchors
+    /// (Glyphs' mark cloud).
+    show_mark_cloud: bool,
     /// Ease amount field: Enter bakes interpolation timing into a
     /// brace layer at the preview location.
     ease_input: gpui::Entity<gpui_component::input::InputState>,
@@ -8851,6 +8854,13 @@ impl Workspace {
                         |this| this.show_background = !this.show_background,
                     ))
                     .child(button(
+                        "mark-cloud",
+                        "Mark cloud",
+                        self.show_mark_cloud,
+                        cx,
+                        |this| this.show_mark_cloud = !this.show_mark_cloud,
+                    ))
+                    .child(button(
                         "bg-send",
                         "Send to background",
                         false,
@@ -9625,6 +9635,40 @@ impl Workspace {
                 })
             })
             .flatten();
+        // The mark cloud: every mark whose _anchor matches one of
+        // this glyph's anchors, ghosted in place — the crowding
+        // check while positioning anchors.
+        let mark_cloud: Vec<Arc<BezPath>> = if self.show_mark_cloud {
+            let mut placed = Vec::new();
+            'outer: for candidate in font.glyphs.iter() {
+                for (mark_anchor, mx, my) in candidate.anchors.iter() {
+                    let Some(base_name) = mark_anchor.strip_prefix('_') else {
+                        continue;
+                    };
+                    let Some((_, ax, ay)) = entry
+                        .anchors
+                        .iter()
+                        .find(|(name, _, _)| name.as_ref() == base_name)
+                    else {
+                        continue;
+                    };
+                    if candidate.path.elements().is_empty() {
+                        continue;
+                    }
+                    placed.push(Arc::new(
+                        Affine::translate((ax - mx, ay - my))
+                            * candidate.path.as_ref().clone(),
+                    ));
+                    if placed.len() >= 60 {
+                        break 'outer;
+                    }
+                    continue 'outer;
+                }
+            }
+            placed
+        } else {
+            Vec::new()
+        };
         // Mask contours: drawn in the accent as a warning, and cut
         // out of the space-hold preview fill.
         let mask_paths: Vec<Arc<BezPath>> = font
@@ -10936,6 +10980,18 @@ impl Workspace {
                                     PathBuilder::stroke(px(1.0)),
                                 ) {
                                     window.paint_path(p, t::metric_quiet());
+                                }
+                            }
+                            // The mark cloud, faint fills.
+                            if !mark_cloud.is_empty() {
+                                let mut ghost = t::glyph_fill();
+                                ghost.a *= 0.10;
+                                for path in &mark_cloud {
+                                    if let Some(p) = build_fill_path(
+                                        path, transform, origin,
+                                    ) {
+                                        window.paint_path(p, ghost);
+                                    }
                                 }
                             }
                             // Mask contours read as cuts: the local-
@@ -21462,6 +21518,7 @@ fn main() {
                         show_trajectories: false,
                         hoi_live: None,
                         shaping_focus: None,
+                        show_mark_cloud: false,
                         ease_input,
                         extrude_input,
                         roughen_input,
