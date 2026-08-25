@@ -14116,6 +14116,43 @@ impl Workspace {
                 blocks.push((tag.to_string(), rules));
             }
         }
+        // Cursive attachment: glyphs carrying entry/exit anchors
+        // (the Glyphs cascade workflow) feed a curs feature —
+        // position cursive <glyph> <entry> <exit>, NULL where a
+        // side is missing.
+        {
+            let mut rules = String::new();
+            for glyph in font.default_layer().iter() {
+                let mut entry: Option<(f64, f64)> = None;
+                let mut exit: Option<(f64, f64)> = None;
+                for anchor in &glyph.anchors {
+                    match anchor.name.as_ref().map(|n| n.as_str()) {
+                        Some("entry") => entry = Some((anchor.x, anchor.y)),
+                        Some("exit") => exit = Some((anchor.x, anchor.y)),
+                        _ => {}
+                    }
+                }
+                if entry.is_none() && exit.is_none() {
+                    continue;
+                }
+                let fmt = |a: Option<(f64, f64)>| match a {
+                    Some((x, y)) => format!("<anchor {x:.0} {y:.0}>"),
+                    None => "<anchor NULL>".to_string(),
+                };
+                rules.push_str(&format!(
+                    "    position cursive {} {} {};\n",
+                    glyph.name(),
+                    fmt(entry),
+                    fmt(exit),
+                ));
+            }
+            if !rules.is_empty() {
+                let body = format!(
+                    "    lookupflag RightToLeft IgnoreMarks;\n{rules}"
+                );
+                blocks.push(("curs".to_string(), body));
+            }
+        }
         // Ligatures: longest first, so f_f_i wins over f_f.
         let mut ligatures: Vec<(&str, Vec<&str>)> = names
             .iter()
@@ -22053,9 +22090,28 @@ mod tests {
             font.default_layer_mut()
                 .insert_glyph(norad::Glyph::new(name));
         }
+        // Cursive anchors on one glyph feed a curs block.
+        {
+            let g = font.default_layer_mut().get_glyph_mut("beh").unwrap();
+            g.anchors.push(norad::Anchor::new(
+                520.0, 0.0,
+                Some(norad::Name::new("exit").unwrap()),
+                None, None,
+            ));
+            g.anchors.push(norad::Anchor::new(
+                0.0, 12.0,
+                Some(norad::Name::new("entry").unwrap()),
+                None, None,
+            ));
+        }
         let blocks = Workspace::generated_feature_blocks(&font);
         let tags: Vec<&str> = blocks.iter().map(|(t, _)| t.as_str()).collect();
         assert!(tags.contains(&"init") && tags.contains(&"medi"));
+        let curs = &blocks.iter().find(|(t, _)| t == "curs").unwrap().1;
+        assert!(curs.contains(
+            "position cursive beh <anchor 0 12> <anchor 520 0>;"
+        ), "{curs}");
+        assert!(curs.contains("lookupflag RightToLeft IgnoreMarks;"));
         assert!(!tags.contains(&"fina"), "no .fina names, no fina block");
         assert!(tags.contains(&"liga"));
         let init = &blocks.iter().find(|(t, _)| t == "init").unwrap().1;
