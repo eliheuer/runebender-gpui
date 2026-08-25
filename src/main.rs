@@ -2188,6 +2188,37 @@ fn roughen_glyph_contours(
     changed
 }
 
+/// Open a closed contour at an on-curve point (it becomes the new
+/// start, typed Move), or close an open contour again (the Move
+/// start becomes a Line). Glyphs' opening and closing paths.
+fn toggle_contour_open(glyph: &mut norad::Glyph, ci: usize, pi: usize) -> bool {
+    use norad::PointType;
+    let Some(contour) = glyph.contours.get_mut(ci) else {
+        return false;
+    };
+    let n = contour.points.len();
+    if n < 2 || pi >= n {
+        return false;
+    }
+    let is_open = contour
+        .points
+        .first()
+        .is_some_and(|p| p.typ == PointType::Move);
+    if is_open {
+        // Close: the Move start becomes an ordinary point. If the
+        // start needs a curve type it stays Line; the designer
+        // redraws the closing segment as needed.
+        contour.points[0].typ = PointType::Line;
+        return true;
+    }
+    if contour.points[pi].typ == PointType::OffCurve {
+        return false;
+    }
+    contour.points.rotate_left(pi);
+    contour.points[0].typ = PointType::Move;
+    true
+}
+
 // ---- joining QA (Arabic connecting-stroke bands) ----
 
 /// The y-extent of a glyph's ink at one joining edge: outline
@@ -9712,6 +9743,42 @@ impl Workspace {
                 cx,
             ));
         }
+        if menu.contour.is_some() {
+            list = list.child(item(
+                ("cm", 21),
+                "Insert Node Here".into(),
+                "node-insert",
+                cx,
+            ));
+        }
+        if let Some((ci, _)) = menu.start_point {
+            let open_contour = self
+                .current_glyph_index()
+                .and_then(|i| self.font().map(|f| (i, f)))
+                .and_then(|(i, f)| {
+                    f.font
+                        .get_glyph(f.glyphs[i].name.as_ref())?
+                        .contours
+                        .get(ci)
+                        .map(|c| {
+                            c.points
+                                .first()
+                                .is_some_and(|p| p.typ == norad::PointType::Move)
+                        })
+                })
+                .unwrap_or(false);
+            list = list.child(item(
+                ("cm", 22),
+                if open_contour {
+                    "Close Contour"
+                } else {
+                    "Open Contour Here"
+                }
+                .into(),
+                "contour-open-close",
+                cx,
+            ));
+        }
         if let Some(node) = menu.start_point {
             let locked = self.editor.locked_points.contains(&node);
             list = list.child(item(
@@ -13027,6 +13094,54 @@ impl Workspace {
             "mask-toggle" => {
                 if let Some(ci) = menu.contour {
                     self.command_toggle_mask(ci);
+                }
+            }
+            "node-insert" => {
+                let (dx, dy) = menu.design;
+                self.push_undo_snapshot(index);
+                let inserted = self
+                    .font_mut()
+                    .and_then(|f| {
+                        f.edit_glyph(index, |g| {
+                            runebender_core::segment_ops::nearest_segment_with_t(
+                                g,
+                                kurbo::Point::new(dx, dy),
+                                24.0,
+                            )
+                            .and_then(|(hit, t)| {
+                                runebender_core::segment_ops::insert_point_on_segment(
+                                    g, &hit, t,
+                                )
+                            })
+                        })
+                    })
+                    .flatten();
+                match inserted {
+                    Some(id) => {
+                        self.editor.selected.clear();
+                        self.editor.selected.insert(id);
+                    }
+                    None => {
+                        self.editor.undo.pop();
+                    }
+                }
+            }
+            "contour-open-close" => {
+                if let Some((ci, pi)) = menu.start_point {
+                    self.push_undo_snapshot(index);
+                    let changed = self
+                        .font_mut()
+                        .and_then(|f| {
+                            f.edit_glyph(index, |g| {
+                                toggle_contour_open(g, ci, pi)
+                            })
+                        })
+                        .unwrap_or(false);
+                    if !changed {
+                        self.editor.undo.pop();
+                    } else {
+                        self.editor.selected.clear();
+                    }
                 }
             }
             "node-lock" => {
@@ -23177,6 +23292,36 @@ mod tests {
             .and_then(|v| v.as_array())
             .unwrap();
         assert_eq!(stops.len(), 2);
+    }
+
+    #[test]
+    fn contours_open_and_close_again() {
+        use norad::{Contour, ContourPoint, PointType};
+        let square = Contour::new(
+            [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
+                .iter()
+                .map(|&(x, y)| {
+                    ContourPoint::new(x, y, PointType::Line, false, None, None)
+                })
+                .collect(),
+            None,
+        );
+        let mut glyph = norad::Glyph::new("openclose");
+        glyph.contours = vec![square];
+        // Open at point 2: it becomes the Move start.
+        assert!(toggle_contour_open(&mut glyph, 0, 2));
+        let pts = &glyph.contours[0].points;
+        assert_eq!(pts[0].typ, PointType::Move);
+        assert_eq!((pts[0].x, pts[0].y), (100.0, 100.0));
+        // Close again: the Move becomes a Line, same point count.
+        assert!(toggle_contour_open(&mut glyph, 0, 0));
+        assert!(glyph.contours[0]
+            .points
+            .iter()
+            .all(|p| p.typ != PointType::Move));
+        assert_eq!(glyph.contours[0].points.len(), 4);
+        // Off-curve target refuses.
+        assert!(!toggle_contour_open(&mut glyph, 0, 99));
     }
 
     #[test]
