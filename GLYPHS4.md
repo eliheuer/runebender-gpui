@@ -115,8 +115,11 @@ Deliberate non-goals are in the last section.
       (new in 4)
 - [x] Batch sidebearing editing: the Width/LSB/RSB fields land
       on every glyph in a grid multi-selection
-- [ ] Metrics keys (side bearings linked by formula, "=n+10"),
-      with calculations, constants, and local keys
+- [~] Metrics keys: =n, =|o, =n+10, =n*1.1, =50 in the Glyph
+      panel, stored in the glyphsLib round-trip lib keys, synced
+      on set and via Glyph > Sync Metrics (chains settle over
+      passes). Per-layer local keys and an out-of-sync indicator
+      come later
 - [ ] Kerning group exceptions (handbook audit)
 - [ ] Contextual kerning
 - [x] Auto "kern" feature generation at export (fontc writes
