@@ -310,6 +310,13 @@ pub fn guide_local() -> Rgba {
     color.a = 0.75;
     color
 }
+/// Alignment-zone bands: the accent at a whisper, Glyphs' beige
+/// zones in this palette's terms.
+pub fn zone_band() -> Rgba {
+    let mut color = accent();
+    color.a = 0.10;
+    color
+}
 /// The sort being manually kerned.
 pub fn kern_active() -> Rgba {
     c(theme().role("kernActive"))

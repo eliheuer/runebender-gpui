@@ -2530,6 +2530,12 @@ struct FontInfoInputs {
     descender: gpui::Entity<gpui_component::input::InputState>,
     x_height: gpui::Entity<gpui_component::input::InputState>,
     cap_height: gpui::Entity<gpui_component::input::InputState>,
+    /// PostScript hinting data per master: alignment zones (blue
+    /// values in pairs) and standard stems, comma-separated lists.
+    blue_values: gpui::Entity<gpui_component::input::InputState>,
+    other_blues: gpui::Entity<gpui_component::input::InputState>,
+    stems_h: gpui::Entity<gpui_component::input::InputState>,
+    stems_v: gpui::Entity<gpui_component::input::InputState>,
     /// The OS/2 and hhea vertical metrics (typo/hhea/win), the
     /// parameters the Google Fonts vertical-metrics checks read.
     typo_asc: gpui::Entity<gpui_component::input::InputState>,
@@ -2570,6 +2576,10 @@ enum FontInfoField {
     HheaLineGap,
     WinAscent,
     WinDescent,
+    BlueValues,
+    OtherBlues,
+    StemsH,
+    StemsV,
 }
 
 /// A flat slider: a thin, evenly colored track (the library's own
@@ -7192,6 +7202,20 @@ impl Workspace {
         let upm = font.units_per_em;
         let x_height = font.x_height;
         let cap_height = font.cap_height;
+        // Alignment zones (postscript blues, position pairs), drawn
+        // as quiet bands like Glyphs' beige zones.
+        let zones: Vec<(f64, f64)> = {
+            let info = &font.font.font_info;
+            info.postscript_blue_values
+                .iter()
+                .flatten()
+                .chain(info.postscript_other_blues.iter().flatten())
+                .copied()
+                .collect::<Vec<f64>>()
+                .chunks_exact(2)
+                .map(|pair| (pair[0].min(pair[1]), pair[0].max(pair[1])))
+                .collect()
+        };
         // Guides, drawn across the whole canvas under the outline:
         // the master's global fontinfo guidelines plus the open
         // glyph's own. The hot one (hovered or mid-drag) draws
@@ -7694,6 +7718,22 @@ impl Workspace {
                                         0,
                                         true,
                                     );
+                                }
+                                // Alignment zone bands.
+                                for &(lo, hi) in &zones {
+                                    let a = to_screen(0.0, hi);
+                                    let b = to_screen(0.0, lo);
+                                    window.paint_quad(gpui::fill(
+                                        Bounds::from_corners(
+                                            gpui::point(bounds.origin.x, a.y),
+                                            gpui::point(
+                                                bounds.origin.x
+                                                    + bounds.size.width,
+                                                b.y,
+                                            ),
+                                        ),
+                                        t::zone_band(),
+                                    ));
                                 }
                                 // The color stack, bottom first, so
                                 // editing happens over the composite.
@@ -11698,6 +11738,33 @@ impl Workspace {
                 master.dirty = true;
                 project.master_names[active] = text.to_string().into();
             }
+            FontInfoField::BlueValues
+            | FontInfoField::OtherBlues
+            | FontInfoField::StemsH
+            | FontInfoField::StemsV => {
+                // Comma or space separated numbers; empty clears.
+                let values: Vec<f64> = text
+                    .split([',', ' '])
+                    .filter(|part| !part.trim().is_empty())
+                    .filter_map(|part| part.trim().parse::<f64>().ok())
+                    .collect();
+                let stored = (!values.is_empty()).then_some(values);
+                let master = &mut project.masters[project.active];
+                let info = &mut master.font.font_info;
+                match field {
+                    FontInfoField::BlueValues => {
+                        info.postscript_blue_values = stored
+                    }
+                    FontInfoField::OtherBlues => {
+                        info.postscript_other_blues = stored
+                    }
+                    FontInfoField::StemsH => {
+                        info.postscript_stem_snap_h = stored
+                    }
+                    _ => info.postscript_stem_snap_v = stored,
+                }
+                master.dirty = true;
+            }
             _ => {
                 let Ok(v) = text.parse::<f64>() else { return };
                 let master = &mut project.masters[project.active];
@@ -11758,7 +11825,12 @@ impl Workspace {
                             info.open_type_os2_win_descent = Some(v as u32)
                         }
                     }
-                    FontInfoField::Family | FontInfoField::Style => unreachable!(),
+                    FontInfoField::Family
+                    | FontInfoField::Style
+                    | FontInfoField::BlueValues
+                    | FontInfoField::OtherBlues
+                    | FontInfoField::StemsH
+                    | FontInfoField::StemsV => unreachable!(),
                 }
                 master.dirty = true;
             }
@@ -11785,6 +11857,17 @@ impl Workspace {
         let master = &project.masters[project.active];
         let info = &master.font.font_info;
         let opt = |v: Option<f64>| v.map(|v| format!("{v:.0}")).unwrap_or_default();
+        let list = |v: &Option<Vec<f64>>| {
+            v.as_ref()
+                .map(|values| {
+                    values
+                        .iter()
+                        .map(|n| format!("{n:.0}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default()
+        };
         let values = [
             (
                 &self.font_info_inputs.family,
@@ -11859,6 +11942,22 @@ impl Workspace {
                 info.open_type_os2_win_descent
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
+            ),
+            (
+                &self.font_info_inputs.blue_values,
+                list(&info.postscript_blue_values),
+            ),
+            (
+                &self.font_info_inputs.other_blues,
+                list(&info.postscript_other_blues),
+            ),
+            (
+                &self.font_info_inputs.stems_h,
+                list(&info.postscript_stem_snap_h),
+            ),
+            (
+                &self.font_info_inputs.stems_v,
+                list(&info.postscript_stem_snap_v),
             ),
         ];
         for (entity, value) in values {
@@ -12322,6 +12421,25 @@ impl Workspace {
                     .gap_1()
                     .child(field("winAsc", &self.font_info_inputs.win_asc))
                     .child(field("winDesc", &self.font_info_inputs.win_desc)),
+            )
+            // PostScript hinting data: alignment zones (pairs of
+            // position, position+size) and standard stems, the
+            // Glyphs Masters-tab Metrics/Stems story. The zones
+            // also draw as bands in the editor.
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("Zones & Stems"),
+            )
+            .child(field("Blue Values", &self.font_info_inputs.blue_values))
+            .child(field("Other Blues", &self.font_info_inputs.other_blues))
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(field("Stems H", &self.font_info_inputs.stems_h))
+                    .child(field("Stems V", &self.font_info_inputs.stems_v)),
             );
         self.section(cx, "Font Info", body)
     }
@@ -16848,6 +16966,22 @@ fn main() {
                         font_info_sub(cx, window, &fi_xh, FontInfoField::XHeight);
                     let sub_fi_ch =
                         font_info_sub(cx, window, &fi_ch, FontInfoField::CapHeight);
+                    let fi_blues = metric(cx, window);
+                    let fi_oblues = metric(cx, window);
+                    let fi_stems_h = metric(cx, window);
+                    let fi_stems_v = metric(cx, window);
+                    let sub_fi_bv = font_info_sub(
+                        cx, window, &fi_blues, FontInfoField::BlueValues,
+                    );
+                    let sub_fi_ob = font_info_sub(
+                        cx, window, &fi_oblues, FontInfoField::OtherBlues,
+                    );
+                    let sub_fi_sh = font_info_sub(
+                        cx, window, &fi_stems_h, FontInfoField::StemsH,
+                    );
+                    let sub_fi_sv = font_info_sub(
+                        cx, window, &fi_stems_v, FontInfoField::StemsV,
+                    );
                     let fi_typo_asc = metric(cx, window);
                     let fi_typo_desc = metric(cx, window);
                     let fi_typo_gap = metric(cx, window);
@@ -17477,6 +17611,10 @@ fn main() {
                             hhea_gap: fi_hhea_gap,
                             win_asc: fi_win_asc,
                             win_desc: fi_win_desc,
+                            blue_values: fi_blues,
+                            other_blues: fi_oblues,
+                            stems_h: fi_stems_h,
+                            stems_v: fi_stems_v,
                         },
                         kern_inputs: KernInputs {
                             filter: kern_filter,
@@ -17510,7 +17648,8 @@ fn main() {
                             sub_fi_angle, sub_fi_asc, sub_fi_desc,
                             sub_fi_xh, sub_fi_ch, sub_fi_ta, sub_fi_td,
                             sub_fi_tg, sub_fi_ha, sub_fi_hd, sub_fi_hg,
-                            sub_fi_wa, sub_fi_wd,
+                            sub_fi_wa, sub_fi_wd, sub_fi_bv, sub_fi_ob,
+                            sub_fi_sh, sub_fi_sv,
                             sub_kern_filter, sub_kern_first,
                             sub_kern_second, sub_kern_value, sub_slant,
                             sub_features, sub_instance_name, sub_stroke,
