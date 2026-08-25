@@ -32,11 +32,10 @@ init/medi/fina, mark anchors) is the working test font.
    section — characters (logical, absorbed parts dimmed) against
    glyph names and advances (visual), cluster cross-highlighting,
    double-click opens the glyph.
-3. Feature toggles in preview: turn liga/calt/ss01 on and off
-   while looking at shaped text; script/language override.
-   NEEDS CORE: the shared engine's shape() takes no feature
-   list yet — a runebender-core change, queued for a
-   supervised session.
+3. [done 2026-08-26] Feature toggles: the Shaping section lists
+   every features.fea tag as a chip cycling default → off → on,
+   reshaping immediately (core grew shape_with_features).
+   Script/language override remains.
 4. [done 2026-08-26] Cursive attachment: Generate writes a curs
    block from entry/exit anchors (RightToLeft IgnoreMarks,
    NULL for missing sides). Drawing the connection line in the
