@@ -267,8 +267,13 @@ Deliberate non-goals are in the last section.
 - [x] Dark and light themes, theme menu
 - [x] Live file-watch reload
 - [x] Open UFO, designspace, .glyphs
-- [ ] Open compiled TTF/OTF binaries as editable sources
-      (handbook audit)
+- [~] Open compiled TTF/OTF binaries as editable sources: names,
+      metrics, encodings, outlines (quadratics kept as qcurves);
+      Save writes a UFO beside the binary. Kerning/feature
+      decompilation later (handbook audit)
+- [x] Cubic <-> quadratic conversion (Glyph menu, every master):
+      exact to cubic, upm/1000 approximation to quadratic;
+      mixed and quadratic outlines edit natively
 - [ ] Vector paste/import from Illustrator and friends (SVG
       outlines in; we only trace bitmaps) (handbook audit)
 - [ ] Copy glyphs between open fonts (handbook audit)
