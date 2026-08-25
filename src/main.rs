@@ -8595,6 +8595,84 @@ impl Workspace {
                                 }
                                 if let Some(tracks) = &trajectories {
                                     use kurbo::Shape as _;
+                                    // The velocity ribbon (Glyphs'
+                                    // Show velocity): one block per
+                                    // axis step, thickness and warmth
+                                    // scaling with how far the node
+                                    // travels that step — gold means
+                                    // the change rushes there, ember
+                                    // means it lingers.
+                                    for track in tracks {
+                                        let steps: Vec<f64> = track
+                                            .windows(2)
+                                            .map(|w| w[0].distance(w[1]))
+                                            .collect();
+                                        let max_step = steps
+                                            .iter()
+                                            .fold(0.0_f64, |a, &b| a.max(b));
+                                        if max_step < 1.0 {
+                                            continue; // static node
+                                        }
+                                        const RIBBON_PX: f32 = 13.0;
+                                        for (i, w) in
+                                            track.windows(2).enumerate()
+                                        {
+                                            let speed = steps[i] / max_step;
+                                            let a = to_screen(w[0].x, w[0].y);
+                                            let b = to_screen(w[1].x, w[1].y);
+                                            let (ax, ay) =
+                                                (f32::from(a.x), f32::from(a.y));
+                                            let (bx, by) =
+                                                (f32::from(b.x), f32::from(b.y));
+                                            let (dx_, dy_) =
+                                                (bx - ax, by - ay);
+                                            let len =
+                                                (dx_ * dx_ + dy_ * dy_).sqrt();
+                                            if len < 0.5 {
+                                                continue;
+                                            }
+                                            // One-sided comb, like
+                                            // Glyphs': offset to the
+                                            // left of travel.
+                                            let (nx, ny) = (
+                                                -dy_ / len,
+                                                dx_ / len,
+                                            );
+                                            let thick = RIBBON_PX
+                                                * speed as f32;
+                                            let mut quad = BezPath::new();
+                                            quad.move_to((
+                                                ax as f64, ay as f64,
+                                            ));
+                                            quad.line_to((
+                                                bx as f64, by as f64,
+                                            ));
+                                            quad.line_to((
+                                                (bx + nx * thick) as f64,
+                                                (by + ny * thick) as f64,
+                                            ));
+                                            quad.line_to((
+                                                (ax + nx * thick) as f64,
+                                                (ay + ny * thick) as f64,
+                                            ));
+                                            quad.close_path();
+                                            if let Some(path) =
+                                                build_fill_path(
+                                                    &quad,
+                                                    Affine::IDENTITY,
+                                                    gpui::point(
+                                                        px(0.0),
+                                                        px(0.0),
+                                                    ),
+                                                )
+                                            {
+                                                window.paint_path(
+                                                    path,
+                                                    t::velocity_ramp(speed),
+                                                );
+                                            }
+                                        }
+                                    }
                                     for track in tracks {
                                         let mut pb =
                                             PathBuilder::stroke(px(1.0));

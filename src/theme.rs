@@ -317,6 +317,20 @@ pub fn zone_band() -> Rgba {
     color.a = 0.10;
     color
 }
+/// The HOI velocity ribbon's speed ramp: slow steps in a deep
+/// ember, fast ones in gold — Glyphs' Show velocity, in this
+/// palette's warm terms. `t` is the normalized speed.
+pub fn velocity_ramp(t: f64) -> Rgba {
+    let t = t.clamp(0.0, 1.0) as f32;
+    let slow = (0.52, 0.16, 0.10);
+    let fast = (0.87, 0.62, 0.16);
+    Rgba {
+        r: slow.0 + (fast.0 - slow.0) * t,
+        g: slow.1 + (fast.1 - slow.1) * t,
+        b: slow.2 + (fast.2 - slow.2) * t,
+        a: 0.55,
+    }
+}
 /// HOI node trajectories: the across-the-axis connector line…
 pub fn trajectory_line() -> Rgba {
     with_alpha(theme().role("kernActive"), 0.55)
