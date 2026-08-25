@@ -20,25 +20,26 @@ Legend: `[x]` we have it, `[~]` partial, `[ ]` missing.
       run. Our shared text engine also shapes (fea-rs compiled
       features, bidi), and the editor edits inside the buffer —
       but Fontra adds the panel work below.
-- [ ] Shaping inspector: an "input characters and output glyphs"
-      panel — characters in logical order, glyphs in visual
-      order with names, advances, offsets, and cluster indices,
-      cross-highlighting between the two lists.
-- [ ] Feature toggles in the preview: per-feature on/off (GSUB
-      listed from the font, kern/mark/mkmk/curs emulated), plus
-      script, language, and direction overrides.
-- [ ] Live emulated positioning: kerning, mark, mkmk, and curs
-      shaped straight from source data (anchors, kerning.plist)
-      without compiling, so positioning edits show instantly.
-      We recompile the shaper font from features.fea instead;
-      anchors do not feed GPOS emulation yet.
+- [x] Shaping inspector (2026-08-26): the editor's Shaping
+      section — characters logical, glyphs visual, advances,
+      cluster cross-highlighting, double-click to edit.
+- [x] Feature toggles (2026-08-26): every features.fea tag as
+      a chip, default → off → on, reshaping live. Script and
+      language overrides remain.
+- [~] Positioning in the preview (2026-08-26): Generate now
+      writes mark/mkmk from anchors and curs from entry/exit, so
+      one Generate + Apply positions marks in the shaped preview.
+      Fontra skips the Apply step (true live emulation); ours is
+      one click behind.
 - [ ] Insertion markers in feature code ("# Automatic Code")
       controlling where generated code lands among hand-written
       blocks. Our Generate replaces whole blocks by tag.
-- [ ] Cross-axis mapping editor (avar2).
+- [~] Axis mappings: avar pairs editable in the Axes section;
+      avar2 cross-axis mapping remains.
 - [ ] Status definitions: per-source glyph status colors with
       font-wide definitions.
-- [ ] Related Glyphs & Characters panel.
+- [x] Related Glyphs (2026-08-26): components, suffix
+      siblings, and used-by chips in the editor panel.
 - [ ] Multi-window / project server (fontra-pak, collaboration).
 
 ## Where we lead or match

@@ -20,22 +20,20 @@ Legend: `[x]` we have it, `[~]` partial, `[ ]` missing.
       shared text engine (fea-rs + shaper); the claim to match
       is production-accuracy — worth an audit against harfbuzz
       output for the Arabic test fonts.
-- [ ] Composition-first (ccmp) workflow: edit base glyphs and
-      combining marks once, derived shapes update immediately;
-      precomposed forms exist only at export. We have component
-      auto-alignment from anchors (the display half); we do not
-      generate ccmp or treat composites as build products.
+- [~] Composition-first (2026-08-26): ccmp generates from mark
+      compositions and mark/mkmk from anchors, so bases and marks
+      edited once flow into shaped previews and builds.
+      Composites-as-build-products (precompose at export only)
+      remains.
 - [ ] In-place component editing: edit a component's base inside
       the composite that uses it, in context. We jump to the
       base glyph instead (double-click).
-- [ ] Code-driven dynamic glyph filters: user-written predicates
-      as sidebar filters (their "language packs" ride on this).
-      Our filters are fixed categories + GF coverage + search.
-- [ ] Matrix Mode: the positional-forms review grid (praised in
-      the announcement thread). For Arabic: letters as rows,
-      isol/init/medi/fina as columns, whole font reviewable at
-      a glance. Nothing like it here yet — and it would suit
-      this editor extremely well.
+- [~] Dynamic glyph filters (2026-08-26): predicate search
+      syntax (w>600, cat:mark, enc:no, comp:x, has:anchors, all
+      terms required) filters every view. Saved filter lists and
+      language packs remain.
+- [x] Matrix Mode (2026-08-26): the Forms view — base letters
+      as rows, isol/init/medi/fina thumbnails as columns.
 - [ ] Python scripting + assistant. Out of scope here (the
       extension story is Rust + the workspace server), but the
       capability gap is real for script-driven workflows.
