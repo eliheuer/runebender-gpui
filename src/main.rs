@@ -7508,6 +7508,115 @@ impl Workspace {
             )))
     }
 
+    /// Related Glyphs section (Fontra's panel): the glyph's base,
+    /// its suffix siblings (name.*), its components, and every
+    /// composite using it — one click away.
+    fn related_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(index) = self.current_glyph_index() else {
+            return self.section(cx, "Related", div());
+        };
+        let Some(font) = self.font() else {
+            return self.section(cx, "Related", div());
+        };
+        let name = font.glyphs[index].name.to_string();
+        let stem = name.split('.').next().unwrap_or(&name).to_string();
+        let mut rows: Vec<(&'static str, Vec<String>)> = Vec::new();
+        // Components of this glyph.
+        let components: Vec<String> = font
+            .font
+            .get_glyph(name.as_str())
+            .map(|g| {
+                g.components
+                    .iter()
+                    .map(|c| c.base.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !components.is_empty() {
+            rows.push(("Components", components));
+        }
+        // Suffix siblings sharing the stem.
+        let siblings: Vec<String> = font
+            .glyphs
+            .iter()
+            .map(|g| g.name.to_string())
+            .filter(|other| {
+                *other != name
+                    && other.split('.').next() == Some(stem.as_str())
+            })
+            .take(24)
+            .collect();
+        if !siblings.is_empty() {
+            rows.push(("Siblings", siblings));
+        }
+        // Composites that place this glyph.
+        let used_by: Vec<String> = font
+            .glyphs
+            .iter()
+            .filter(|g| {
+                font.font
+                    .get_glyph(g.name.as_ref())
+                    .is_some_and(|norad_glyph| {
+                        norad_glyph
+                            .components
+                            .iter()
+                            .any(|c| c.base.as_str() == name)
+                    })
+            })
+            .map(|g| g.name.to_string())
+            .take(24)
+            .collect();
+        if !used_by.is_empty() {
+            rows.push(("Used by", used_by));
+        }
+        if rows.is_empty() {
+            return self.section(
+                cx,
+                "Related",
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("No related glyphs"),
+            );
+        }
+        let mut body = div().flex().flex_col().gap_1();
+        for (label, names) in rows {
+            let mut chips = div().flex().flex_wrap().gap_1();
+            for related in names {
+                let target = font.name_map.get(related.as_str()).copied();
+                chips = chips.child(
+                    div()
+                        .id(gpui::SharedString::from(format!(
+                            "rel-{label}-{related}"
+                        )))
+                        .px_1()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(t::cell_border())
+                        .text_xs()
+                        .text_color(t::text())
+                        .cursor_pointer()
+                        .child(related.clone())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(target) = target {
+                                this.open_editor(target);
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
+            body = body
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(t::text_muted())
+                        .child(label),
+                )
+                .child(chips);
+        }
+        self.section(cx, "Related", body)
+    }
+
     /// Shaping section (editor mode): the buffer's characters in
     /// logical order against the shaped glyphs, cluster-linked —
     /// Fontra's inspector, on the shared text engine. Click a chip
@@ -21112,6 +21221,7 @@ impl Render for Workspace {
                     .child(self.background_section(cx))
                     .child(self.color_section(cx))
                     .child(self.shaping_section(cx))
+                    .child(self.related_section(cx))
                     .child(self.layers_section(cx))
                     .children(self.axes_section(cx))
             })
