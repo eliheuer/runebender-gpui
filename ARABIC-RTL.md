@@ -44,11 +44,13 @@ init/medi/fina, mark anchors) is the working test font.
 5. [done 2026-08-26] Positional-forms matrix: the Forms view
    mode — base letters as rows, isol/init/medi/fina thumbnails
    as columns, dash for missing forms.
-6. ccmp generation: compose marks once, generate ccmp (and
-   optionally precomposed forms at export) — Counterpunch's
-   composition-first core.
-7. Mark cloud preview: every attachable mark ghosted on the
-   base while editing anchors (Glyphs Cmd-U view).
+6. [done 2026-08-26] ccmp generation: Generate writes ccmp from
+   mark compositions (composite-only glyphs, sub base mark by
+   composed, longest first). Precomposed-at-export remains a
+   choice for later.
+7. [done 2026-08-26] Mark cloud: the Background section's
+   toggle ghosts every attachable mark on the glyph's anchors,
+   live while the anchor drags.
 8. Joining-line QA: check that connecting strokes meet at the
    same height across init/medi/fina (the Glyphs tutorial's
    segment-component overlap concern; Virtua's DESIGN.md has
