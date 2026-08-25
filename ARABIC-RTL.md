@@ -25,21 +25,25 @@ init/medi/fina, mark anchors) is the working test font.
 
 ## The ranked gaps
 
-1. Direction control in the edit view: an RTL/LTR/auto toggle
-   (Glyphs' bottom-right button). The engine already stores
-   direction; there is no UI.
-2. Shaping inspector: characters in logical order against output
-   glyphs in visual order — names, advances, cluster links
-   (Fontra's panel). The single most useful Arabic debugging
-   surface.
+1. [done 2026-08-26] Direction control: the LTR/RTL/Auto toggle
+   now shows whenever the editor is open, not only on the text
+   tool.
+2. [done 2026-08-26] Shaping inspector: the editor's Shaping
+   section — characters (logical, absorbed parts dimmed) against
+   glyph names and advances (visual), cluster cross-highlighting,
+   double-click opens the glyph.
 3. Feature toggles in preview: turn liga/calt/ss01 on and off
    while looking at shaped text; script/language override.
-4. Cursive attachment: entry/exit anchors driving a generated
-   curs feature, with the connection drawn in the editor
-   (Glyphs' cascade workflow).
-5. Positional-forms matrix view: letters as rows, isol/init/
-   medi/fina as columns (Counterpunch's Matrix Mode). The
-   Arabic review surface.
+   NEEDS CORE: the shared engine's shape() takes no feature
+   list yet — a runebender-core change, queued for a
+   supervised session.
+4. [done 2026-08-26] Cursive attachment: Generate writes a curs
+   block from entry/exit anchors (RightToLeft IgnoreMarks,
+   NULL for missing sides). Drawing the connection line in the
+   editor remains.
+5. [done 2026-08-26] Positional-forms matrix: the Forms view
+   mode — base letters as rows, isol/init/medi/fina thumbnails
+   as columns, dash for missing forms.
 6. ccmp generation: compose marks once, generate ccmp (and
    optionally precomposed forms at export) — Counterpunch's
    composition-first core.
