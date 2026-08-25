@@ -147,12 +147,18 @@ Deliberate non-goals are in the last section.
       no full master) (handbook audit)
 - [ ] Show All Masters: every master of the glyph editable in
       one edit view, with layer selection sync (handbook audit)
-- [~] Higher-order interpolation: the Axes section's
-      Trajectories view draws every node's path across the axis
-      with velocity dots (brace layers bend it), and the Ease
-      field bakes timing into a standard brace layer — selected
-      points at t^gamma, the rest linear. Per-node curve editing
-      UI comes later (handbook audit)
+- [~] Higher-order interpolation (researched 2026-08-25 against
+      Underware's HOI case study, the Glyphs 4 handbook, and the
+      forum): the Trajectories view draws node paths with
+      velocity dots, and each node carries a draggable knob —
+      drag it to bend the path into the quadratic through that
+      intermediate point (Glyphs' Intermediate Point), drag back
+      to the middle for Linear. Stored in a glyph lib key as the
+      editable truth and auto-baked to brace layers at
+      t=0.25/0.5/0.75, so any compiler follows. The Ease field
+      remains as bulk timing. Later: cubic handles and rotation
+      path types, and exact export via Underware's
+      duplicated-same-tag-axes designspace instead of baking
 - [ ] Compare Fonts / Compare Family windows (handbook audit)
 
 ## Font-level data
