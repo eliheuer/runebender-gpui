@@ -90,6 +90,7 @@ gpui::actions!(
         RoundCorners,
         AddExtremes,
         Reinterpolate,
+        ExportGlyphSvg,
         SyncMetrics,
         ShowAllMasters,
         BakeMasks,
@@ -231,6 +232,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Add Extremes", AddExtremes),
                 MenuItem::action("Sync Metrics", SyncMetrics),
                 MenuItem::action("Reinterpolate", Reinterpolate),
+                MenuItem::action("Export Glyph as SVG", ExportGlyphSvg),
                 MenuItem::action("Bake Masks", BakeMasks),
                 MenuItem::action("Check Joining", CheckJoining),
                 MenuItem::action("Hyperbezier to Cubic", HyperToCubic),
@@ -2293,6 +2295,31 @@ fn toggle_contour_open(glyph: &mut norad::Glyph, ci: usize, pi: usize) -> bool {
     contour.points.rotate_left(pi);
     contour.points[0].typ = PointType::Move;
     true
+}
+
+/// A standalone SVG document for one glyph: the outline in font
+/// units, y flipped into SVG space, the viewBox spanning the em
+/// (ascender down to descender) across the advance.
+fn glyph_svg(
+    path: &BezPath,
+    advance: f64,
+    ascender: f64,
+    descender: f64,
+) -> String {
+    let height = ascender - descender;
+    format!(
+        concat!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" ",
+            "viewBox=\"0 0 {w} {h}\">\n",
+            "  <path transform=\"translate(0,{asc}) scale(1,-1)\" ",
+            "d=\"{d}\"/>\n",
+            "</svg>\n"
+        ),
+        w = advance,
+        h = height,
+        asc = ascender,
+        d = path.to_svg(),
+    )
 }
 
 // ---- joining QA (Arabic connecting-stroke bands) ----
@@ -9130,6 +9157,45 @@ impl Workspace {
         }
         self.status_note =
             Some(format!("{name}: reinterpolated from the other masters").into());
+    }
+
+    /// Glyph > Export Glyph as SVG: writes <name>.svg beside the
+    /// project source (or the home directory before Save As).
+    fn command_export_glyph_svg(&mut self) {
+        #[cfg(target_family = "wasm")]
+        {
+            self.status_note = Some("SVG export: desktop only".into());
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let Some(index) = self.current_glyph_index() else { return };
+            let Some(font) = self.font() else { return };
+            let name = font.glyphs[index].name.to_string();
+            let Some(glyph) = font.font.get_glyph(name.as_str()) else {
+                return;
+            };
+            let path = runebender_core::glyph_paths::glyph_to_bezpath(
+                glyph, &font.font,
+            );
+            let ascender = font.font.font_info.ascender.unwrap_or(800.0);
+            let descender = font.font.font_info.descender.unwrap_or(-200.0);
+            let svg = glyph_svg(&path, glyph.width, ascender, descender);
+            let dir = self
+                .project
+                .as_ref()
+                .and_then(|p| p.export_source.as_ref())
+                .and_then(|p| p.parent().map(PathBuf::from))
+                .unwrap_or_else(|| {
+                    std::env::var("HOME")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|_| PathBuf::from("."))
+                });
+            let file = dir.join(format!("{name}.svg"));
+            self.status_note = Some(match std::fs::write(&file, svg) {
+                Ok(()) => format!("Wrote {}", file.display()).into(),
+                Err(e) => format!("SVG export failed: {e}").into(),
+            });
+        }
     }
 
     /// Glyph > Sync Metrics: apply every metrics key in every
@@ -22215,6 +22281,10 @@ impl Render for Workspace {
                 this.command_add_extremes();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &ExportGlyphSvg, _, cx| {
+                this.command_export_glyph_svg();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &Reinterpolate, _, cx| {
                 this.command_reinterpolate();
                 cx.notify();
@@ -23917,6 +23987,20 @@ mod tests {
         assert!(project
             .reinterpolated_from_others("no.such.glyph")
             .is_err());
+    }
+
+    #[test]
+    fn glyph_svg_wraps_the_outline_in_font_units() {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((100.0, 0.0));
+        path.line_to((100.0, 700.0));
+        path.close_path();
+        let svg = glyph_svg(&path, 600.0, 800.0, -200.0);
+        assert!(svg.contains("viewBox=\"0 0 600 1000\""));
+        assert!(svg.contains("translate(0,800) scale(1,-1)"));
+        assert!(svg.contains("M0,0"));
+        assert!(svg.ends_with("</svg>\n"));
     }
 
     #[test]

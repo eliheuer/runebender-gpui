@@ -260,7 +260,9 @@ Deliberate non-goals are in the last section.
 - [ ] Instance export from the instance list
 - [ ] PostScript autohinting at export
 - [ ] TrueType autohinting at export
-- [ ] Image export (PNG, SVG, PDF per glyph)
+- [~] Image export (2026-08-25): Glyph > Export Glyph as SVG
+      writes <name>.svg beside the project source (outline in
+      font units, em-spanning viewBox). PNG and PDF later
 - [x] UFO and designspace save is the native format, so "export
       to UFO" is free
 
