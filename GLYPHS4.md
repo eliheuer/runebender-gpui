@@ -69,7 +69,11 @@ Deliberate non-goals are in the last section.
 - [x] Components: place, drag, decompose one or all, open base on
       double click, lock
 - [x] Component auto-alignment from anchors, live
-- [ ] Smart components (per-component axes, "glyph axes" in 4)
+- [~] Smart components: parts with a first axis render
+      interpolated at their placed value (core), authored via the
+      Glyph panel's Smart Axis field and placed via the Selection
+      panel's value field, glyphsLib-keyed. Multi-axis, smart
+      handles, and the settings dialogs come later
 - [~] Corner components: Apply Corner… on a node splices the
       _corner glyph's path with Glyphs' sheared fit, in every
       master. Baked (no UFO compiler expands corner metadata);
