@@ -2867,6 +2867,14 @@ fn hoi_quad_at(
     )
 }
 
+/// Font View's three modes (Glyphs 4): grid, detail, list.
+#[derive(Clone, Copy, PartialEq)]
+enum FontViewMode {
+    Grid,
+    Detail,
+    List,
+}
+
 /// Built-in sample strings (View > Next Sample String): spacing
 /// control strings and kern words, cycled around the open glyph.
 const SAMPLE_STRINGS: &[&str] = &[
@@ -3433,6 +3441,9 @@ struct Workspace {
     show_color_preview: bool,
     /// Which built-in sample string the buffer shows.
     sample_index: usize,
+    /// Font view mode: the classic grid, the Glyphs 4 detail grid
+    /// (info beside every glyph), or the property-table list.
+    font_view_mode: FontViewMode,
     /// Draw node trajectories + velocity dots across the first axis
     /// (higher-order interpolation view).
     show_trajectories: bool,
@@ -4418,7 +4429,14 @@ impl Workspace {
     /// height divides the visible height evenly, so no row is left
     /// sliced in half at the bottom edge.
     fn grid_cell_metrics(&self) -> GridFit {
-        Self::solve_grid(self.grid_viewport, self.grid_cell_size, GRID_PAD)
+        // Detail mode needs room for the info lines: the cell floor
+        // rises, whatever the zoom slider says.
+        let size = if self.font_view_mode == FontViewMode::Detail {
+            self.grid_cell_size.max(148.0)
+        } else {
+            self.grid_cell_size
+        };
+        Self::solve_grid(self.grid_viewport, size, GRID_PAD)
     }
 
     /// Same solve for the editor sidebar's mini grid, against its own
@@ -4506,6 +4524,19 @@ impl Workspace {
         let unicode_label: Option<SharedString> = entry
             .codepoint
             .map(|c| format!("U+{:04X}", c as u32).into());
+        let detail_info: Option<SharedString> = (self.font_view_mode
+            == FontViewMode::Detail
+            && !jump_on_click)
+            .then(|| {
+                let category = entry
+                    .codepoint
+                    .map(|c| {
+                        runebender_core::category::GlyphCategory::from_codepoint(c)
+                            .display_name()
+                    })
+                    .unwrap_or("Unencoded");
+                format!("{category} · {:.0}", entry.advance).into()
+            });
         let selected = if jump_on_click {
             matches!(self.mode, Mode::Editor(i) if i == index)
         } else {
@@ -4615,8 +4646,195 @@ impl Workspace {
                                 })
                                 .child(unicode_label.unwrap_or_else(|| "".into())),
                         )
+                    })
+                    // Detail mode's extra line: category and advance,
+                    // the Glyphs 4 detail-grid info.
+                    .when(detail_info.is_some(), |el| {
+                        el.child(
+                            div()
+                                .text_color(t::text_muted())
+                                .child(detail_info.clone().unwrap_or_default()),
+                        )
                     }),
             ))
+    }
+
+    /// The List view: one row per glyph, one column per property —
+    /// the Glyphs table. Click selects (cmd toggles, shift extends),
+    /// double-click opens the editor; values are the active
+    /// master's, edited through the Glyph panel, which already
+    /// batch-edits a multi-selection.
+    fn glyph_list_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let Some(font) = self.font() else {
+            return div().into_any_element();
+        };
+        let order = self.glyph_order();
+        const W_UNI: f32 = 68.0;
+        const W_NUM: f32 = 52.0;
+        const W_GROUP: f32 = 84.0;
+        const W_CAT: f32 = 92.0;
+        let head = |label: &'static str, w: f32| {
+            div()
+                .w(px(w))
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(t::text_muted())
+                .child(label)
+        };
+        let mut list = div()
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .px_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .py_1()
+                    .border_b_1()
+                    .border_color(t::panel_outline())
+                    .child(div().w(px(14.0)).flex_shrink_0())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(80.0))
+                            .text_xs()
+                            .text_color(t::text_muted())
+                            .child("Name"),
+                    )
+                    .child(head("Unicode", W_UNI))
+                    .child(head("Width", W_NUM))
+                    .child(head("LSB", W_NUM))
+                    .child(head("RSB", W_NUM))
+                    .child(head("Group L", W_GROUP))
+                    .child(head("Group R", W_GROUP))
+                    .child(head("Category", W_CAT)),
+            );
+        let mut rows = div()
+            .id("glyph-list")
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        for &index in order.iter() {
+            let entry = &font.glyphs[index];
+            let name = entry.name.clone();
+            let selected = self.selected == Some(index)
+                || self.multi_selected.contains(name.as_ref());
+            let mark = entry.mark.as_deref().and_then(t::mark_color);
+            let ink = font.ink_bounds(index);
+            let (lsb, rsb) = match ink {
+                Some(r) => (
+                    format!("{:.0}", r.x0),
+                    format!("{:.0}", entry.advance - r.x1),
+                ),
+                None => (String::new(), String::new()),
+            };
+            let group = |left: bool| {
+                runebender_core::glyph_ops::kern_group(
+                    &font.font,
+                    name.as_ref(),
+                    left,
+                )
+                .map(|g| {
+                    g.as_str()
+                        .replace("public.kern1.", "")
+                        .replace("public.kern2.", "")
+                })
+                .unwrap_or_default()
+            };
+            let category = entry
+                .codepoint
+                .map(|c| {
+                    runebender_core::category::GlyphCategory::from_codepoint(c)
+                        .display_name()
+                        .to_string()
+                })
+                .unwrap_or_else(|| "Unencoded".into());
+            let text_color = if selected { t::text() } else { t::text_muted() };
+            let cell = |value: String, w: f32| {
+                div()
+                    .w(px(w))
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(text_color)
+                    .overflow_hidden()
+                    .child(value)
+            };
+            rows = rows.child(
+                div()
+                    .id(("glyph-row", index))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .h(px(24.0))
+                    .px_0p5()
+                    .rounded_sm()
+                    .when(selected, |el| el.bg(t::cell_selected_bg()))
+                    .cursor_pointer()
+                    .on_click(cx.listener(
+                        move |this, event: &gpui::ClickEvent, _, cx| {
+                            this.status_note = None;
+                            let modifiers = event.modifiers();
+                            if modifiers.platform {
+                                this.grid_toggle_multi(index);
+                            } else if modifiers.shift {
+                                this.grid_extend_multi(index);
+                            } else {
+                                this.selected = Some(index);
+                                this.multi_selected.clear();
+                            }
+                            if event.click_count() >= 2 {
+                                this.open_editor(index);
+                            }
+                            cx.notify();
+                        },
+                    ))
+                    .child(
+                        div()
+                            .w(px(14.0))
+                            .flex_shrink_0()
+                            .child(div().w(px(9.0)).h(px(9.0)).rounded_full().bg(
+                                mark.unwrap_or(gpui::Rgba {
+                                    r: 0.0,
+                                    g: 0.0,
+                                    b: 0.0,
+                                    a: 0.0,
+                                }),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(80.0))
+                            .text_sm()
+                            .text_color(if selected {
+                                t::accent()
+                            } else {
+                                t::text()
+                            })
+                            .overflow_hidden()
+                            .child(name.clone()),
+                    )
+                    .child(cell(
+                        entry
+                            .codepoint
+                            .map(|c| format!("U+{:04X}", c as u32))
+                            .unwrap_or_default(),
+                        W_UNI,
+                    ))
+                    .child(cell(format!("{:.0}", entry.advance), W_NUM))
+                    .child(cell(lsb, W_NUM))
+                    .child(cell(rsb, W_NUM))
+                    .child(cell(group(true), W_GROUP))
+                    .child(cell(group(false), W_GROUP))
+                    .child(cell(category, W_CAT)),
+            );
+        }
+        list.child(rows).into_any_element()
     }
 
     /// Left sidebar tile: search plus the category filter list,
@@ -18059,6 +18277,51 @@ impl Workspace {
                         .text_color(t::text_muted())
                         .child(center),
                 )
+                .child({
+                    // Grid · Detail · List, the Glyphs 4 view modes,
+                    // beside the cell zoom.
+                    let mode_button = |id: &'static str,
+                                       label: &'static str,
+                                       mode: FontViewMode,
+                                       current: FontViewMode,
+                                       cx: &mut Context<Self>| {
+                        div()
+                            .id(id)
+                            .px_1p5()
+                            .rounded_sm()
+                            .text_xs()
+                            .cursor_pointer()
+                            .text_color(if mode == current {
+                                t::accent()
+                            } else {
+                                t::text_muted()
+                            })
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.font_view_mode = mode;
+                                cx.notify();
+                            }))
+                    };
+                    let current = self.font_view_mode;
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_0p5()
+                        .mr_2()
+                        .child(mode_button(
+                            "view-grid", "Grid", FontViewMode::Grid, current, cx,
+                        ))
+                        .child(mode_button(
+                            "view-detail",
+                            "Detail",
+                            FontViewMode::Detail,
+                            current,
+                            cx,
+                        ))
+                        .child(mode_button(
+                            "view-list", "List", FontViewMode::List, current, cx,
+                        ))
+                })
                 .children(self.cell_slider.as_ref().map(|slider| {
                     div().w(px(140.0)).child(flat_slider(slider, cx))
                 }));
@@ -18830,8 +19093,8 @@ impl Render for Workspace {
                         .min_h(px(0.0))
                         .flex()
                         .flex_col()
-                        .child(
-                            div()
+                        .child({
+                            let grid_block = div()
                                 .id("glyph-grid")
                                 .flex_1()
                                 .min_h(px(0.0))
@@ -18876,8 +19139,16 @@ impl Render for Workspace {
                                             cx.notify();
                                         }
                                     },
-                                )),
-                        )
+                                ));
+                            // List swaps the whole grid for the
+                            // property table; Grid and Detail share
+                            // the cell pipeline.
+                            if self.font_view_mode == FontViewMode::List {
+                                self.glyph_list_view(cx)
+                            } else {
+                                grid_block.into_any_element()
+                            }
+                        })
                         // One bar per column bottom: the grid's lives
                         // here so the sidebars run past it.
                         .child(self.status_bar(cx))
@@ -20248,6 +20519,7 @@ fn main() {
                         color_selected: 0,
                         show_color_preview: true,
                         sample_index: 0,
+                        font_view_mode: FontViewMode::Grid,
                         show_trajectories: false,
                         hoi_live: None,
                         ease_input,
