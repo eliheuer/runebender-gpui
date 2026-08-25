@@ -2442,6 +2442,19 @@ fn bake_masks(glyph: &mut norad::Glyph) -> bool {
 /// smart filters; ours reuse the search-field predicate language.
 const SAVED_FILTERS_KEY: &str = "com.runebender.savedFilters";
 
+/// UFO-standard glyph name -> production name mapping (consumed by
+/// ufo2ft/fontc at compile time).
+const PSNAMES_KEY: &str = "public.postscriptNames";
+
+fn read_production_name(font: &norad::Font, glyph: &str) -> Option<String> {
+    match font.lib.get(PSNAMES_KEY)? {
+        plist::Value::Dictionary(d) => {
+            d.get(glyph)?.as_string().map(str::to_string)
+        }
+        _ => None,
+    }
+}
+
 fn read_saved_filters(font: &norad::Font) -> Vec<(String, String)> {
     let Some(plist::Value::Array(rows)) = font.lib.get(SAVED_FILTERS_KEY)
     else {
@@ -3951,6 +3964,9 @@ struct GlyphInputs {
     /// synced across every master.
     lsb_key: gpui::Entity<gpui_component::input::InputState>,
     rsb_key: gpui::Entity<gpui_component::input::InputState>,
+    /// Export (production) name, written to public.postscriptNames
+    /// in every master's lib; ufo2ft renames on compile.
+    production: gpui::Entity<gpui_component::input::InputState>,
 }
 
 struct MetricInputs {
@@ -6841,6 +6857,10 @@ impl Workspace {
                     )
                 },
             )
+            .child(input_row(
+                "Production Name",
+                &self.glyph_inputs.production,
+            ))
             .child(input_row("Note", &self.glyph_inputs.note))
             // A part glyph's smart axis ("Width,0,100"): defines the
             // axis and seeds the top pole layer.
@@ -14956,6 +14976,49 @@ impl Workspace {
         }
     }
 
+    /// Set or clear the glyph's production (export) name in every
+    /// master's public.postscriptNames mapping.
+    fn apply_glyph_production(&mut self, text: &str) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(project) = self.project.as_mut() else { return };
+        let name = project.active_font().glyphs[index].name.to_string();
+        let text = text.trim().to_string();
+        for master in project.masters.iter_mut() {
+            let dict = match master.font.lib.get_mut(PSNAMES_KEY) {
+                Some(plist::Value::Dictionary(d)) => d,
+                _ => {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    master.font.lib.insert(
+                        PSNAMES_KEY.into(),
+                        plist::Value::Dictionary(plist::Dictionary::new()),
+                    );
+                    match master.font.lib.get_mut(PSNAMES_KEY) {
+                        Some(plist::Value::Dictionary(d)) => d,
+                        _ => continue,
+                    }
+                }
+            };
+            let before = dict.get(&name).and_then(|v| v.as_string());
+            if text.is_empty() {
+                if before.is_some() {
+                    dict.remove(&name);
+                    if dict.is_empty() {
+                        master.font.lib.remove(PSNAMES_KEY);
+                    }
+                    master.dirty = true;
+                }
+            } else if before != Some(text.as_str()) {
+                dict.insert(
+                    name.clone(),
+                    plist::Value::String(text.clone()),
+                );
+                master.dirty = true;
+            }
+        }
+    }
+
     /// Rename the selected glyph in every master, updating components,
     /// groups, kerning, and the open text session.
     fn apply_glyph_rename(&mut self, new_name: &str) {
@@ -15145,6 +15208,9 @@ impl Workspace {
         let note_input = self.glyph_inputs.note.clone();
         let lkey_input = self.glyph_inputs.lsb_key.clone();
         let rkey_input = self.glyph_inputs.rsb_key.clone();
+        let production =
+            read_production_name(&font.font, name.as_str()).unwrap_or_default();
+        let production_input = self.glyph_inputs.production.clone();
         set(&name_input, name, window, cx);
         set(&unicode_input, unicode, window, cx);
         set(&l_input, group_l, window, cx);
@@ -15152,6 +15218,7 @@ impl Workspace {
         set(&note_input, note, window, cx);
         set(&lkey_input, lkey, window, cx);
         set(&rkey_input, rkey, window, cx);
+        set(&production_input, production, window, cx);
     }
 
     /// Auto-generated feature blocks from glyph names, the Glyphs
@@ -22736,6 +22803,7 @@ fn main() {
                                         }
                                         6 => this.apply_metrics_key(true, &text),
                                         7 => this.apply_metrics_key(false, &text),
+                                        8 => this.apply_glyph_production(&text),
                                         _ => this.apply_kern_group(false, &text),
                                     }
                                     this.refresh_glyph_inputs(true, window, cx);
@@ -23007,6 +23075,9 @@ fn main() {
                     let sub_gswitch = glyph_sub(cx, window, &switch_input, 5);
                     let sub_glk = glyph_sub(cx, window, &lsb_key_input, 6);
                     let sub_grk = glyph_sub(cx, window, &rsb_key_input, 7);
+                    let production_input = metric(cx, window);
+                    let sub_gprod =
+                        glyph_sub(cx, window, &production_input, 8);
                     let subscription = cx.subscribe_in(&search, window, {
                         let search = search.clone();
                         move |this: &mut Workspace,
@@ -23102,6 +23173,7 @@ fn main() {
                             switch_at: switch_input,
                             lsb_key: lsb_key_input,
                             rsb_key: rsb_key_input,
+                            production: production_input,
                         },
                         metric_inputs: MetricInputs {
                             width: width_input,
@@ -23172,7 +23244,8 @@ fn main() {
                         _subscriptions: vec![
                             subscription, sub_w, sub_l, sub_r, sub_x, sub_y,
                             sub_gn, sub_gu, sub_gl, sub_gr, sub_gnote,
-                            sub_gswitch, sub_glk, sub_grk, sub_comp,
+                            sub_gswitch, sub_glk, sub_grk, sub_gprod,
+                            sub_comp,
                             sub_corner, sub_note, sub_smart_axis,
                             sub_smart_value, sub_group_name, sub_axis_map,
                             sub_sw, sub_sh, sub_anchor, sub_ref,
@@ -23564,6 +23637,24 @@ mod tests {
             "feature kern {\n} kern;\n", "liga", "    sub f i by fi;\n",
         );
         assert!(plain.trim_end().ends_with("} liga;"));
+    }
+
+    #[test]
+    fn production_names_read_from_lib() {
+        let mut font = norad::Font::new();
+        assert_eq!(read_production_name(&font, "uni0627"), None);
+        let mut dict = plist::Dictionary::new();
+        dict.insert(
+            "alef-ar".into(),
+            plist::Value::String("uni0627".into()),
+        );
+        font.lib
+            .insert(PSNAMES_KEY.into(), plist::Value::Dictionary(dict));
+        assert_eq!(
+            read_production_name(&font, "alef-ar").as_deref(),
+            Some("uni0627")
+        );
+        assert_eq!(read_production_name(&font, "beh-ar"), None);
     }
 
     #[test]
