@@ -91,6 +91,19 @@ gpui::actions!(
         AddExtremes,
         Reinterpolate,
         ExportGlyphSvg,
+        TidyPaths,
+        CorrectPathDirection,
+        RoundCoordinates,
+        SelectAllPoints,
+        DeselectAllPoints,
+        InvertPointSelection,
+        NewGlyph,
+        DuplicateGlyph,
+        RemoveGlyphCmd,
+        FilterOffsetCurve,
+        FilterExtrude,
+        FilterRoughen,
+        FilterSlant,
         SyncMetrics,
         ShowAllMasters,
         BakeMasks,
@@ -203,23 +216,66 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Undo", Undo),
                 MenuItem::action("Redo", Redo),
                 MenuItem::separator(),
-                MenuItem::action("Show All Masters", ShowAllMasters),
-                MenuItem::separator(),
-                MenuItem::action("Copy Contours", CopyContours),
-                MenuItem::action("Paste Contours", PasteContours),
-                MenuItem::separator(),
+                MenuItem::action("Copy", CopyContours),
+                MenuItem::action("Paste", PasteContours),
                 MenuItem::action(
                     "Copy Selected Glyphs as Text",
                     CopySelectedGlyphs,
                 ),
+                MenuItem::separator(),
+                MenuItem::action("Select All", SelectAllPoints),
+                MenuItem::action("Deselect All", DeselectAllPoints),
+                MenuItem::action(
+                    "Invert Selection",
+                    InvertPointSelection,
+                ),
+            ],
+            disabled: false,
+        },
+        // The Glyph / Path / Filter split mirrors Glyphs 4: Glyph
+        // manages the glyph set, Path holds outline commands, Filter
+        // the parameterized effects.
+        Menu {
+            name: "Glyph".into(),
+            items: vec![
+                MenuItem::action("New Glyph", NewGlyph),
+                MenuItem::action("Duplicate Glyph", DuplicateGlyph),
+                MenuItem::action("Remove Glyph", RemoveGlyphCmd),
+                MenuItem::separator(),
+                MenuItem::action("Update Metrics", SyncMetrics),
+                MenuItem::action("Reinterpolate", Reinterpolate),
+                MenuItem::action("Decompose Components", Decompose),
+                MenuItem::separator(),
+                MenuItem::action("Check Joining", CheckJoining),
+                MenuItem::action("Bake Masks", BakeMasks),
+                MenuItem::action("Export Glyph as SVG", ExportGlyphSvg),
+                MenuItem::separator(),
+                MenuItem::action("Trace Image…", TraceImage),
+                MenuItem::action("Place Image…", PlaceImage),
+                MenuItem::action("Import SVG…", ImportSvg),
+                MenuItem::action("Remove Image", RemoveImage),
             ],
             disabled: false,
         },
         Menu {
-            name: "Glyph".into(),
+            name: "Path".into(),
             items: vec![
+                MenuItem::action("Tidy Up Paths", TidyPaths),
+                MenuItem::action("Add Extremes", AddExtremes),
+                MenuItem::action("Round Coordinates", RoundCoordinates),
+                MenuItem::separator(),
+                MenuItem::action(
+                    "Correct Path Direction",
+                    CorrectPathDirection,
+                ),
+                MenuItem::action("Reverse Contours", ReverseContours),
+                MenuItem::action("Set Start Point", SetStartPoint),
+                MenuItem::separator(),
                 MenuItem::action("Remove Overlap", RemoveOverlap),
-                MenuItem::action("Decompose Components", Decompose),
+                MenuItem::action("Union", BooleanUnion),
+                MenuItem::action("Subtract", BooleanSubtract),
+                MenuItem::action("Intersect", BooleanIntersect),
+                MenuItem::action("Exclude", BooleanExclude),
                 MenuItem::separator(),
                 MenuItem::action("Flip Horizontal", FlipHorizontal),
                 MenuItem::action("Flip Vertical", FlipVertical),
@@ -228,32 +284,30 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Rotate 180°", Rotate180),
                 MenuItem::action("Duplicate Selection", DuplicateSelection),
                 MenuItem::action("Duplicate + Repeat", DuplicateRepeat),
-                MenuItem::action("Round Corners", RoundCorners),
-                MenuItem::action("Add Extremes", AddExtremes),
-                MenuItem::action("Sync Metrics", SyncMetrics),
-                MenuItem::action("Reinterpolate", Reinterpolate),
-                MenuItem::action("Export Glyph as SVG", ExportGlyphSvg),
-                MenuItem::action("Bake Masks", BakeMasks),
-                MenuItem::action("Check Joining", CheckJoining),
-                MenuItem::action("Hyperbezier to Cubic", HyperToCubic),
-                MenuItem::action("Quadratic to Cubic", QuadsToCubics),
-                MenuItem::action("Cubic to Quadratic", CubicsToQuads),
-                MenuItem::action("Reverse Contours", ReverseContours),
-                MenuItem::action("Set Start Point", SetStartPoint),
-                MenuItem::separator(),
-                MenuItem::action("Union", BooleanUnion),
-                MenuItem::action("Subtract", BooleanSubtract),
-                MenuItem::action("Intersect", BooleanIntersect),
-                MenuItem::action("Exclude", BooleanExclude),
-                MenuItem::separator(),
-                MenuItem::action("Trace Image…", TraceImage),
-                MenuItem::action("Place Image…", PlaceImage),
-                MenuItem::action("Import SVG…", ImportSvg),
-                MenuItem::action("Remove Image", RemoveImage),
                 MenuItem::separator(),
                 MenuItem::action("Harmonize", Harmonize),
                 MenuItem::action("Balance", Balance),
                 MenuItem::action("Optimize", Optimize),
+                MenuItem::separator(),
+                MenuItem::action("Hyperbezier to Cubic", HyperToCubic),
+                MenuItem::action("Quadratic to Cubic", QuadsToCubics),
+                MenuItem::action("Cubic to Quadratic", CubicsToQuads),
+            ],
+            disabled: false,
+        },
+        // Parameterized filters take their values from the matching
+        // grid-side section (Offset, Extrude, Roughen, Slanter).
+        Menu {
+            name: "Filter".into(),
+            items: vec![
+                MenuItem::action("Offset Curve", FilterOffsetCurve),
+                MenuItem::action("Extrude", FilterExtrude),
+                MenuItem::action("Roughen", FilterRoughen),
+                MenuItem::action("Round Corners", RoundCorners),
+                MenuItem::action("Slanter", FilterSlant),
+                MenuItem::separator(),
+                MenuItem::action("Add Extremes", AddExtremes),
+                MenuItem::action("Remove Overlap", RemoveOverlap),
             ],
             disabled: false,
         },
@@ -261,6 +315,8 @@ fn app_menus() -> Vec<gpui::Menu> {
             name: "View".into(),
             items: vec![
                 MenuItem::action("Zoom to Fit", ZoomToFit),
+                MenuItem::separator(),
+                MenuItem::action("Show All Masters", ShowAllMasters),
                 MenuItem::separator(),
                 MenuItem::action("Sort Glyphs by Name", SortByName),
                 MenuItem::action("Sort Glyphs by Unicode", SortByUnicode),
@@ -2320,6 +2376,113 @@ fn glyph_svg(
         asc = ascender,
         d = path.to_svg(),
     )
+}
+
+/// Path > Tidy up Paths: drop on-curve points that duplicate the
+/// previous on-curve point (zero-length line segments), including
+/// the closing wrap of a closed contour. Conservative on purpose —
+/// curve simplification is Simplify's job, not Tidy's. Returns how
+/// many points were removed.
+fn tidy_contours(glyph: &mut norad::Glyph) -> usize {
+    use norad::PointType;
+    let mut removed = 0usize;
+    for contour in glyph.contours.iter_mut() {
+        let closed = contour
+            .points
+            .first()
+            .is_none_or(|p| p.typ != PointType::Move);
+        let mut i = 1;
+        while i < contour.points.len() {
+            let dup = {
+                let prev = &contour.points[i - 1];
+                let here = &contour.points[i];
+                here.typ == PointType::Line
+                    && prev.typ != PointType::OffCurve
+                    && (here.x - prev.x).abs() < 0.01
+                    && (here.y - prev.y).abs() < 0.01
+            };
+            if dup {
+                contour.points.remove(i);
+                removed += 1;
+            } else {
+                i += 1;
+            }
+        }
+        // A closed contour's last Line landing on the first point is
+        // the same zero-length segment, wrapped.
+        if closed && contour.points.len() > 2 {
+            let first = contour.points[0].clone();
+            let last = contour.points.last().unwrap().clone();
+            if last.typ == PointType::Line
+                && first.typ != PointType::OffCurve
+                && (last.x - first.x).abs() < 0.01
+                && (last.y - first.y).abs() < 0.01
+            {
+                contour.points.pop();
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
+/// Path > Correct Path Direction: outer contours counter-clockwise,
+/// holes clockwise (the PostScript/UFO cubic convention, and what
+/// remove-overlap expects). Depth = how many other contours contain
+/// the contour's first on-curve point; even is outer. Returns how
+/// many contours were reversed.
+fn correct_path_directions(glyph: &mut norad::Glyph) -> usize {
+    use kurbo::Shape as _;
+    let paths: Vec<BezPath> = glyph
+        .contours
+        .iter()
+        .map(runebender_core::glyph_paths::contour_to_bezpath)
+        .collect();
+    let mut flip: std::collections::HashSet<(usize, usize)> =
+        std::collections::HashSet::new();
+    let mut flipped = 0usize;
+    for (ci, contour) in glyph.contours.iter().enumerate() {
+        let Some(probe) = contour
+            .points
+            .iter()
+            .find(|p| p.typ != norad::PointType::OffCurve)
+        else {
+            continue;
+        };
+        let pt = kurbo::Point::new(probe.x, probe.y);
+        let depth = paths
+            .iter()
+            .enumerate()
+            .filter(|(oi, path)| *oi != ci && path.contains(pt))
+            .count();
+        let area = paths[ci].area();
+        let want_ccw = depth % 2 == 0;
+        if (want_ccw && area < 0.0) || (!want_ccw && area > 0.0) {
+            flip.insert((ci, 0));
+            flipped += 1;
+        }
+    }
+    if !flip.is_empty() {
+        runebender_core::glyph_ops::reverse_contours(glyph, &flip);
+    }
+    flipped
+}
+
+/// Path > Round Coordinates: every point onto the integer grid.
+/// Returns how many points moved.
+fn round_glyph_coordinates(glyph: &mut norad::Glyph) -> usize {
+    let mut moved = 0usize;
+    for contour in glyph.contours.iter_mut() {
+        for p in contour.points.iter_mut() {
+            let (rx, ry) = (p.x.round(), p.y.round());
+            if rx != p.x || ry != p.y {
+                p.x = rx;
+                p.y = ry;
+                moved += 1;
+            }
+        }
+    }
+    moved
 }
 
 // ---- joining QA (Arabic connecting-stroke bands) ----
@@ -9157,6 +9320,140 @@ impl Workspace {
         }
         self.status_note =
             Some(format!("{name}: reinterpolated from the other masters").into());
+    }
+
+    /// Path > Tidy up Paths on the current glyph (active master).
+    fn command_tidy_paths(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        self.push_undo_snapshot(index);
+        let removed = self
+            .font_mut()
+            .and_then(|f| f.edit_glyph(index, |g| tidy_contours(g)))
+            .unwrap_or(0);
+        if removed == 0 {
+            self.editor.undo.pop();
+        }
+        self.status_note = Some(
+            format!("Tidy up Paths: {removed} point(s) removed").into(),
+        );
+    }
+
+    /// Path > Correct Path Direction on the current glyph.
+    fn command_correct_path_direction(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        self.push_undo_snapshot(index);
+        let flipped = self
+            .font_mut()
+            .and_then(|f| f.edit_glyph(index, |g| correct_path_directions(g)))
+            .unwrap_or(0);
+        if flipped == 0 {
+            self.editor.undo.pop();
+        }
+        self.status_note = Some(
+            format!("Correct Path Direction: {flipped} contour(s) reversed")
+                .into(),
+        );
+    }
+
+    /// Path > Round Coordinates on the current glyph.
+    fn command_round_coordinates(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        self.push_undo_snapshot(index);
+        let moved = self
+            .font_mut()
+            .and_then(|f| f.edit_glyph(index, |g| round_glyph_coordinates(g)))
+            .unwrap_or(0);
+        if moved == 0 {
+            self.editor.undo.pop();
+        }
+        self.status_note = Some(
+            format!("Round Coordinates: {moved} point(s) moved").into(),
+        );
+    }
+
+    /// Edit > Select All / Deselect All / Invert Selection on the
+    /// open glyph's points.
+    fn command_select_points(&mut self, mode: u8) {
+        let Mode::Editor(index) = self.mode else { return };
+        let all: Vec<(usize, usize)> = self
+            .font()
+            .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
+            .map(|g| {
+                g.contours
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(ci, c)| {
+                        (0..c.points.len()).map(move |pi| (ci, pi))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        match mode {
+            0 => {
+                self.editor.selected = all
+                    .into_iter()
+                    .filter(|id| !self.editor.locked_points.contains(id))
+                    .collect();
+            }
+            1 => self.editor.selected.clear(),
+            _ => {
+                let current = std::mem::take(&mut self.editor.selected);
+                self.editor.selected = all
+                    .into_iter()
+                    .filter(|id| {
+                        !current.contains(id)
+                            && !self.editor.locked_points.contains(id)
+                    })
+                    .collect();
+            }
+        }
+    }
+
+    /// Glyph > Duplicate Glyph: copy the current glyph (outline,
+    /// components, anchors, width) to the next free name.NNN in
+    /// every master, unencoded.
+    fn command_duplicate_glyph(&mut self) {
+        let Some(index) = self.current_glyph_index() else { return };
+        let Some(base) = self.font().map(|f| f.glyphs[index].name.to_string())
+        else {
+            return;
+        };
+        let Some(project) = self.project.as_mut() else { return };
+        let taken: std::collections::HashSet<String> = project
+            .masters
+            .iter()
+            .flat_map(|m| m.name_map.keys().cloned())
+            .collect();
+        let stem = base.split('.').next().unwrap_or(&base).to_string();
+        let mut counter = 1;
+        let mut name = format!("{stem}.{counter:03}");
+        while taken.contains(&name) {
+            counter += 1;
+            name = format!("{stem}.{counter:03}");
+        }
+        for master in project.masters.iter_mut() {
+            let Some(src) = master.font.get_glyph(base.as_str()).cloned()
+            else {
+                continue;
+            };
+            master.add_glyph(&name, src.width);
+            if let Some(copy) = master.font.get_glyph_mut(name.as_str()) {
+                copy.contours = src.contours.clone();
+                copy.components = src.components.clone();
+                copy.anchors = src.anchors.clone();
+                copy.width = src.width;
+                copy.lib = src.lib.clone();
+            }
+            master.dirty = true;
+            master.modified_glyphs.insert(name.clone());
+            master.refresh_from_font();
+        }
+        project.recheck_compat(&name);
+        self.selected = self
+            .font()
+            .and_then(|f| f.name_map.get(&name).copied());
+        self.sidebar_counts = None;
+        self.status_note = Some(format!("Duplicated {base} as {name}").into());
     }
 
     /// Glyph > Export Glyph as SVG: writes <name>.svg beside the
@@ -22281,6 +22578,84 @@ impl Render for Workspace {
                 this.command_add_extremes();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &TidyPaths, _, cx| {
+                this.command_tidy_paths();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &CorrectPathDirection, _, cx| {
+                this.command_correct_path_direction();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &RoundCoordinates, _, cx| {
+                this.command_round_coordinates();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SelectAllPoints, _, cx| {
+                this.command_select_points(0);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &DeselectAllPoints, _, cx| {
+                this.command_select_points(1);
+                cx.notify();
+            }))
+            .on_action(cx.listener(
+                |this, _: &InvertPointSelection, _, cx| {
+                    this.command_select_points(2);
+                    cx.notify();
+                },
+            ))
+            .on_action(cx.listener(|this, _: &NewGlyph, _, cx| {
+                this.command_add_glyph();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &DuplicateGlyph, _, cx| {
+                this.command_duplicate_glyph();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &RemoveGlyphCmd, _, cx| {
+                this.command_remove_glyph();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &FilterOffsetCurve, _, cx| {
+                if let Ok(delta) = this
+                    .offset_input
+                    .read(cx)
+                    .value()
+                    .trim()
+                    .parse::<f64>()
+                {
+                    this.command_offset(delta);
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &FilterExtrude, _, cx| {
+                let text = this.extrude_input.read(cx).value().to_string();
+                this.command_extrude(&text);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &FilterRoughen, _, cx| {
+                let text = this.roughen_input.read(cx).value().to_string();
+                this.command_roughen(&text);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &FilterSlant, _, cx| {
+                if let Ok(deg) = this
+                    .slant_input
+                    .read(cx)
+                    .value()
+                    .trim()
+                    .parse::<f64>()
+                    && deg != 0.0
+                    && deg.abs() < 89.0
+                {
+                    // Positive leans right, the italic convention.
+                    this.apply_transform(Affine::skew(
+                        deg.to_radians().tan(),
+                        0.0,
+                    ));
+                }
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &ExportGlyphSvg, _, cx| {
                 this.command_export_glyph_svg();
                 cx.notify();
@@ -22512,10 +22887,24 @@ fn main() {
             gpui::KeyBinding::new("cmd-q", Quit, None),
             gpui::KeyBinding::new("cmd-shift-h", FlipHorizontal, None),
             gpui::KeyBinding::new("cmd-shift-v", FlipVertical, None),
-            gpui::KeyBinding::new("cmd-shift-r", ReverseContours, None),
+            // Glyphs' shortcuts where they translate: Cmd-Shift-R
+            // corrects direction, Cmd-Shift-T tidies (reverse and
+            // duplicate-repeat move to Opt variants).
+            gpui::KeyBinding::new("cmd-shift-r", CorrectPathDirection, None),
+            gpui::KeyBinding::new("cmd-alt-shift-r", ReverseContours, None),
             gpui::KeyBinding::new("cmd-0", ZoomToFit, None),
             gpui::KeyBinding::new("cmd-d", DuplicateSelection, None),
-            gpui::KeyBinding::new("cmd-shift-t", DuplicateRepeat, None),
+            gpui::KeyBinding::new("cmd-shift-t", TidyPaths, None),
+            gpui::KeyBinding::new("cmd-alt-shift-t", DuplicateRepeat, None),
+            gpui::KeyBinding::new("cmd-ctrl-m", SyncMetrics, None),
+            gpui::KeyBinding::new("cmd-a", SelectAllPoints, None),
+            gpui::KeyBinding::new("cmd-alt-a", DeselectAllPoints, None),
+            gpui::KeyBinding::new(
+                "cmd-alt-shift-i",
+                InvertPointSelection,
+                None,
+            ),
+            gpui::KeyBinding::new("cmd-alt-shift-n", NewGlyph, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
@@ -24087,6 +24476,60 @@ mod tests {
         assert_eq!(read_saved_filters(&font), filters);
         write_saved_filters(&mut font, &[]);
         assert!(font.lib.get(SAVED_FILTERS_KEY).is_none());
+    }
+
+    #[test]
+    fn tidy_correct_and_round_fix_a_messy_glyph() {
+        use norad::{Contour, ContourPoint, PointType};
+        let pts = |coords: &[(f64, f64)]| -> Vec<ContourPoint> {
+            coords
+                .iter()
+                .map(|&(x, y)| {
+                    ContourPoint::new(x, y, PointType::Line, false, None, None)
+                })
+                .collect()
+        };
+        let mut glyph = norad::Glyph::new("messy");
+        // Outer square drawn clockwise (wrong), with a duplicated
+        // point and an off-grid coordinate; inner hole drawn
+        // counter-clockwise (wrong for a hole).
+        glyph.contours = vec![
+            Contour::new(
+                pts(&[
+                    (0.0, 0.0),
+                    (0.0, 400.0),
+                    (0.0, 400.0),
+                    (400.0, 400.0),
+                    (400.2, 0.0),
+                ]),
+                None,
+            ),
+            Contour::new(
+                pts(&[
+                    (100.0, 100.0),
+                    (300.0, 100.0),
+                    (300.0, 300.0),
+                    (100.0, 300.0),
+                ]),
+                None,
+            ),
+        ];
+        assert_eq!(tidy_contours(&mut glyph), 1);
+        assert_eq!(glyph.contours[0].points.len(), 4);
+        assert_eq!(round_glyph_coordinates(&mut glyph), 1);
+        assert_eq!(correct_path_directions(&mut glyph), 2);
+        use kurbo::Shape as _;
+        let outer = runebender_core::glyph_paths::contour_to_bezpath(
+            &glyph.contours[0],
+        );
+        let hole = runebender_core::glyph_paths::contour_to_bezpath(
+            &glyph.contours[1],
+        );
+        assert!(outer.area() > 0.0, "outer counter-clockwise");
+        assert!(hole.area() < 0.0, "hole clockwise");
+        // Running again changes nothing.
+        assert_eq!(correct_path_directions(&mut glyph), 0);
+        assert_eq!(tidy_contours(&mut glyph), 0);
     }
 
     #[test]
