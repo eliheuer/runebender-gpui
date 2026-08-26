@@ -481,3 +481,46 @@ these are the hands-on checks:
 11. **Stylistic set names** — a `featureNames { name "…"; };`
     block inside `feature ss01` in the Features pane compiles
     clean (Apply reports no error).
+
+## Menu system vs Glyphs 4 (2026-08-25)
+
+Menu bar restructured to Glyphs' taxonomy (sources: the Glyphs
+handbook single-page edition and the Glyphs 4 release notes).
+Ours: Runebender / File / Edit / Glyph / Path / Filter / View.
+
+Per-menu status against theirs:
+
+- **File** — matches for what we have (New Cmd-N, Open Cmd-O,
+  Save Cmd-S, Save As Cmd-Shift-S, Export Cmd-E). Missing: New
+  from Glyph Sets, New Icon Set, Font Info window (ours is a
+  grid-side section), Print.
+- **Edit** — Undo/Redo, Copy/Paste, Select All (Cmd-A),
+  Deselect All (Cmd-Opt-A), Invert Selection (Cmd-Opt-Shift-I).
+  Missing: Cut, Paste Special, Find bar, Info for Selection.
+- **Glyph** — New Glyph (Cmd-Opt-Shift-N), Duplicate Glyph,
+  Remove Glyph, Update Metrics (Cmd-Ctrl-M), Reinterpolate,
+  Decompose, plus our Check Joining / Bake Masks / SVG export /
+  image commands. Missing: Add Glyphs… dialog (recipes like
+  a:=a.alt), Update Glyph Info, Set/Reset Anchors, Add
+  Component (panel only), Create Composite, the for-all-masters
+  Opt variants.
+- **Path** — Tidy Up Paths (Cmd-Shift-T), Add Extremes, Round
+  Coordinates, Correct Path Direction (Cmd-Shift-R), Reverse
+  Contours, Set Start Point, Remove Overlap + booleans,
+  transforms, Harmonize/Balance/Optimize, curve conversions.
+  Open Corner / Reconnect and open/close live in the context
+  menu, as in Glyphs. Missing: Force Extremes, the background
+  set (Edit/Selection to/Swap/Clear/Assign Background — we have
+  a background layer but not the menu round-trip), Align
+  Selection (Cmd-Shift-A), for-all-masters variants.
+- **Filter** — Offset Curve, Extrude, Roughen, Round Corners,
+  Slanter (values from their grid-side sections), Add Extremes,
+  Remove Overlap. Missing: Hatch Outline, Rounded Font, Shape
+  Order, Simplify (new in 4), Transformations dialog,
+  Interpolate with Background, filters-as-custom-parameters.
+- **View** — Zoom to Fit, Show All Masters, master/sample
+  cycling, Measure and Theme submenus. Missing: edit-view tabs,
+  the Show toggles set (Nodes/Anchors/Guides/Hints/Bounding
+  Box…), zoom in/out steps.
+- **Script, Window, Help** — absent entirely (no scripting
+  runtime, panels are docked, no help window).
