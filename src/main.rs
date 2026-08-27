@@ -130,16 +130,41 @@ gpui::actions!(
     ]
 );
 
-/// The interface font. gpui resolves this through the platform's
-/// font list, so it is a family name rather than a bundled file.
-fn ui_font_family() -> gpui::SharedString {
-    if cfg!(target_os = "macos") {
-        ".SystemUIFont".into()
-    } else if cfg!(target_os = "windows") {
-        "Segoe UI".into()
-    } else {
-        "DejaVu Sans".into()
+/// The interface font, resolved once against what the platform
+/// actually has. A name gpui cannot resolve shapes to nothing and no
+/// text draws at all, so the preferences are tried in order and the
+/// first family the text system reports wins.
+fn ui_font_family(cx: &gpui::App) -> gpui::SharedString {
+    const PREFERRED: &[&str] = &[
+        ".SystemUIFont",
+        "SF Pro Text",
+        "SF Pro Display",
+        "Helvetica Neue",
+        "Helvetica",
+        "Segoe UI",
+        "Inter",
+        "DejaVu Sans",
+        "Arial",
+    ];
+    let available = cx.text_system().all_font_names();
+    // One line at startup, so a window with no text can be diagnosed
+    // from the terminal instead of guessed at.
+    static REPORTED: std::sync::Once = std::sync::Once::new();
+    REPORTED.call_once(|| {
+        eprintln!("interface font: {} families available", available.len());
+    });
+    for name in PREFERRED {
+        if available.iter().any(|f| f == name) {
+            return (*name).into();
+        }
     }
+    // Nothing preferred is installed: take whatever there is rather
+    // than render an empty window.
+    available
+        .into_iter()
+        .next()
+        .map(Into::into)
+        .unwrap_or_else(|| "Helvetica".into())
 }
 
 /// The application menu, used three ways: the native macOS menu bar,
@@ -22470,7 +22495,7 @@ impl Render for Workspace {
             .flex_col()
             .size_full()
             .bg(t::window_bg())
-            .font_family(ui_font_family())
+            .font_family(ui_font_family(cx))
             .text_color(t::text())
             .text_size(px(13.0))
             .key_context("Workspace")
