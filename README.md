@@ -56,6 +56,12 @@ replace gpui-component, which pulled gpui by bare URL (so revisions
 could not be pinned) and force-enabled gpui's `profiler` feature,
 whose `Instant::now()` call panics on wasm.
 
+`gpui_platform` needs its `font-kit` feature. Without it the platform
+falls back to a small embedded font list, and text shapes and paints
+without ever reaching the screen: the whole interface comes up
+wordless. `runebender-gpui --fonts` prints what gpui can see, and the
+app warns on startup if the count collapses.
+
 ## The browser build
 
 An experimental wasm build runs at <https://runebender.org/gpui/>.
