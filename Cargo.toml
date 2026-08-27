@@ -25,7 +25,11 @@ chrono = "0.4"
 # gone: it depended on gpui by bare URL, and a pin on our side built
 # a second copy of every gpui type.
 gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", rev = "3624a5bfda8a4610bf9926499517a776c7028321" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "3624a5bfda8a4610bf9926499517a776c7028321" }
+# font-kit is what gives the macOS platform its real font list. It is
+# off by default; gpui-component used to switch it on for us, and
+# without it text shapes and "paints" but rasterizes to nothing, so
+# the whole interface comes up wordless.
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "3624a5bfda8a4610bf9926499517a776c7028321", features = ["font-kit", "runtime_shaders"] }
 kurbo = "0.13.1"
 # CPU path rasterizer, for the preview's blur: gpui blurs box shadows
 # and nothing else, so a real blurred image has to be rendered here.
