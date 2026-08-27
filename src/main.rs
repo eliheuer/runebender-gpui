@@ -130,6 +130,18 @@ gpui::actions!(
     ]
 );
 
+/// The interface font. gpui resolves this through the platform's
+/// font list, so it is a family name rather than a bundled file.
+fn ui_font_family() -> gpui::SharedString {
+    if cfg!(target_os = "macos") {
+        ".SystemUIFont".into()
+    } else if cfg!(target_os = "windows") {
+        "Segoe UI".into()
+    } else {
+        "DejaVu Sans".into()
+    }
+}
+
 /// The application menu, used three ways: the native macOS menu bar,
 /// the stored menu Windows/Linux expose to `get_menus`, and the
 /// in-window menu bar drawn on every platform that has no native bar,
@@ -22448,11 +22460,19 @@ impl Render for Workspace {
             )
             .into_any_element();
 
+        // The window's text style. This used to come from the
+        // wrapper the app was mounted in; without it gpui has no
+        // family to shape with and no UI text draws at all.
+        window.set_rem_size(px(16.0));
+
         div()
             .flex()
             .flex_col()
             .size_full()
             .bg(t::window_bg())
+            .font_family(ui_font_family())
+            .text_color(t::text())
+            .text_size(px(13.0))
             .key_context("Workspace")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|this, _: &OpenFont, _, cx| {
