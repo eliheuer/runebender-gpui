@@ -8,6 +8,7 @@
 mod blur;
 mod glyph_path;
 mod theme;
+mod widgets;
 #[cfg(target_family = "wasm")]
 mod web_host;
 
@@ -4038,7 +4039,7 @@ struct Workspace {
         Mutex<std::collections::HashMap<String, Option<Arc<gpui::RenderImage>>>>,
     >,
     preview_invert: bool,
-    preview_blur_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
+    preview_blur_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
     /// Grid cell size in px, driven by the bottom bar's zoom slider.
     /// This is the *target*: cells stretch from it to fill the row.
     grid_cell_size: f32,
@@ -4065,8 +4066,8 @@ struct Workspace {
     sidebar_tab: u8,
     /// Target cell size for the editor sidebar's mini grid.
     sidebar_cell_size: f32,
-    sidebar_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
-    cell_slider: Option<gpui::Entity<gpui_component::slider::SliderState>>,
+    sidebar_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
+    cell_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
     mode: Mode,
     editor: EditorState,
     /// The editor's text buffer (the text tool): the open glyph is
@@ -4197,7 +4198,7 @@ struct Workspace {
     anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
-    axis_sliders: Vec<(usize, gpui::Entity<gpui_component::slider::SliderState>)>,
+    axis_sliders: Vec<(usize, gpui::Entity<widgets::slider::SliderState>)>,
     /// Internal outline clipboard: whole contours.
     clipboard: Vec<norad::Contour>,
     /// Web host connection (server base + file ETags), when the page
@@ -4383,55 +4384,36 @@ enum FontInfoField {
 /// a dark stripe on one side) and a ring thumb that fills solid while
 /// it is grabbed, instead of growing a translucent halo.
 fn flat_slider(
-    state: &gpui::Entity<gpui_component::slider::SliderState>,
+    state: &gpui::Entity<widgets::slider::SliderState>,
     cx: &gpui::App,
-) -> impl IntoElement + use<> {
-    use gpui::{InteractiveElement as _, StatefulInteractiveElement as _};
-    use gpui_base::{Slider as BaseSlider, SliderIndicator, SliderThumb, SliderTrack};
-
+) -> gpui::AnyElement {
     const TRACK: f32 = 3.0;
     const THUMB: f32 = 12.0;
-    let pct = state.read(cx).percentage().end;
-    let thumb = SliderThumb::new(state)
-        .axis(gpui::Axis::Horizontal)
-        .absolute()
-        .top(px((TRACK - THUMB) / 2.0))
-        .left(gpui::relative(pct))
-        .ml(px(-THUMB / 2.0))
-        .w(px(THUMB))
-        .h(px(THUMB))
-        .flex_shrink_0()
-        .rounded_full()
-        .border_2()
-        .border_color(t::accent())
-        .bg(t::panel_bg())
-        .hover(|el| el.bg(t::accent()))
-        .active(|el| el.bg(t::accent()));
-    BaseSlider::new(state)
-        .axis(gpui::Axis::Horizontal)
-        .flex()
-        .items_center()
+
+    let pct = state.read(cx).percentage();
+    let bar = div()
+        .relative()
         .w_full()
+        .h(px(TRACK))
+        .rounded_full()
+        // One colour end to end: this reports a value, it is not a
+        // progress bar.
+        .bg(t::accent())
         .child(
-            SliderTrack::new(state)
-                .axis(gpui::Axis::Horizontal)
-                .flex()
-                .items_center()
+            div()
+                .absolute()
+                .top(px((TRACK - THUMB) / 2.0))
+                .left(gpui::relative(pct))
+                .ml(px(-THUMB / 2.0))
+                .w(px(THUMB))
                 .h(px(THUMB))
-                .w_full()
                 .flex_shrink_0()
-                .child(
-                    SliderIndicator::new(state)
-                        .relative()
-                        .w_full()
-                        .h(px(TRACK))
-                        .rounded_full()
-                        // One colour end to end: this reports a value,
-                        // it is not a progress bar.
-                        .bg(t::accent())
-                        .child(thumb),
-                ),
-        )
+                .rounded_full()
+                .border_2()
+                .border_color(t::accent())
+                .bg(t::panel_bg()),
+        );
+    widgets::slider::track(state, px(THUMB), bar).into_any_element()
 }
 
 /// Everything the blurred preview image depends on, hashed: the line
@@ -20227,9 +20209,6 @@ impl Workspace {
             if axis.max <= axis.min {
                 continue; // degenerate axis: nothing to slide
             }
-            // NOTE: .max() must precede .min(): SliderState starts at
-            // max=100 and each setter clamps the current value, so a
-            // min above 100 panics (f32::clamp with min > max).
             // Start where the active master sits, not at the axis
             // default: opening a Bold master with the handle parked on
             // Regular means the first touch jumps the design.
@@ -20244,7 +20223,7 @@ impl Workspace {
                 })
                 .unwrap_or(axis.default);
             let slider = cx.new(|_| {
-                gpui_component::slider::SliderState::new()
+                widgets::slider::SliderState::new()
                     .max(axis.max as f32)
                     .min(axis.min as f32)
                     .step(1.0)
@@ -20254,13 +20233,13 @@ impl Workspace {
             let sub = cx.subscribe_in(&slider, window, {
                 move |this: &mut Workspace,
                       _,
-                      event: &gpui_component::slider::SliderEvent,
+                      event: &widgets::slider::SliderEvent,
                       _window,
                       cx| {
-                    let gpui_component::slider::SliderEvent::Change(value) = event else {
+                    let widgets::slider::SliderEvent::Change(value) = event else {
                         return;
                     };
-                    let raw = value.start() as f64;
+                    let raw = *value as f64;
                     let landed = {
                         let Some(project) = this.project.as_mut() else {
                             return;
@@ -20651,7 +20630,7 @@ impl Workspace {
             project.master_at_location()
         };
         // Sliders show design coordinates; the location is normalized.
-        let slider_values: Vec<(gpui::Entity<gpui_component::slider::SliderState>, f32)> =
+        let slider_values: Vec<(gpui::Entity<widgets::slider::SliderState>, f32)> =
             {
                 let Some(project) = self.project.as_ref() else { return };
                 self.axis_sliders
@@ -21368,7 +21347,7 @@ impl Workspace {
             return;
         }
         let slider = cx.new(|_| {
-            gpui_component::slider::SliderState::new()
+            widgets::slider::SliderState::new()
                 .max(12.0)
                 .min(0.0)
                 .step(0.5)
@@ -21377,14 +21356,14 @@ impl Workspace {
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace,
                   _,
-                  event: &gpui_component::slider::SliderEvent,
+                  event: &widgets::slider::SliderEvent,
                   _window,
                   cx| {
-                let gpui_component::slider::SliderEvent::Change(value) = event
+                let widgets::slider::SliderEvent::Change(value) = event
                 else {
                     return;
                 };
-                this.preview_blur = value.start();
+                this.preview_blur = *value;
                 cx.notify();
             }
         });
@@ -21397,7 +21376,7 @@ impl Workspace {
             return;
         }
         let slider = cx.new(|_| {
-            gpui_component::slider::SliderState::new()
+            widgets::slider::SliderState::new()
                 .max(120.0)
                 .min(24.0)
                 .step(2.0)
@@ -21406,14 +21385,14 @@ impl Workspace {
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace,
                   _,
-                  event: &gpui_component::slider::SliderEvent,
+                  event: &widgets::slider::SliderEvent,
                   _window,
                   cx| {
-                let gpui_component::slider::SliderEvent::Change(value) = event
+                let widgets::slider::SliderEvent::Change(value) = event
                 else {
                     return;
                 };
-                this.sidebar_cell_size = value.start();
+                this.sidebar_cell_size = *value;
                 this.sidebar_scroll_row = 0;
                 cx.notify();
             }
@@ -21427,7 +21406,7 @@ impl Workspace {
             return;
         }
         let slider = cx.new(|_| {
-            gpui_component::slider::SliderState::new()
+            widgets::slider::SliderState::new()
                 .max(200.0)
                 .min(48.0)
                 .step(4.0)
@@ -21436,14 +21415,14 @@ impl Workspace {
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace,
                   _,
-                  event: &gpui_component::slider::SliderEvent,
+                  event: &widgets::slider::SliderEvent,
                   _window,
                   cx| {
-                let gpui_component::slider::SliderEvent::Change(value) = event
+                let widgets::slider::SliderEvent::Change(value) = event
                 else {
                     return;
                 };
-                this.grid_cell_size = value.start();
+                this.grid_cell_size = *value;
                 cx.notify();
             }
         });
@@ -22202,7 +22181,7 @@ impl Render for Workspace {
             self.refresh_coord_inputs(false, window, cx);
         }
         self.refresh_glyph_inputs(false, window, cx);
-        use gpui_component::resizable::{h_resizable, resizable_panel, v_resizable};
+        use widgets::resizable::{h_resizable, resizable_panel, v_resizable};
 
         // Glyphs-style docked layout: left sidebar | center | right
         // sidebar as flat resizable panels, no floating containers.
