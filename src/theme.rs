@@ -371,3 +371,18 @@ pub fn anchor() -> Rgba {
         .map(c)
         .unwrap_or_else(|| c(theme().role("danger")))
 }
+
+#[cfg(test)]
+mod colour_tests {
+    #[test]
+    fn text_colours_are_opaque() {
+        for (name, c) in [
+            ("text", super::text()),
+            ("text_muted", super::text_muted()),
+            ("accent", super::accent()),
+        ] {
+            println!("{name}: r={} g={} b={} a={}", c.r, c.g, c.b, c.a);
+            assert!(c.a > 0.0, "{name} is fully transparent");
+        }
+    }
+}

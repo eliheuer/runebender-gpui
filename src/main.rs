@@ -22944,6 +22944,54 @@ fn main() {
     #[cfg(target_family = "wasm")]
     gpui_platform::web_init();
 
+    // `runebender-gpui --fonts` lists the families gpui can resolve
+    // and exits without opening a window. A family it cannot resolve
+    // shapes to nothing and the interface comes up wordless, so this
+    // is the first thing to check when that happens.
+    #[cfg(not(target_family = "wasm"))]
+    if std::env::args().any(|a| a == "--fonts") {
+        gpui_platform::application().run(|cx: &mut App| {
+            let names = cx.text_system().all_font_names();
+            println!("{} families", names.len());
+            for name in names {
+                // Listed is not the same as loadable: report which
+                // families actually resolve, and to what.
+                let font = gpui::font(name.as_str());
+                let resolved = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| {
+                        cx.text_system().resolve_font(&font)
+                    }),
+                );
+                match resolved {
+                    Ok(id) => {
+                        let got = cx.text_system().get_font_for_id(id);
+                        let same = got
+                            .as_ref()
+                            .is_some_and(|f| f.family == name.as_str());
+                        println!(
+                            "{name}\t{}",
+                            if same { "ok" } else { "FELL BACK" }
+                        );
+                    }
+                    Err(_) => println!("{name}\tPANICKED"),
+                }
+            }
+            // Can the resolved family actually measure a glyph? If
+            // this errors the pipeline is broken; if it works the
+            // fault is in the style, not the font.
+            let font = gpui::font(ui_font_family(cx).as_ref());
+            let id = cx.text_system().resolve_font(&font);
+            println!(
+                "chosen: {} em_width={:?} advance={:?}",
+                ui_font_family(cx),
+                cx.text_system().em_width(id, gpui::px(13.0)),
+                cx.text_system().advance(id, gpui::px(13.0), 'A'),
+            );
+            cx.quit();
+        });
+        return;
+    }
+
     #[cfg(not(target_family = "wasm"))]
     let (project, load_error) = {
         let font_path = std::env::args()
