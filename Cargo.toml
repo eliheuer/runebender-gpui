@@ -61,7 +61,7 @@ parley = { version = "0.8", default-features = false, features = ["std", "system
 # graph.
 [dependencies.font-ml]
 git = "https://github.com/eliheuer/font-ml"
-rev = "a7b845f"
+rev = "8b89ef0"
 
 # Accelerate is Apple's BLAS and links a framework, so it can only be
 # asked for on Apple targets: naming it unconditionally breaks the
@@ -69,7 +69,7 @@ rev = "a7b845f"
 # seconds to under one.
 [target.'cfg(target_vendor = "apple")'.dependencies.font-ml]
 git = "https://github.com/eliheuer/font-ml"
-rev = "a7b845f"
+rev = "8b89ef0"
 features = ["accelerate"]
 
 [dependencies.runebender-core]

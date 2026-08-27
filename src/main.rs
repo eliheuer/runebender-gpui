@@ -4156,6 +4156,10 @@ struct Workspace {
     #[cfg(not(target_os = "macos"))]
     app_menu_bar: gpui::Entity<widgets::menu_bar::MenuBar>,
     focus_handle: gpui::FocusHandle,
+    /// Scales what a model predicts. A model can be right about which
+    /// way a point moves and short on how far, which looks like a
+    /// prediction that is too light.
+    model_strength: f64,
     status_note: Option<SharedString>,
     search: gpui::Entity<widgets::input::InputState>,
     search_query: String,
@@ -18555,7 +18559,14 @@ impl Workspace {
             .map(|c| (c[0], c[1]))
             .unwrap_or((0, 0));
         let result = match font_ml::bolden::bolden(
-            &model, &name, unicode, advance, &ops, center,
+            &model,
+            &name,
+            unicode,
+            advance,
+            &ops,
+            center,
+            checkpoint.config.trim_close,
+            self.model_strength,
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -24156,6 +24167,7 @@ fn main() {
                         #[cfg(not(target_os = "macos"))]
                         app_menu_bar: app_menu_bar.clone(),
                         focus_handle: cx.focus_handle(),
+                        model_strength: 1.0,
                         status_note: None,
                         search,
                         search_query: String::new(),
