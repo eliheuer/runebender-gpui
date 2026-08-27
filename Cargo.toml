@@ -40,6 +40,11 @@ include_dir = "0.7.4"
 unicode_names2 = "3.1.0"
 plist = "1"
 skrifa = "0.44"
+# Linebender's text stack. PlainEditor is the editing model behind
+# the input widgets: cursor and word motion, selection, IME compose,
+# accessibility. 0.8 is the version xix pins, and it shares harfrust
+# 0.5 with runebender-core rather than pulling a second copy.
+parley = { version = "0.8", default-features = false, features = ["std", "system"] }
 
 # Shared editing/model crate used by all Runebender editors. Pulled
 # from git so a plain clone (or `cargo install --git`) builds without

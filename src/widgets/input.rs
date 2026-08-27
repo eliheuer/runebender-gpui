@@ -1,0 +1,784 @@
+//! Text fields, on Linebender's text stack.
+//!
+//! The editing model is `parley::PlainEditor`: cursor and word motion,
+//! selection by mouse, IME compose, accessibility. Layout is parley's
+//! too, and the glyphs are painted through the same outline path this
+//! editor already uses for the canvas and the toolbar icons.
+//!
+//! What this replaces, `gpui_component::input`, is around 22,000 lines
+//! because it carries a code editor: LSP semantic tokens, tree-sitter
+//! highlighting, a document model. The fields here hold a glyph name,
+//! a width, a kerning value, or a feature file.
+
+use std::sync::Arc;
+
+use gpui::{
+    App, Context, EventEmitter, FocusHandle, Focusable, SharedString, Window,
+};
+use parley::{FontContext, LayoutContext, PlainEditor};
+
+/// What a field reports. `Change` on every edit, `PressEnter` when the
+/// value is committed.
+#[derive(Clone, Debug, PartialEq)]
+pub enum InputEvent {
+    Change,
+    PressEnter,
+}
+
+/// Shared parley contexts. Building a `FontContext` scans the system
+/// font list, so every field borrows one rather than owning it.
+pub struct TextContexts {
+    pub font: FontContext,
+    pub layout: LayoutContext<[u8; 4]>,
+}
+
+impl Default for TextContexts {
+    fn default() -> Self {
+        Self {
+            font: FontContext::new(),
+            layout: LayoutContext::new(),
+        }
+    }
+}
+
+impl gpui::Global for GlobalTextContexts {}
+
+/// The contexts, in a global so the whole window shares one font list.
+pub struct GlobalTextContexts(pub Arc<std::sync::Mutex<TextContexts>>);
+
+pub fn text_contexts(cx: &mut App) -> Arc<std::sync::Mutex<TextContexts>> {
+    if !cx.has_global::<GlobalTextContexts>() {
+        let contexts =
+            Arc::new(std::sync::Mutex::new(TextContexts::default()));
+        cx.set_global(GlobalTextContexts(contexts));
+    }
+    cx.global::<GlobalTextContexts>().0.clone()
+}
+
+/// One text field.
+pub struct InputState {
+    editor: PlainEditor<[u8; 4]>,
+    contexts: Arc<std::sync::Mutex<TextContexts>>,
+    focus_handle: FocusHandle,
+    placeholder: SharedString,
+    multi_line: bool,
+    /// The value as a string, kept beside the editor so `value()` can
+    /// hand out a `&str` without borrowing the editor mutably.
+    text: String,
+    /// Where the text last painted, for turning clicks into positions.
+    origin: gpui::Point<gpui::Pixels>,
+    /// The wrap width in force, so it is only set when it changes.
+    layout_width: Option<f32>,
+    /// Whether a selection drag is in progress.
+    dragging: bool,
+}
+
+/// The font size fields are drawn at.
+pub const FONT_SIZE: f32 = 13.0;
+
+impl InputState {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let contexts = text_contexts(cx);
+        let mut editor = PlainEditor::new(FONT_SIZE);
+        editor.set_text("");
+        Self {
+            editor,
+            contexts,
+            focus_handle: cx.focus_handle(),
+            placeholder: SharedString::default(),
+            multi_line: false,
+            text: String::new(),
+            origin: gpui::Point::default(),
+            layout_width: None,
+            dragging: false,
+        }
+    }
+
+    pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
+        self.placeholder = placeholder.into();
+        self
+    }
+
+    /// A field that keeps line breaks, for the feature file.
+    pub fn multi_line(mut self) -> Self {
+        self.multi_line = true;
+        self
+    }
+
+    pub fn is_multi_line(&self) -> bool {
+        self.multi_line
+    }
+
+    pub fn placeholder_text(&self) -> &SharedString {
+        &self.placeholder
+    }
+
+    pub fn value(&self) -> &str {
+        &self.text
+    }
+
+    /// Set the value from code. Silent, so a field showing state it
+    /// does not own cannot feed itself.
+    pub fn set_value(
+        &mut self,
+        value: impl AsRef<str>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let value = value.as_ref();
+        if self.text == value {
+            return;
+        }
+        self.text = value.to_string();
+        self.editor.set_text(value);
+        cx.notify();
+    }
+
+    /// Pull the text back out of the editor after an edit.
+    fn sync_text(&mut self) {
+        self.text = self.editor.text().to_string();
+    }
+
+    /// Run one editing action, then report the change.
+    pub fn edit(
+        &mut self,
+        cx: &mut Context<Self>,
+        action: impl FnOnce(&mut parley::PlainEditorDriver<'_, [u8; 4]>),
+    ) {
+        {
+            let contexts = self.contexts.clone();
+            let mut contexts = contexts.lock().expect("text contexts");
+            let TextContexts { font, layout } = &mut *contexts;
+            let mut driver = self.editor.driver(font, layout);
+            action(&mut driver);
+        }
+        self.sync_text();
+        cx.emit(InputEvent::Change);
+        cx.notify();
+    }
+
+    /// Insert text, dropping newlines in a single-line field.
+    pub fn insert(&mut self, text: &str, cx: &mut Context<Self>) {
+        let cleaned: String;
+        let text = if self.multi_line {
+            text
+        } else {
+            cleaned = text.replace(['\n', '\r'], "");
+            &cleaned
+        };
+        if text.is_empty() {
+            return;
+        }
+        self.edit(cx, |driver| driver.insert_or_replace_selection(text));
+    }
+
+    /// Enter: a line break in a multi-line field, a commit otherwise.
+    pub fn press_enter(&mut self, cx: &mut Context<Self>) {
+        if self.multi_line {
+            self.edit(cx, |driver| driver.insert_or_replace_selection("\n"));
+        } else {
+            cx.emit(InputEvent::PressEnter);
+        }
+    }
+
+    /// Where the text starts on screen, recorded when it paints so a
+    /// click can be turned into a text position.
+    fn record_origin(&mut self, origin: gpui::Point<gpui::Pixels>) {
+        self.origin = origin;
+    }
+
+    /// Wrap to the field's width. A single-line field never wraps.
+    fn set_layout_width(&mut self, width: f32) {
+        let width = if self.multi_line { Some(width) } else { None };
+        if self.layout_width != width {
+            self.layout_width = width;
+            self.editor.set_width(width);
+        }
+    }
+
+    /// Refresh the layout, which every geometry question needs first.
+    fn with_layout<R>(
+        &mut self,
+        f: impl FnOnce(&mut PlainEditor<[u8; 4]>) -> R,
+    ) -> R {
+        let contexts = self.contexts.clone();
+        let mut contexts = contexts.lock().expect("text contexts");
+        let TextContexts { font, layout } = &mut *contexts;
+        self.editor.refresh_layout(font, layout);
+        f(&mut self.editor)
+    }
+
+    /// Selection boxes, relative to the text origin: x, y, width,
+    /// height.
+    fn selection_rects(&mut self) -> Vec<(f32, f32, f32, f32)> {
+        self.with_layout(|editor| {
+            editor
+                .selection_geometry()
+                .into_iter()
+                .map(|(rect, _)| {
+                    (
+                        rect.x0 as f32,
+                        rect.y0 as f32,
+                        (rect.x1 - rect.x0) as f32,
+                        (rect.y1 - rect.y0) as f32,
+                    )
+                })
+                .collect()
+        })
+    }
+
+    /// The caret box, relative to the text origin.
+    fn caret_rect(&mut self) -> Option<(f32, f32, f32, f32)> {
+        self.with_layout(|editor| {
+            editor.cursor_geometry(1.5).map(|rect| {
+                (
+                    rect.x0 as f32,
+                    rect.y0 as f32,
+                    (rect.x1 - rect.x0) as f32,
+                    (rect.y1 - rect.y0) as f32,
+                )
+            })
+        })
+    }
+
+    /// Paint the text itself.
+    fn paint_glyphs(
+        &mut self,
+        origin: gpui::Point<gpui::Pixels>,
+        color: gpui::Rgba,
+        window: &mut Window,
+    ) {
+        let contexts = self.contexts.clone();
+        let mut contexts = contexts.lock().expect("text contexts");
+        let TextContexts { font, layout } = &mut *contexts;
+        self.editor.refresh_layout(font, layout);
+        let laid_out = self.editor.layout(font, layout);
+        paint_layout(laid_out, origin, color, window);
+    }
+
+    /// A click: one press moves the caret, two select a word, three
+    /// select the line.
+    fn click_at(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        clicks: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let (x, y) = self.to_text_space(position);
+        {
+            let contexts = self.contexts.clone();
+            let mut contexts = contexts.lock().expect("text contexts");
+            let TextContexts { font, layout } = &mut *contexts;
+            let mut driver = self.editor.driver(font, layout);
+            match clicks {
+                1 => driver.move_to_point(x, y),
+                2 => driver.select_word_at_point(x, y),
+                _ => driver.select_line_at_point(x, y),
+            }
+        }
+        self.dragging = true;
+        cx.notify();
+    }
+
+    /// Extend the selection while the mouse is down.
+    fn drag_to(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.dragging {
+            return;
+        }
+        let (x, y) = self.to_text_space(position);
+        {
+            let contexts = self.contexts.clone();
+            let mut contexts = contexts.lock().expect("text contexts");
+            let TextContexts { font, layout } = &mut *contexts;
+            self.editor
+                .driver(font, layout)
+                .extend_selection_to_point(x, y);
+        }
+        cx.notify();
+    }
+
+    fn to_text_space(&self, position: gpui::Point<gpui::Pixels>) -> (f32, f32) {
+        (
+            f32::from(position.x - self.origin.x),
+            f32::from(position.y - self.origin.y),
+        )
+    }
+
+    /// One keystroke. Returns whether the field used it.
+    fn on_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let m = &keystroke.modifiers;
+        let word = m.alt || m.control;
+        let shift = m.shift;
+        match keystroke.key.as_str() {
+            "backspace" => {
+                self.edit(cx, |d| {
+                    if word {
+                        d.backdelete_word();
+                    } else {
+                        d.backdelete();
+                    }
+                });
+                true
+            }
+            "delete" => {
+                self.edit(cx, |d| {
+                    if word {
+                        d.delete_word();
+                    } else {
+                        d.delete();
+                    }
+                });
+                true
+            }
+            "left" => {
+                self.motion(cx, |d| match (shift, word) {
+                    (true, true) => d.select_word_left(),
+                    (true, false) => d.select_left(),
+                    (false, true) => d.move_word_left(),
+                    (false, false) => d.move_left(),
+                });
+                true
+            }
+            "right" => {
+                self.motion(cx, |d| match (shift, word) {
+                    (true, true) => d.select_word_right(),
+                    (true, false) => d.select_right(),
+                    (false, true) => d.move_word_right(),
+                    (false, false) => d.move_right(),
+                });
+                true
+            }
+            "up" => {
+                self.motion(cx, |d| {
+                    if shift {
+                        d.select_up();
+                    } else {
+                        d.move_up();
+                    }
+                });
+                true
+            }
+            "down" => {
+                self.motion(cx, |d| {
+                    if shift {
+                        d.select_down();
+                    } else {
+                        d.move_down();
+                    }
+                });
+                true
+            }
+            "home" => {
+                self.motion(cx, |d| {
+                    if shift {
+                        d.select_to_line_start();
+                    } else {
+                        d.move_to_line_start();
+                    }
+                });
+                true
+            }
+            "end" => {
+                self.motion(cx, |d| {
+                    if shift {
+                        d.select_to_line_end();
+                    } else {
+                        d.move_to_line_end();
+                    }
+                });
+                true
+            }
+            "enter" => {
+                self.press_enter(cx);
+                true
+            }
+            "a" if m.platform => {
+                self.motion(cx, |d| d.select_all());
+                true
+            }
+            "escape" => false,
+            _ => {
+                let Some(text) = keystroke.key_char.as_deref() else {
+                    return false;
+                };
+                // A modified keystroke is a command, not typing.
+                if m.platform || m.control {
+                    return false;
+                }
+                if text.chars().all(|c| c.is_control()) {
+                    return false;
+                }
+                self.insert(text, cx);
+                true
+            }
+        }
+    }
+
+    /// Move the caret without reporting a text change.
+    fn motion(
+        &mut self,
+        cx: &mut Context<Self>,
+        action: impl FnOnce(&mut parley::PlainEditorDriver<'_, [u8; 4]>),
+    ) {
+        let contexts = self.contexts.clone();
+        let mut contexts = contexts.lock().expect("text contexts");
+        let TextContexts { font, layout } = &mut *contexts;
+        let mut driver = self.editor.driver(font, layout);
+        action(&mut driver);
+        drop(contexts);
+        cx.notify();
+    }
+
+    pub fn editor_mut(&mut self) -> &mut PlainEditor<[u8; 4]> {
+        &mut self.editor
+    }
+
+    pub fn contexts(&self) -> Arc<std::sync::Mutex<TextContexts>> {
+        self.contexts.clone()
+    }
+}
+
+impl EventEmitter<InputEvent> for InputState {}
+
+impl Focusable for InputState {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+// ---------------------------------------------------------------
+// Painting
+// ---------------------------------------------------------------
+
+/// Collects a skrifa outline into a kurbo path, which is what this
+/// editor already paints with.
+#[derive(Default)]
+struct OutlineToPath {
+    path: kurbo::BezPath,
+}
+
+impl skrifa::outline::OutlinePen for OutlineToPath {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.path.move_to((x as f64, y as f64));
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.path.line_to((x as f64, y as f64));
+    }
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        self.path
+            .quad_to((cx as f64, cy as f64), (x as f64, y as f64));
+    }
+    fn curve_to(
+        &mut self,
+        cx0: f32,
+        cy0: f32,
+        cx1: f32,
+        cy1: f32,
+        x: f32,
+        y: f32,
+    ) {
+        self.path.curve_to(
+            (cx0 as f64, cy0 as f64),
+            (cx1 as f64, cy1 as f64),
+            (x as f64, y as f64),
+        );
+    }
+    fn close(&mut self) {
+        self.path.close_path();
+    }
+}
+
+/// The outline of one glyph, in pixels, with the baseline at y = 0 and
+/// y running down the way gpui expects.
+fn glyph_outline(
+    font: &parley::FontData,
+    size: f32,
+    coords: &[i16],
+    glyph_id: u32,
+) -> Option<kurbo::BezPath> {
+    use skrifa::MetadataProvider as _;
+    use skrifa::instance::{LocationRef, Size};
+    use skrifa::outline::DrawSettings;
+
+    let font_ref =
+        skrifa::FontRef::from_index(font.data.as_ref(), font.index).ok()?;
+    let outlines = font_ref.outline_glyphs();
+    let glyph = outlines.get(skrifa::GlyphId::new(glyph_id))?;
+    // parley hands back raw F2Dot14 bits; skrifa wants the type.
+    let coords: Vec<skrifa::raw::types::F2Dot14> = coords
+        .iter()
+        .map(|c| skrifa::raw::types::F2Dot14::from_bits(*c))
+        .collect();
+    let location = LocationRef::new(&coords);
+    let settings = DrawSettings::unhinted(Size::new(size), location);
+    let mut pen = OutlineToPath::default();
+    glyph.draw(settings, &mut pen).ok()?;
+    // Font outlines run y-up; the screen runs y-down.
+    Some(kurbo::Affine::scale_non_uniform(1.0, -1.0) * pen.path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_single_line_field_drops_newlines() {
+        // Pasting a multi-line clipboard into a width field should not
+        // put a line break in it.
+        let cleaned = "12\n34\r\n56".replace(['\n', '\r'], "");
+        assert_eq!(cleaned, "123456");
+    }
+
+    #[test]
+    fn outlines_come_out_y_down() {
+        // The transform applied to every glyph flips the font's y-up
+        // outline into screen space. A point above the baseline in
+        // font space must land above it on screen, which is negative y.
+        let mut path = kurbo::BezPath::new();
+        path.move_to((0.0, 10.0));
+        let flipped = kurbo::Affine::scale_non_uniform(1.0, -1.0) * path;
+        let kurbo::PathEl::MoveTo(p) = flipped.elements()[0] else {
+            panic!("expected a move");
+        };
+        assert_eq!(p.y, -10.0);
+    }
+}
+
+// ---------------------------------------------------------------
+// The element
+// ---------------------------------------------------------------
+
+use gpui::{
+    Bounds, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement as _, Pixels, Point, Rgba, Styled as _, canvas, div, px,
+};
+
+use crate::theme as t;
+
+/// A text field.
+#[derive(gpui::IntoElement)]
+pub struct Input {
+    state: gpui::Entity<InputState>,
+    full_height: bool,
+}
+
+impl Input {
+    pub fn new(state: &gpui::Entity<InputState>) -> Self {
+        Self {
+            state: state.clone(),
+            full_height: false,
+        }
+    }
+
+    /// Fill the space given, for the feature editor.
+    pub fn h_full(mut self) -> Self {
+        self.full_height = true;
+        self
+    }
+}
+
+/// Inset of the text from the field's border.
+const PAD_X: f32 = 6.0;
+const PAD_Y: f32 = 4.0;
+/// How tall a single-line field is.
+const LINE_HEIGHT: f32 = 20.0;
+
+impl gpui::RenderOnce for Input {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let state = self.state.clone();
+        let focus_handle = state.read(cx).focus_handle.clone();
+        let focused = focus_handle.is_focused(window);
+        let multi_line = state.read(cx).multi_line;
+
+        let paint_state = state.clone();
+        let click_state = state.clone();
+        let drag_state = state.clone();
+
+        let mut field = div()
+            .id("input")
+            .relative()
+            .w_full()
+            .px(px(PAD_X))
+            .py(px(PAD_Y))
+            .border_1()
+            .border_color(if focused {
+                t::accent()
+            } else {
+                t::panel_outline()
+            })
+            .bg(t::window_bg())
+            .cursor_text()
+            .track_focus(&focus_handle);
+
+        field = if self.full_height {
+            field.h_full()
+        } else if multi_line {
+            field.min_h(px(LINE_HEIGHT * 3.0))
+        } else {
+            field.h(px(LINE_HEIGHT + PAD_Y * 2.0))
+        };
+
+        field
+            .child(
+                canvas(
+                    move |bounds, _, _| bounds,
+                    move |_, bounds: Bounds<Pixels>, window, cx| {
+                        paint_field(&paint_state, bounds, focused, window, cx);
+                    },
+                )
+                .size_full(),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                move |event: &MouseDownEvent, window, cx| {
+                    let handle = click_state.read(cx).focus_handle.clone();
+                    window.focus(&handle, cx);
+                    let position = event.position;
+                    let clicks = event.click_count;
+                    click_state.update(cx, |state, cx| {
+                        state.click_at(position, clicks, cx);
+                    });
+                    cx.stop_propagation();
+                },
+            )
+            .on_drag_move(move |event: &gpui::DragMoveEvent<()>, _, cx| {
+                let position = event.event.position;
+                drag_state.update(cx, |state, cx| state.drag_to(position, cx));
+            })
+            .on_key_down(move |event, window, cx| {
+                let handled = state.update(cx, |input, cx| {
+                    input.on_key(&event.keystroke, cx)
+                });
+                if handled {
+                    cx.stop_propagation();
+                }
+                let _ = window;
+            })
+    }
+}
+
+/// Draw the selection, the text, and the caret.
+fn paint_field(
+    state: &gpui::Entity<InputState>,
+    bounds: Bounds<Pixels>,
+    focused: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let inner = Point {
+        x: bounds.origin.x + px(PAD_X),
+        y: bounds.origin.y + px(PAD_Y),
+    };
+    let width = f32::from(bounds.size.width) - PAD_X * 2.0;
+
+    let placeholder = state.read(cx).placeholder.clone();
+    let empty = state.read(cx).text.is_empty();
+
+    state.update(cx, |input, _| {
+        input.set_layout_width(width);
+        input.record_origin(inner);
+    });
+
+    if empty && !placeholder.is_empty() {
+        paint_text(state, &placeholder, inner, t::text_muted(), window, cx);
+        return;
+    }
+
+    // Selection first, so the text sits on top of it.
+    let rects = state.update(cx, |input, _| input.selection_rects());
+    for rect in rects {
+        window.paint_quad(gpui::fill(
+            Bounds {
+                origin: Point {
+                    x: inner.x + px(rect.0),
+                    y: inner.y + px(rect.1),
+                },
+                size: gpui::size(px(rect.2), px(rect.3)),
+            },
+            t::accent_soft(),
+        ));
+    }
+
+    state.update(cx, |input, _| {
+        input.paint_glyphs(inner, t::text(), window);
+    });
+
+    if focused {
+        if let Some(caret) = state.update(cx, |input, _| input.caret_rect()) {
+            window.paint_quad(gpui::fill(
+                Bounds {
+                    origin: Point {
+                        x: inner.x + px(caret.0),
+                        y: inner.y + px(caret.1),
+                    },
+                    size: gpui::size(px(1.5), px(caret.3)),
+                },
+                t::text(),
+            ));
+        }
+    }
+}
+
+/// Lay out a plain string and paint it, for the placeholder.
+fn paint_text(
+    state: &gpui::Entity<InputState>,
+    text: &str,
+    origin: Point<Pixels>,
+    color: Rgba,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let contexts = state.read(cx).contexts();
+    let mut contexts = contexts.lock().expect("text contexts");
+    let TextContexts { font, layout } = &mut *contexts;
+    let mut builder = layout.ranged_builder(font, text, 1.0, true);
+    builder.push_default(parley::StyleProperty::FontSize(FONT_SIZE));
+    let mut laid_out: parley::Layout<[u8; 4]> = builder.build(text);
+    laid_out.break_all_lines(None);
+    paint_layout(&laid_out, origin, color, window);
+}
+
+/// Paint every glyph of a laid-out text.
+fn paint_layout(
+    layout: &parley::Layout<[u8; 4]>,
+    origin: Point<Pixels>,
+    color: Rgba,
+    window: &mut Window,
+) {
+    for line in layout.lines() {
+        for item in line.items() {
+            let parley::PositionedLayoutItem::GlyphRun(run) = item else {
+                continue;
+            };
+            let font = run.run().font().clone();
+            let size = run.run().font_size();
+            let coords = run.run().normalized_coords().to_vec();
+            for glyph in run.positioned_glyphs() {
+                let Some(outline) =
+                    glyph_outline(&font, size, &coords, glyph.id)
+                else {
+                    continue;
+                };
+                let at = kurbo::Affine::translate((
+                    glyph.x as f64,
+                    glyph.y as f64,
+                ));
+                if let Some(path) = crate::build_fill_path(
+                    &(at * outline),
+                    kurbo::Affine::IDENTITY,
+                    origin,
+                ) {
+                    window.paint_path(path, color);
+                }
+            }
+        }
+    }
+}

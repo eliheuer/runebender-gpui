@@ -4093,7 +4093,7 @@ struct Workspace {
     app_menu_bar: gpui::Entity<gpui_component::menu::AppMenuBar>,
     focus_handle: gpui::FocusHandle,
     status_note: Option<SharedString>,
-    search: gpui::Entity<gpui_component::input::InputState>,
+    search: gpui::Entity<widgets::input::InputState>,
     search_query: String,
     /// Search scope: 0 = all, 1 = name, 2 = unicode.
     search_mode: u8,
@@ -6977,7 +6977,7 @@ impl Workspace {
                     .border_b_1()
                     .border_color(t::panel_outline())
                     .child(div().flex_1().child(
-                        gpui_component::input::Input::new(&self.search),
+                        widgets::input::Input::new(&self.search),
                     ))
                     .child(self.search_toggle(
                         "search-mode",
@@ -7722,7 +7722,7 @@ impl Workspace {
                     .border_b_1()
                     .border_color(t::panel_outline())
                     .child(div().flex_1().child(
-                        gpui_component::input::Input::new(&self.search),
+                        widgets::input::Input::new(&self.search),
                     ))
                     .child(self.search_toggle(
                         "search-mode",
@@ -22979,7 +22979,7 @@ fn main() {
             |window, cx| {
                 let workspace = cx.new(|cx| {
                     let search = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("Search glyphs")
                     });
                     let metric = |cx: &mut Context<Workspace>, window: &mut Window| {
@@ -23838,10 +23838,10 @@ fn main() {
                         let search = search.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _window,
                               cx| {
-                            if matches!(ev, gpui_component::input::InputEvent::Change) {
+                            if matches!(ev, widgets::input::InputEvent::Change) {
                                 this.search_query =
                                     search.read(cx).value().to_string().to_lowercase();
                                 this.rebuild_search_regex();

@@ -119,6 +119,12 @@ pub fn text() -> Rgba {
 pub fn text_muted() -> Rgba {
     c(theme().text("secondary"))
 }
+/// The accent behind selected text: the same hue, quiet enough that
+/// the glyphs on top stay readable.
+pub fn accent_soft() -> Rgba {
+    let a = accent();
+    Rgba { a: 0.28, ..a }
+}
 pub fn status_yellow() -> Rgba {
     c(theme().role("warning"))
 }
