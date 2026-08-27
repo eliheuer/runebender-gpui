@@ -131,6 +131,31 @@ gpui::actions!(
     ]
 );
 
+/// The label a sidebar tab shows on hover, now that the tabs are
+/// icons. Placeholder icons for the two that have none of their own.
+struct TabTooltip {
+    label: &'static str,
+}
+
+impl Render for TabTooltip {
+    fn render(
+        &mut self,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .px_1p5()
+            .py_0p5()
+            .bg(t::panel_bg())
+            .border_1()
+            .border_color(t::panel_outline())
+            .rounded_sm()
+            .text_xs()
+            .text_color(t::text())
+            .child(self.label)
+    }
+}
+
 /// The interface font, resolved once against what the platform
 /// actually has. A name gpui cannot resolve shapes to nothing and no
 /// text draws at all, so the preferences are tried in order and the
@@ -7702,25 +7727,30 @@ impl Workspace {
         // The sidebar's own tabs, like the web's editor sidebar: the
         // glyph list, and the designspace axes.
         let has_axes = !self.axis_sliders.is_empty();
-        let tab = |id: &'static str, label: &'static str, which: u8, cx: &mut Context<Self>| {
+        // Icons, not words: four labels overflowed a narrow sidebar
+        // and the last one was clipped. The name comes back on hover.
+        let tab = |id: &'static str,
+                   label: &'static str,
+                   icon: &'static str,
+                   which: u8,
+                   cx: &mut Context<Self>| {
+            let active = self.sidebar_tab == which;
+            let colour = if active { t::accent() } else { t::text_muted() };
             div()
                 .id(id)
-                .h(px(20.0))
-                .px_2()
+                .size(px(24.0))
                 .flex()
                 .items_center()
+                .justify_center()
+                .flex_shrink_0()
                 .rounded_sm()
-                .text_xs()
+                .border_1()
+                .border_color(if active { t::accent() } else { t::cell_border() })
                 .cursor_pointer()
-                .when(self.sidebar_tab == which, |el| {
-                    el.border_1().border_color(t::accent()).text_color(t::accent())
+                .child(icon_svg(icon, colour))
+                .tooltip(move |_, cx| {
+                    cx.new(|_| TabTooltip { label }).into()
                 })
-                .when(self.sidebar_tab != which, |el| {
-                    el.border_1()
-                        .border_color(t::cell_border())
-                        .text_color(t::text_muted())
-                })
-                .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.sidebar_tab = which;
                     cx.notify();
@@ -7746,12 +7776,12 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(tab("sidebar-tab-glyphs", "Glyphs", 0, cx))
-                    .child(tab("sidebar-tab-shapes", "Shapes", 1, cx))
+                    .child(tab("sidebar-tab-glyphs", "Glyphs", "glyph-grid", 0, cx))
+                    .child(tab("sidebar-tab-shapes", "Shapes", "shapes", 1, cx))
                     .when(has_axes, |el| {
-                        el.child(tab("sidebar-tab-axes", "Axes", 2, cx))
+                        el.child(tab("sidebar-tab-axes", "Axes", "measure", 2, cx))
                     })
-                    .child(tab("sidebar-tab-ai", "Local AI", 3, cx)),
+                    .child(tab("sidebar-tab-ai", "Local AI", "preview", 3, cx)),
             )
             .when(tab_now == 1, |el| {
                 el.child(
