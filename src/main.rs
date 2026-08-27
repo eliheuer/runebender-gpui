@@ -942,6 +942,50 @@ struct BraceSource {
     location: runebender_core::var_model::Location,
 }
 
+/// Which Glyphs form a path names, if either.
+#[derive(Clone, Copy, PartialEq)]
+enum GlyphsSource {
+    File,
+    Package,
+    Neither,
+}
+
+/// Read a `.glyphspackage` into the entries the importer wants: paths
+/// relative to the package root, so `glyphs/A.glyph` stays
+/// `glyphs/A.glyph`.
+fn read_glyphspackage(
+    root: &std::path::Path,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    fn walk(
+        dir: &std::path::Path,
+        root: &std::path::Path,
+        out: &mut std::collections::HashMap<String, String>,
+    ) -> Result<(), String> {
+        for entry in std::fs::read_dir(dir).map_err(|e| format!("{e}"))? {
+            let path = entry.map_err(|e| format!("{e}"))?.path();
+            if path.is_dir() {
+                walk(&path, root, out)?;
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                // Anything that is not UTF-8 is not part of the
+                // source; skip it rather than failing the open.
+                let rel = path
+                    .strip_prefix(root)
+                    .map_err(|e| format!("{e}"))?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.insert(rel, text);
+            }
+        }
+        Ok(())
+    }
+    let mut out = std::collections::HashMap::new();
+    walk(root, root, &mut out)?;
+    if out.is_empty() {
+        return Err(format!("{} is empty", root.display()));
+    }
+    Ok(out)
+}
+
 impl Project {
     /// The master sitting exactly at `location`, if any. Landing on a
     /// master is a master switch, not an interpolation: the web treats
@@ -1010,11 +1054,33 @@ impl Project {
     }
 
     fn load_inner(path: &std::path::Path) -> Result<Self, String> {
-        if path.extension().is_some_and(|e| e == "glyphs") {
-            // Convert the .glyphs source to UFO + designspace files in
+        let glyphs_ext = path.extension().and_then(|e| e.to_str()).map(|e| {
+            if e.eq_ignore_ascii_case("glyphspackage") {
+                GlyphsSource::Package
+            } else if e.eq_ignore_ascii_case("glyphs") {
+                GlyphsSource::File
+            } else {
+                GlyphsSource::Neither
+            }
+        });
+        if let Some(kind @ (GlyphsSource::File | GlyphsSource::Package)) =
+            glyphs_ext
+        {
+            // Convert the Glyphs source to UFO + designspace files in
             // a sibling directory, then open the converted project.
-            let text = std::fs::read_to_string(path).map_err(|e| format!("{e}"))?;
-            let result = runebender_core::glyphs_import::glyphs_to_ufo_files(&text)?;
+            let result = match kind {
+                GlyphsSource::Package => {
+                    let entries = read_glyphspackage(path)?;
+                    runebender_core::glyphs_import::glyphs_package_to_ufo_files(
+                        &entries,
+                    )?
+                }
+                _ => {
+                    let text = std::fs::read_to_string(path)
+                        .map_err(|e| format!("{e}"))?;
+                    runebender_core::glyphs_import::glyphs_to_ufo_files(&text)?
+                }
+            };
             let stem = path
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
@@ -21824,7 +21890,9 @@ impl Workspace {
         .detach();
     }
 
-    /// Cmd+O: native open dialog for a .designspace, .ufo, or folder.
+    /// Cmd+O: native open dialog. Directories are selectable, so a
+    /// .ufo and a .glyphspackage come through the same way a
+    /// .designspace does.
     fn open_dialog(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
@@ -24075,6 +24143,98 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    /// A two-master Glyphs 3 source, used by the import tests.
+    const MINIMAL_GLYPHS_SOURCE: &str = r#"{
+.appVersion = "3300";
+.formatVersion = 3;
+axes = (
+{
+name = Weight;
+tag = wght;
+}
+);
+familyName = TestSans;
+fontMaster = (
+{
+ascender = 800;
+axesValues = (400);
+capHeight = 700;
+descender = -200;
+id = m01;
+name = Regular;
+},
+{
+ascender = 800;
+axesValues = (700);
+capHeight = 700;
+descender = -200;
+id = m02;
+name = Bold;
+}
+);
+glyphs = (
+{
+glyphname = A;
+layers = (
+{
+layerId = m01;
+shapes = (
+{
+closed = 1;
+nodes = (
+(0,0,l),
+(100,0,l),
+(50,700,l)
+);
+}
+);
+width = 600;
+},
+{
+layerId = m02;
+shapes = (
+{
+closed = 1;
+nodes = (
+(0,0,l),
+(140,0,l),
+(70,700,l)
+);
+}
+);
+width = 640;
+}
+);
+unicode = 65;
+}
+);
+unitsPerEm = 1000;
+}"#;
+
+
+    /// A .glyphspackage on disk opens the same way a .glyphs file
+    /// does: converted to sibling UFO files, then loaded.
+    #[test]
+    fn glyphspackage_opens() {
+        let dir = std::env::temp_dir()
+            .join(format!("rb-pkg-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("TestSans.glyphs");
+        std::fs::write(&src, MINIMAL_GLYPHS_SOURCE).unwrap();
+
+        let pkg = dir.join("TestSans.glyphspackage");
+        glyphslib::Font::load(&src).unwrap().save(&pkg).unwrap();
+        assert!(pkg.join("fontinfo.plist").is_file());
+
+        let project = Project::load(&pkg).expect("package should open");
+        assert!(!project.masters.is_empty());
+        assert!(
+            project.active_font().glyphs.iter().any(|g| g.name == "A"),
+            "converted font should hold the glyphs from the package"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use super::*;
 
     fn test_ufo_path() -> PathBuf {
@@ -25852,79 +26012,11 @@ mod tests {
 
     #[test]
     fn glyphs_import_end_to_end() {
-        // Use the minimal fixture from runebender-core's tests via a
-        // real conversion + load cycle.
-        const MINIMAL: &str = r#"{
-.appVersion = "3300";
-.formatVersion = 3;
-axes = (
-{
-name = Weight;
-tag = wght;
-}
-);
-familyName = TestSans;
-fontMaster = (
-{
-ascender = 800;
-axesValues = (400);
-capHeight = 700;
-descender = -200;
-id = m01;
-name = Regular;
-},
-{
-ascender = 800;
-axesValues = (700);
-capHeight = 700;
-descender = -200;
-id = m02;
-name = Bold;
-}
-);
-glyphs = (
-{
-glyphname = A;
-layers = (
-{
-layerId = m01;
-shapes = (
-{
-closed = 1;
-nodes = (
-(0,0,l),
-(100,0,l),
-(50,700,l)
-);
-}
-);
-width = 600;
-},
-{
-layerId = m02;
-shapes = (
-{
-closed = 1;
-nodes = (
-(0,0,l),
-(140,0,l),
-(70,700,l)
-);
-}
-);
-width = 640;
-}
-);
-unicode = 65;
-}
-);
-unitsPerEm = 1000;
-}"#;
         let dir = std::env::temp_dir().join("rbg-glyphs-import-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let glyphs_path = dir.join("TestSans.glyphs");
-        std::fs::write(&glyphs_path, MINIMAL).unwrap();
+        std::fs::write(&glyphs_path, MINIMAL_GLYPHS_SOURCE).unwrap();
         let project = Project::load(&glyphs_path).expect("glyphs project loads");
         assert_eq!(project.masters.len(), 2);
         let a = project
