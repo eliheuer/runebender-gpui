@@ -21911,7 +21911,16 @@ impl Workspace {
         .detach();
     }
 
-    fn handle_key(&mut self, event: &gpui::KeyDownEvent, _cx: &mut Context<Self>) -> bool {
+    fn handle_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> bool {
+        // Typing belongs to whichever field has the keyboard.
+        if widgets::input::any_field_focused(window, _cx) {
+            return false;
+        }
         let key = event.keystroke.key.as_str();
         let cmd = event.keystroke.modifiers.platform;
         let shift = event.keystroke.modifiers.shift;
@@ -22474,14 +22483,25 @@ impl Render for Workspace {
                 this.rebuild_text_models();
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &CopyContours, _, cx| {
-                this.command_copy();
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &PasteContours, _, cx| {
-                this.command_paste_routed(cx);
-                cx.notify();
-            }))
+            .on_action(cx.listener(
+                |this, _: &CopyContours, window: &mut Window, cx| {
+                    // A focused field handles its own clipboard.
+                    if widgets::input::any_field_focused(window, cx) {
+                        return;
+                    }
+                    this.command_copy();
+                    cx.notify();
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &PasteContours, window: &mut Window, cx| {
+                    if widgets::input::any_field_focused(window, cx) {
+                        return;
+                    }
+                    this.command_paste_routed(cx);
+                    cx.notify();
+                },
+            ))
             .on_action(cx.listener(|this, _: &CopySelectedGlyphs, _, cx| {
                 this.command_copy_selection_text(cx);
                 cx.notify();
@@ -22635,10 +22655,15 @@ impl Render for Workspace {
                 this.command_round_coordinates();
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &SelectAllPoints, _, cx| {
-                this.command_select_points(0);
-                cx.notify();
-            }))
+            .on_action(cx.listener(
+                |this, _: &SelectAllPoints, window: &mut Window, cx| {
+                    if widgets::input::any_field_focused(window, cx) {
+                        return;
+                    }
+                    this.command_select_points(0);
+                    cx.notify();
+                },
+            ))
             .on_action(cx.listener(|this, _: &DeselectAllPoints, _, cx| {
                 this.command_select_points(1);
                 cx.notify();
@@ -22809,11 +22834,13 @@ impl Render for Workspace {
                 this.command_step_master(-1);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if this.handle_key(event, cx) {
-                    cx.notify();
-                }
-            }))
+            .on_key_down(cx.listener(
+                |this, event: &gpui::KeyDownEvent, window, cx| {
+                    if this.handle_key(event, window, cx) {
+                        cx.notify();
+                    }
+                },
+            ))
             .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, _, cx| {
                 if matches!(
                     event.keystroke.key.as_str(),
@@ -24025,21 +24052,28 @@ fn main() {
                     }
                     workspace
                 });
-                // Handle shortcuts before any binding runs. Two
-                // reasons: Tab must cycle point selection (the web
-                // behavior) instead of gpui-component Root's tab-stop
-                // traversal, and on wasm ALL action dispatch panics
-                // today — gpui-component force-enables gpui's
-                // "profiler" feature, whose action timing calls
-                // std::time::Instant::now (unsupported on wasm). So
-                // the web build routes every bound shortcut through
-                // this interceptor instead of actions.
+                // Handle shortcuts before any binding runs, so Tab
+                // cycles the point selection (the web behavior)
+                // rather than walking tab stops.
+                //
+                // On wasm this also stands in for action dispatch,
+                // which used to panic: gpui-component force-enabled
+                // gpui's "profiler" feature, whose action timing calls
+                // std::time::Instant::now, unsupported there. That
+                // dependency is gone, so the wasm arm below should be
+                // removable once a browser build confirms actions
+                // dispatch cleanly.
                 let shortcut_target = workspace.clone();
-                cx.intercept_keystrokes(move |event, _window, cx| {
+                cx.intercept_keystrokes(move |event, window, cx| {
                     let ks = &event.keystroke;
                     let cmd = ks.modifiers.platform;
                     let shift = ks.modifiers.shift;
                     if ks.modifiers.control || ks.modifiers.alt {
+                        return;
+                    }
+                    // A focused text field owns its keystrokes,
+                    // including Tab and the clipboard.
+                    if widgets::input::any_field_focused(window, cx) {
                         return;
                     }
                     if ks.key == "tab" && !cmd {

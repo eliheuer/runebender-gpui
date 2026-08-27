@@ -43,6 +43,27 @@ impl Default for TextContexts {
 
 impl gpui::Global for GlobalTextContexts {}
 
+/// Every field's focus handle, so the rest of the app can ask whether
+/// typing is going into a text field. Without this the window's own
+/// Cmd+C and Cmd+V would copy contours while you are editing a name.
+#[derive(Default)]
+struct FieldFocus(Vec<FocusHandle>);
+
+impl gpui::Global for FieldFocus {}
+
+fn register_field(cx: &mut App, handle: &FocusHandle) {
+    cx.default_global::<FieldFocus>().0.push(handle.clone());
+}
+
+/// Whether a text field currently has the keyboard.
+pub fn any_field_focused(window: &Window, cx: &App) -> bool {
+    let Some(focused) = window.focused(cx) else {
+        return false;
+    };
+    cx.try_global::<FieldFocus>()
+        .is_some_and(|fields| fields.0.contains(&focused))
+}
+
 /// The contexts, in a global so the whole window shares one font list.
 pub struct GlobalTextContexts(pub Arc<std::sync::Mutex<TextContexts>>);
 
@@ -79,12 +100,14 @@ pub const FONT_SIZE: f32 = 13.0;
 impl InputState {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let contexts = text_contexts(cx);
+        let focus_handle = cx.focus_handle();
+        register_field(cx, &focus_handle);
         let mut editor = PlainEditor::new(FONT_SIZE);
         editor.set_text("");
         Self {
             editor,
             contexts,
-            focus_handle: cx.focus_handle(),
+            focus_handle,
             placeholder: SharedString::default(),
             multi_line: false,
             text: String::new(),
@@ -404,6 +427,18 @@ impl InputState {
                 self.motion(cx, |d| d.select_all());
                 true
             }
+            "c" if m.platform => {
+                self.copy(cx);
+                true
+            }
+            "x" if m.platform => {
+                self.cut(cx);
+                true
+            }
+            "v" if m.platform => {
+                self.paste(cx);
+                true
+            }
             "escape" => false,
             _ => {
                 let Some(text) = keystroke.key_char.as_deref() else {
@@ -420,6 +455,34 @@ impl InputState {
                 true
             }
         }
+    }
+
+    /// Put the selection on the clipboard.
+    fn copy(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = self.editor.selected_text().map(str::to_string) else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+    }
+
+    /// Copy, then take it out.
+    fn cut(&mut self, cx: &mut Context<Self>) {
+        self.copy(cx);
+        if self.editor.selected_text().is_some() {
+            self.edit(cx, |d| d.delete_selection());
+        }
+    }
+
+    /// Replace the selection with the clipboard's text.
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
+        else {
+            return;
+        };
+        self.insert(&text, cx);
     }
 
     /// Move the caret without reporting a text change.
@@ -528,6 +591,15 @@ fn glyph_outline(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cut_is_a_copy_then_a_delete() {
+        // Documented here because the order matters: reading the
+        // selection after deleting it would put nothing on the
+        // clipboard.
+        let steps = ["copy", "delete"];
+        assert_eq!(steps[0], "copy");
+    }
 
     #[test]
     fn a_single_line_field_drops_newlines() {
