@@ -99,14 +99,15 @@ All four are gpui_web/upstream issues; native is unaffected.
 
 - [ ] Text inputs cannot take focus in the browser except the
       left-panel search (metrics fields, Glyph panel fields — grid
-      and editor mode alike) — needs a minimal repro against zed
+      and editor mode alike). The fields are now parley-backed and
+      ours, so this needs re-testing rather than a zed repro
 - [ ] In-window menu items never activate — same class of focus
-      bug; needs upstream repro
-- [ ] All gpui action dispatch panics on wasm: gpui-component
-      force-enables gpui's `profiler` feature and the profiler calls
-      `std::time::Instant::now()` per action. Worked around with a
-      keystroke interceptor; the real fix is `web_time` in gpui's
-      profiler (zed PR) or gpui-component dropping the feature
+      bug. The menu bar is ours now; needs re-testing
+- [x] All gpui action dispatch panics on wasm: gpui-component
+      force-enabled gpui's `profiler` feature and the profiler calls
+      `std::time::Instant::now()` per action. Fixed by dropping
+      gpui-component; the keystroke interceptor can go once this is
+      confirmed in a browser
 - [ ] Clipboard read is a stub in gpui_web (no text paste in the
       browser); needs a JS paste-event bridge or upstream support
 - [ ] Script icons are tofu in the browser (bundled UI font has no

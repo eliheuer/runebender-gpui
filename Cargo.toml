@@ -18,12 +18,14 @@ strip = "debuginfo"
 [dependencies]
 regex = "1"
 chrono = "0.4"
-# gpui-component requires gpui from the zed git repo (it tracks zed
-# main, where the platform layer was split into gpui_platform).
-gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed" }
-gpui-component = { git = "https://github.com/longbridge/gpui-component" }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+# gpui and gpui_platform come from the zed git repo; the platform
+# layer was split out of gpui there. Both are pinned to a revision,
+# which is what lets `cargo install --git` resolve the same graph
+# without --locked. It only became possible once gpui-component was
+# gone: it depended on gpui by bare URL, and a pin on our side built
+# a second copy of every gpui type.
+gpui = { version = "0.2.2", git = "https://github.com/zed-industries/zed", rev = "3624a5bfda8a4610bf9926499517a776c7028321" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "3624a5bfda8a4610bf9926499517a776c7028321" }
 kurbo = "0.13.1"
 # CPU path rasterizer, for the preview's blur: gpui blurs box shadows
 # and nothing else, so a real blurred image has to be rendered here.
@@ -52,6 +54,7 @@ parley = { version = "0.8", default-features = false, features = ["std", "system
 # local copy — see "Building" in the README.
 [dependencies.runebender-core]
 git = "https://github.com/eliheuer/runebender-core"
+rev = "3e3c879d3e3e02e461c0cfee6b7aaf7fe89840a4"
 
 [dependencies.serde]
 version = "1.0"

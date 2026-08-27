@@ -132,8 +132,8 @@ gpui::actions!(
 
 /// The application menu, used three ways: the native macOS menu bar,
 /// the stored menu Windows/Linux expose to `get_menus`, and the
-/// in-window menu bar (gpui-component AppMenuBar) drawn on every
-/// platform that has no native bar, the browser included.
+/// in-window menu bar drawn on every platform that has no native bar,
+/// the browser included.
 /// One item per theme, with the active one checked. The menus are
 /// rebuilt on a switch so the tick follows.
 fn theme_menu_items() -> Vec<gpui::MenuItem> {
@@ -4090,7 +4090,7 @@ struct Workspace {
     /// In-window menu bar for platforms without a native one
     /// (Windows, Linux, the browser).
     #[cfg(not(target_os = "macos"))]
-    app_menu_bar: gpui::Entity<gpui_component::menu::AppMenuBar>,
+    app_menu_bar: gpui::Entity<widgets::menu_bar::MenuBar>,
     focus_handle: gpui::FocusHandle,
     status_note: Option<SharedString>,
     search: gpui::Entity<widgets::input::InputState>,
@@ -4108,15 +4108,15 @@ struct Workspace {
     font_info_inputs: FontInfoInputs,
     kern_inputs: KernInputs,
     /// Slant angle field in the Transformations section (degrees).
-    slant_input: gpui::Entity<gpui_component::input::InputState>,
+    slant_input: gpui::Entity<widgets::input::InputState>,
     /// Stroke width field in the Transformations section (units).
-    stroke_input: gpui::Entity<gpui_component::input::InputState>,
+    stroke_input: gpui::Entity<widgets::input::InputState>,
     /// Offset field: bolder (positive) or lighter (negative) units.
-    offset_input: gpui::Entity<gpui_component::input::InputState>,
+    offset_input: gpui::Entity<widgets::input::InputState>,
     /// Fit Curve percentage field in the Curves section.
-    fit_input: gpui::Entity<gpui_component::input::InputState>,
+    fit_input: gpui::Entity<widgets::input::InputState>,
     /// Hex field that appends a color to the CPAL palette.
-    color_hex_input: gpui::Entity<gpui_component::input::InputState>,
+    color_hex_input: gpui::Entity<widgets::input::InputState>,
     /// Palette index the next color layer is assigned.
     color_selected: usize,
     /// Paint the color layers stacked in the editor.
@@ -4145,17 +4145,17 @@ struct Workspace {
     shaping_locale: Option<(String, String)>,
     /// Ease amount field: Enter bakes interpolation timing into a
     /// brace layer at the preview location.
-    ease_input: gpui::Entity<gpui_component::input::InputState>,
+    ease_input: gpui::Entity<widgets::input::InputState>,
     /// Extrude field ("offset,angle"; k-prefix keeps the front).
-    extrude_input: gpui::Entity<gpui_component::input::InputState>,
+    extrude_input: gpui::Entity<widgets::input::InputState>,
     /// Roughen field ("segment,h,v"); reseeded per apply.
-    roughen_input: gpui::Entity<gpui_component::input::InputState>,
+    roughen_input: gpui::Entity<widgets::input::InputState>,
     roughen_seed: u64,
     /// The Instances editor field under the axis sliders: Enter
     /// renames the instance at the preview location, or adds one.
-    instance_name_input: gpui::Entity<gpui_component::input::InputState>,
+    instance_name_input: gpui::Entity<widgets::input::InputState>,
     /// The Features section's features.fea editor (grid mode).
-    features_input: gpui::Entity<gpui_component::input::TextareaState>,
+    features_input: gpui::Entity<widgets::input::InputState>,
     /// Unapplied edits in the features editor: the refresh keeps its
     /// hands off until Apply or Revert.
     features_edited: bool,
@@ -4178,24 +4178,24 @@ struct Workspace {
     visible_glyph_layers: std::collections::HashSet<String>,
     /// Another glyph ghosted behind the drawing for comparison.
     reference_glyph: Option<String>,
-    reference_glyph_input: gpui::Entity<gpui_component::input::InputState>,
-    component_name_input: gpui::Entity<gpui_component::input::InputState>,
+    reference_glyph_input: gpui::Entity<widgets::input::InputState>,
+    component_name_input: gpui::Entity<widgets::input::InputState>,
     /// Corner-glyph name typed in the context menu (Apply Corner…).
-    corner_name_input: gpui::Entity<gpui_component::input::InputState>,
+    corner_name_input: gpui::Entity<widgets::input::InputState>,
     /// Note text typed in the context menu (Annotate: Note…).
-    annotation_input: gpui::Entity<gpui_component::input::InputState>,
+    annotation_input: gpui::Entity<widgets::input::InputState>,
     /// Smart-axis definition on the open part glyph ("Width,0,100").
-    smart_axis_input: gpui::Entity<gpui_component::input::InputState>,
+    smart_axis_input: gpui::Entity<widgets::input::InputState>,
     /// New kerning group from the grid selection: "o" (kern1) or
     /// "|o" (kern2).
-    group_name_input: gpui::Entity<gpui_component::input::InputState>,
+    group_name_input: gpui::Entity<widgets::input::InputState>,
     /// New avar pair on the first axis: "user,design".
-    axis_map_input: gpui::Entity<gpui_component::input::InputState>,
+    axis_map_input: gpui::Entity<widgets::input::InputState>,
     /// Parsed predicate query, rebuilt when the search changes.
     search_predicates: Option<Vec<SearchPred>>,
     /// The selected smart component's value on its first axis.
-    smart_value_input: gpui::Entity<gpui_component::input::InputState>,
-    anchor_name_input: gpui::Entity<gpui_component::input::InputState>,
+    smart_value_input: gpui::Entity<widgets::input::InputState>,
+    anchor_name_input: gpui::Entity<widgets::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
     axis_sliders: Vec<(usize, gpui::Entity<widgets::slider::SliderState>)>,
@@ -4286,72 +4286,72 @@ impl MeasureOpts {
 
 /// Editable glyph-data fields in the Glyph panel.
 struct GlyphInputs {
-    name: gpui::Entity<gpui_component::input::InputState>,
-    unicode: gpui::Entity<gpui_component::input::InputState>,
-    group_l: gpui::Entity<gpui_component::input::InputState>,
-    group_r: gpui::Entity<gpui_component::input::InputState>,
+    name: gpui::Entity<widgets::input::InputState>,
+    unicode: gpui::Entity<widgets::input::InputState>,
+    group_l: gpui::Entity<widgets::input::InputState>,
+    group_r: gpui::Entity<widgets::input::InputState>,
     /// Free-text glyph note (UFO glif note element), like Glyphs'
     /// note field; shows as a tooltip in its font view.
-    note: gpui::Entity<gpui_component::input::InputState>,
+    note: gpui::Entity<widgets::input::InputState>,
     /// Shape-switch point: Enter creates the .bold alternate and the
     /// designspace rule at this axis value (bracket layer).
-    switch_at: gpui::Entity<gpui_component::input::InputState>,
+    switch_at: gpui::Entity<widgets::input::InputState>,
     /// Metrics keys ("=n", "=|o", "=n+10"): linked sidebearings,
     /// synced across every master.
-    lsb_key: gpui::Entity<gpui_component::input::InputState>,
-    rsb_key: gpui::Entity<gpui_component::input::InputState>,
+    lsb_key: gpui::Entity<widgets::input::InputState>,
+    rsb_key: gpui::Entity<widgets::input::InputState>,
     /// Export (production) name, written to public.postscriptNames
     /// in every master's lib; ufo2ft renames on compile.
-    production: gpui::Entity<gpui_component::input::InputState>,
+    production: gpui::Entity<widgets::input::InputState>,
 }
 
 struct MetricInputs {
-    width: gpui::Entity<gpui_component::input::InputState>,
-    lsb: gpui::Entity<gpui_component::input::InputState>,
-    rsb: gpui::Entity<gpui_component::input::InputState>,
+    width: gpui::Entity<widgets::input::InputState>,
+    lsb: gpui::Entity<widgets::input::InputState>,
+    rsb: gpui::Entity<widgets::input::InputState>,
     /// Selection reference coordinates and size (Selection section).
-    x: gpui::Entity<gpui_component::input::InputState>,
-    y: gpui::Entity<gpui_component::input::InputState>,
-    w: gpui::Entity<gpui_component::input::InputState>,
-    h: gpui::Entity<gpui_component::input::InputState>,
+    x: gpui::Entity<widgets::input::InputState>,
+    y: gpui::Entity<widgets::input::InputState>,
+    w: gpui::Entity<widgets::input::InputState>,
+    h: gpui::Entity<widgets::input::InputState>,
 }
 
 /// Editable fields in the Font Info section (grid mode). Each commits
 /// on Enter and writes fontinfo.plist through the normal save path.
 struct FontInfoInputs {
-    family: gpui::Entity<gpui_component::input::InputState>,
-    style: gpui::Entity<gpui_component::input::InputState>,
-    upm: gpui::Entity<gpui_component::input::InputState>,
-    italic_angle: gpui::Entity<gpui_component::input::InputState>,
-    ascender: gpui::Entity<gpui_component::input::InputState>,
-    descender: gpui::Entity<gpui_component::input::InputState>,
-    x_height: gpui::Entity<gpui_component::input::InputState>,
-    cap_height: gpui::Entity<gpui_component::input::InputState>,
+    family: gpui::Entity<widgets::input::InputState>,
+    style: gpui::Entity<widgets::input::InputState>,
+    upm: gpui::Entity<widgets::input::InputState>,
+    italic_angle: gpui::Entity<widgets::input::InputState>,
+    ascender: gpui::Entity<widgets::input::InputState>,
+    descender: gpui::Entity<widgets::input::InputState>,
+    x_height: gpui::Entity<widgets::input::InputState>,
+    cap_height: gpui::Entity<widgets::input::InputState>,
     /// PostScript hinting data per master: alignment zones (blue
     /// values in pairs) and standard stems, comma-separated lists.
-    blue_values: gpui::Entity<gpui_component::input::InputState>,
-    other_blues: gpui::Entity<gpui_component::input::InputState>,
-    stems_h: gpui::Entity<gpui_component::input::InputState>,
-    stems_v: gpui::Entity<gpui_component::input::InputState>,
+    blue_values: gpui::Entity<widgets::input::InputState>,
+    other_blues: gpui::Entity<widgets::input::InputState>,
+    stems_h: gpui::Entity<widgets::input::InputState>,
+    stems_v: gpui::Entity<widgets::input::InputState>,
     /// The OS/2 and hhea vertical metrics (typo/hhea/win), the
     /// parameters the Google Fonts vertical-metrics checks read.
-    typo_asc: gpui::Entity<gpui_component::input::InputState>,
-    typo_desc: gpui::Entity<gpui_component::input::InputState>,
-    typo_gap: gpui::Entity<gpui_component::input::InputState>,
-    hhea_asc: gpui::Entity<gpui_component::input::InputState>,
-    hhea_desc: gpui::Entity<gpui_component::input::InputState>,
-    hhea_gap: gpui::Entity<gpui_component::input::InputState>,
-    win_asc: gpui::Entity<gpui_component::input::InputState>,
-    win_desc: gpui::Entity<gpui_component::input::InputState>,
+    typo_asc: gpui::Entity<widgets::input::InputState>,
+    typo_desc: gpui::Entity<widgets::input::InputState>,
+    typo_gap: gpui::Entity<widgets::input::InputState>,
+    hhea_asc: gpui::Entity<widgets::input::InputState>,
+    hhea_desc: gpui::Entity<widgets::input::InputState>,
+    hhea_gap: gpui::Entity<widgets::input::InputState>,
+    win_asc: gpui::Entity<widgets::input::InputState>,
+    win_desc: gpui::Entity<widgets::input::InputState>,
 }
 
 /// The Kerning section's inputs: a live filter over the pair list,
 /// and a first/second/value editor that commits on Enter.
 struct KernInputs {
-    filter: gpui::Entity<gpui_component::input::InputState>,
-    first: gpui::Entity<gpui_component::input::InputState>,
-    second: gpui::Entity<gpui_component::input::InputState>,
-    value: gpui::Entity<gpui_component::input::InputState>,
+    filter: gpui::Entity<widgets::input::InputState>,
+    first: gpui::Entity<widgets::input::InputState>,
+    second: gpui::Entity<widgets::input::InputState>,
+    value: gpui::Entity<widgets::input::InputState>,
 }
 
 /// Which Font Info field an input commits to.
@@ -7066,17 +7066,17 @@ impl Workspace {
         // Editable fields commit on Enter (rename, unicode, kerning
         // groups); the rest stay read-only rows.
         let input_row = |header: &'static str,
-                         input: &gpui::Entity<gpui_component::input::InputState>| {
+                         input: &gpui::Entity<widgets::input::InputState>| {
             div()
                 .flex()
                 .flex_col()
                 .gap_0p5()
                 .child(div().text_xs().text_color(t::text_muted()).child(header))
-                .child(gpui_component::input::Input::new(input))
+                .child(widgets::input::Input::new(input))
         };
         let pair_row = |header: &'static str,
-                        a: &gpui::Entity<gpui_component::input::InputState>,
-                        b: &gpui::Entity<gpui_component::input::InputState>| {
+                        a: &gpui::Entity<widgets::input::InputState>,
+                        b: &gpui::Entity<widgets::input::InputState>| {
             div()
                 .flex()
                 .flex_col()
@@ -7087,10 +7087,10 @@ impl Workspace {
                         .flex()
                         .gap_1()
                         .child(div().flex_1().child(
-                            gpui_component::input::Input::new(a),
+                            widgets::input::Input::new(a),
                         ))
                         .child(div().flex_1().child(
-                            gpui_component::input::Input::new(b),
+                            widgets::input::Input::new(b),
                         )),
                 )
         };
@@ -7098,7 +7098,7 @@ impl Workspace {
         // and the kerning groups, the way the web keeps a glyph's
         // metrics in one panel. Enter commits each field.
         let metric_field = |label_text: &'static str,
-                            input: &gpui::Entity<gpui_component::input::InputState>| {
+                            input: &gpui::Entity<widgets::input::InputState>| {
             div()
                 .flex_1()
                 .flex()
@@ -7110,7 +7110,7 @@ impl Workspace {
                         .text_color(t::text_muted())
                         .child(label_text),
                 )
-                .child(gpui_component::input::Input::new(input))
+                .child(widgets::input::Input::new(input))
         };
         // In the editor the metric fields live in the floating panel
         // over the canvas (Glyphs-style), so they appear here only in
@@ -7192,7 +7192,7 @@ impl Workspace {
                             .text_color(t::text_muted())
                             .child("Smart Axis (name,min,max)"),
                     )
-                    .child(gpui_component::input::Input::new(
+                    .child(widgets::input::Input::new(
                         &self.glyph_smart_axis_ref(),
                     )),
             )
@@ -7253,7 +7253,7 @@ impl Workspace {
                                 .text_color(t::text_muted())
                                 .child("Switch At (axis value)"),
                         )
-                        .child(gpui_component::input::Input::new(
+                        .child(widgets::input::Input::new(
                             &self.glyph_inputs.switch_at,
                         )),
                 }
@@ -8813,7 +8813,7 @@ impl Workspace {
                                 .child("Slant"),
                         )
                         .child(div().w(px(64.0)).child(
-                            gpui_component::input::Input::new(&self.slant_input),
+                            widgets::input::Input::new(&self.slant_input),
                         ))
                         .child(
                             div()
@@ -8822,7 +8822,7 @@ impl Workspace {
                                 .child("Stroke"),
                         )
                         .child(div().w(px(64.0)).child(
-                            gpui_component::input::Input::new(&self.stroke_input),
+                            widgets::input::Input::new(&self.stroke_input),
                         )),
                 )
                 // Offset: the whole glyph bolder (+) or lighter (−).
@@ -8840,7 +8840,7 @@ impl Workspace {
                                 .child("Offset"),
                         )
                         .child(div().w(px(64.0)).child(
-                            gpui_component::input::Input::new(&self.offset_input),
+                            widgets::input::Input::new(&self.offset_input),
                         )),
                 )
                 .child(
@@ -8855,7 +8855,7 @@ impl Workspace {
                                 .child("Extrude"),
                         )
                         .child(div().w(px(64.0)).child(
-                            gpui_component::input::Input::new(
+                            widgets::input::Input::new(
                                 &self.extrude_input,
                             ),
                         ))
@@ -8866,7 +8866,7 @@ impl Workspace {
                                 .child("Roughen"),
                         )
                         .child(div().w(px(64.0)).child(
-                            gpui_component::input::Input::new(
+                            widgets::input::Input::new(
                                 &self.roughen_input,
                             ),
                         )),
@@ -10117,7 +10117,7 @@ impl Workspace {
                         .child("Fit Curve"),
                 )
                 .child(div().w(px(64.0)).child(
-                    gpui_component::input::Input::new(&self.fit_input),
+                    widgets::input::Input::new(&self.fit_input),
                 )),
         );
         self.section(cx, "Curves", body)
@@ -10203,7 +10203,7 @@ impl Workspace {
                             .child("Reference"),
                     )
                     .child(div().flex_1().child(
-                        gpui_component::input::Input::new(
+                        widgets::input::Input::new(
                             &self.reference_glyph_input,
                         ),
                     )),
@@ -10544,7 +10544,7 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .w(px(180.0))
-                    .child(gpui_component::input::Input::new(
+                    .child(widgets::input::Input::new(
                         &self.component_name_input,
                     )),
             );
@@ -10562,7 +10562,7 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .w(px(180.0))
-                    .child(gpui_component::input::Input::new(
+                    .child(widgets::input::Input::new(
                         &self.corner_name_input,
                     )),
             );
@@ -10707,7 +10707,7 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .w(px(200.0))
-                    .child(gpui_component::input::Input::new(
+                    .child(widgets::input::Input::new(
                         &self.annotation_input,
                     )),
             );
@@ -13552,11 +13552,10 @@ impl Workspace {
                 .text_color(t::text_muted())
                 .child(text)
         };
-        let metric = |input: &gpui::Entity<gpui_component::input::InputState>| {
-            use gpui_component::Sizable as _;
+        let metric = |input: &gpui::Entity<widgets::input::InputState>| {
             div()
                 .w(px(64.0))
-                .child(gpui_component::input::Input::new(input).small())
+                .child(widgets::input::Input::new(input).small())
         };
 
         let metrics = card()
@@ -15766,7 +15765,7 @@ impl Workspace {
             runebender_core::glyph_ops::kern_group(&font.font, &name, false)
                 .map(|g| g.as_str().replace("public.kern2.", ""))
                 .unwrap_or_default();
-        let set = |entity: &gpui::Entity<gpui_component::input::InputState>,
+        let set = |entity: &gpui::Entity<widgets::input::InputState>,
                    value: String,
                    window: &mut Window,
                    cx: &mut Context<Self>| {
@@ -16258,7 +16257,7 @@ impl Workspace {
             .gap_1()
             .child(
                 div().h(px(260.0)).child(
-                    gpui_component::input::Textarea::new(&self.features_input)
+                    widgets::input::Input::new(&self.features_input)
                         .h_full(),
                 ),
             )
@@ -16533,7 +16532,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2()
-            .child(gpui_component::input::Input::new(&self.group_name_input))
+            .child(widgets::input::Input::new(&self.group_name_input))
             .child(rows)
             .child(
                 div()
@@ -16578,10 +16577,10 @@ impl Workspace {
             }
         }
         let total = pairs.len() + hidden;
-        let field = |input: &gpui::Entity<gpui_component::input::InputState>| {
+        let field = |input: &gpui::Entity<widgets::input::InputState>| {
             div()
                 .flex_1()
-                .child(gpui_component::input::Input::new(input))
+                .child(widgets::input::Input::new(input))
         };
         let editor_row = div()
             .flex()
@@ -16678,7 +16677,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_1()
-            .child(gpui_component::input::Input::new(&self.kern_inputs.filter))
+            .child(widgets::input::Input::new(&self.kern_inputs.filter))
             .child(editor_row)
             .child(list)
             .child(
@@ -17260,7 +17259,7 @@ impl Workspace {
             );
         }
         swatches = swatches.child(
-            div().w(px(96.0)).child(gpui_component::input::Input::new(
+            div().w(px(96.0)).child(widgets::input::Input::new(
                 &self.color_hex_input,
             )),
         );
@@ -17639,14 +17638,14 @@ impl Workspace {
             return self.section(cx, "Font Info", div());
         }
         let field = |header: &'static str,
-                     input: &gpui::Entity<gpui_component::input::InputState>| {
+                     input: &gpui::Entity<widgets::input::InputState>| {
             div()
                 .flex_1()
                 .flex()
                 .flex_col()
                 .gap_0p5()
                 .child(div().text_xs().text_color(t::text_muted()).child(header))
-                .child(gpui_component::input::Input::new(input))
+                .child(widgets::input::Input::new(input))
         };
         let body = div()
             .flex()
@@ -17757,7 +17756,7 @@ impl Workspace {
             None => (String::new(), String::new()),
         };
         let width = format!("{advance:.0}");
-        let set = |entity: &gpui::Entity<gpui_component::input::InputState>,
+        let set = |entity: &gpui::Entity<widgets::input::InputState>,
                    value: String,
                    window: &mut Window,
                    cx: &mut Context<Self>| {
@@ -18151,13 +18150,13 @@ impl Workspace {
         {
             use runebender_core::path::Quadrant;
             let field = |label: &'static str,
-                         input: &gpui::Entity<gpui_component::input::InputState>| {
+                         input: &gpui::Entity<widgets::input::InputState>| {
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
                     .child(div().w(px(14.0)).text_sm().text_color(t::text_muted()).child(label))
-                    .child(div().flex_1().child(gpui_component::input::Input::new(input)))
+                    .child(div().flex_1().child(widgets::input::Input::new(input)))
             };
             // The 9-point reference picker (web coordinate quadrant):
             // numeric X/Y and W/H act about the chosen corner.
@@ -18247,7 +18246,7 @@ impl Workspace {
                             .child("Anchor"),
                     )
                     .child(div().flex_1().child(
-                        gpui_component::input::Input::new(
+                        widgets::input::Input::new(
                             &self.anchor_name_input,
                         ),
                     )),
@@ -18336,7 +18335,7 @@ impl Workspace {
                                     .child(format!("Smart {axis}")),
                             )
                             .child(div().w(px(64.0)).child(
-                                gpui_component::input::Input::new(
+                                widgets::input::Input::new(
                                     &self.smart_value_input,
                                 ),
                             )),
@@ -18529,7 +18528,7 @@ impl Workspace {
 
     fn glyph_smart_axis_ref(
         &self,
-    ) -> gpui::Entity<gpui_component::input::InputState> {
+    ) -> gpui::Entity<widgets::input::InputState> {
         self.smart_axis_input.clone()
     }
 
@@ -19085,7 +19084,6 @@ impl Workspace {
         if !t::set_theme(id) {
             return;
         }
-        t::install_component_theme(cx);
         cx.set_menus(app_menus());
         self.status_note = Some(
             format!(
@@ -20356,7 +20354,7 @@ impl Workspace {
                     .child("Instances"),
             );
             body = body.child(list);
-            body = body.child(gpui_component::input::Input::new(
+            body = body.child(widgets::input::Input::new(
                 &self.instance_name_input,
             ));
         }
@@ -20397,7 +20395,7 @@ impl Workspace {
                     body = body.child(rows);
                 }
                 body = body.child(div().w(px(110.0)).child(
-                    gpui_component::input::Input::new(&self.axis_map_input),
+                    widgets::input::Input::new(&self.axis_map_input),
                 ));
             }
         }
@@ -20444,7 +20442,7 @@ impl Workspace {
                         .child("Ease"),
                 )
                 .child(div().w(px(64.0)).child(
-                    gpui_component::input::Input::new(&self.ease_input),
+                    widgets::input::Input::new(&self.ease_input),
                 )),
         );
         Some(self.section(cx, "Axes", body))
@@ -22909,13 +22907,10 @@ fn main() {
         .unwrap_or(Mode::Grid);
 
     #[cfg(not(target_family = "wasm"))]
-    let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
+    let app = gpui_platform::application();
     #[cfg(target_family = "wasm")]
-    let app = gpui_platform::single_threaded_web()
-        .with_assets(gpui_component_assets::Assets::default());
+    let app = gpui_platform::single_threaded_web();
     let launch = move |cx: &mut App| {
-        gpui_component::init(cx);
-        t::install_component_theme(cx);
 
         // The keymap for app commands; menu items show these as their
         // key equivalents.
@@ -22960,11 +22955,9 @@ fn main() {
         // in-window bar drawn where no native bar exists.
         #[cfg(not(target_family = "wasm"))]
         cx.set_menus(app_menus());
-        gpui_component::GlobalState::global_mut(cx).set_app_menus(
-            app_menus().into_iter().map(|menu| menu.owned()).collect(),
-        );
         #[cfg(not(target_os = "macos"))]
-        let app_menu_bar = gpui_component::menu::AppMenuBar::new(cx);
+        let app_menu_bar =
+            cx.new(|cx| widgets::menu_bar::MenuBar::new(app_menus(), cx));
 
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
@@ -22983,7 +22976,7 @@ fn main() {
                             .placeholder("Search glyphs")
                     });
                     let metric = |cx: &mut Context<Workspace>, window: &mut Window| {
-                        cx.new(|cx| gpui_component::input::InputState::new(window, cx))
+                        cx.new(|cx| widgets::input::InputState::new(window, cx))
                     };
                     let width_input = metric(cx, window);
                     let lsb_input = metric(cx, window);
@@ -23003,7 +22996,7 @@ fn main() {
                     let font_info_sub = |cx: &mut Context<Workspace>,
                                          window: &mut Window,
                                          state: &gpui::Entity<
-                        gpui_component::input::InputState,
+                        widgets::input::InputState,
                     >,
                                          which: FontInfoField| {
                         let state = state.clone();
@@ -23011,12 +23004,12 @@ fn main() {
                             let state = state.clone();
                             move |this: &mut Workspace,
                                   _,
-                                  ev: &gpui_component::input::InputEvent,
+                                  ev: &widgets::input::InputEvent,
                                   window,
                                   cx| {
                                 if matches!(
                                     ev,
-                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter { .. }
                                 ) {
                                     let text = state.read(cx).value().to_string();
                                     this.apply_font_info(which, &text);
@@ -23092,19 +23085,19 @@ fn main() {
                         cx, window, &fi_win_desc, FontInfoField::WinDescent,
                     );
                     let kern_filter = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("Filter pairs")
                     });
                     let kern_first = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("First")
                     });
                     let kern_second = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("Second")
                     });
                     let kern_value = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("Value")
                     });
                     // The filter redraws the list as it changes; the
@@ -23114,12 +23107,12 @@ fn main() {
                         window,
                         |_: &mut Workspace,
                          _,
-                         ev: &gpui_component::input::InputEvent,
+                         ev: &widgets::input::InputEvent,
                          _,
                          cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::Change
+                                widgets::input::InputEvent::Change
                             ) {
                                 cx.notify();
                             }
@@ -23128,18 +23121,18 @@ fn main() {
                     let kern_commit = |cx: &mut Context<Workspace>,
                                        window: &mut Window,
                                        state: &gpui::Entity<
-                        gpui_component::input::InputState,
+                        widgets::input::InputState,
                     >| {
                         let state = state.clone();
                         cx.subscribe_in(&state, window, {
                             move |this: &mut Workspace,
                                   _,
-                                  ev: &gpui_component::input::InputEvent,
+                                  ev: &widgets::input::InputEvent,
                                   _,
                                   cx| {
                                 if matches!(
                                     ev,
-                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter { .. }
                                 ) {
                                     let first = this
                                         .kern_inputs
@@ -23176,23 +23169,23 @@ fn main() {
                     let sub_kern_second = kern_commit(cx, window, &kern_second);
                     let sub_kern_value = kern_commit(cx, window, &kern_value);
                     let slant_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("Angle°")
                     });
                     let stroke_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("Width")
                     });
                     let sub_stroke = cx.subscribe_in(&stroke_input, window, {
                         let state = stroke_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 if let Ok(width) = state
                                     .read(cx)
@@ -23207,19 +23200,19 @@ fn main() {
                         }
                     });
                     let offset_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("±Units")
                     });
                     let sub_offset = cx.subscribe_in(&offset_input, window, {
                         let state = offset_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 if let Ok(delta) = state
                                     .read(cx)
@@ -23234,19 +23227,19 @@ fn main() {
                         }
                     });
                     let fit_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("%")
                     });
                     let sub_fit = cx.subscribe_in(&fit_input, window, {
                         let state = fit_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 if let Ok(pct) = state
                                     .read(cx)
@@ -23262,19 +23255,19 @@ fn main() {
                         }
                     });
                     let color_hex_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("#RRGGBB")
                     });
                     let sub_color_hex = cx.subscribe_in(&color_hex_input, window, {
                         let state = color_hex_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               window,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 if this.command_add_palette_color(&text) {
@@ -23287,19 +23280,19 @@ fn main() {
                         }
                     });
                     let ease_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("±50")
                     });
                     let sub_ease = cx.subscribe_in(&ease_input, window, {
                         let state = ease_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 if let Ok(ease) = state
                                     .read(cx)
@@ -23314,19 +23307,19 @@ fn main() {
                         }
                     });
                     let extrude_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("15,30")
                     });
                     let sub_extrude = cx.subscribe_in(&extrude_input, window, {
                         let state = extrude_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 this.command_extrude(&text);
@@ -23335,19 +23328,19 @@ fn main() {
                         }
                     });
                     let roughen_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("15,15,10")
                     });
                     let sub_roughen = cx.subscribe_in(&roughen_input, window, {
                         let state = roughen_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 this.command_roughen(&text);
@@ -23356,7 +23349,7 @@ fn main() {
                         }
                     });
                     let instance_name_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("Instance name")
                     });
                     let sub_instance_name = cx.subscribe_in(
@@ -23366,12 +23359,12 @@ fn main() {
                             let state = instance_name_input.clone();
                             move |this: &mut Workspace,
                                   _,
-                                  ev: &gpui_component::input::InputEvent,
+                                  ev: &widgets::input::InputEvent,
                                   window,
                                   cx| {
                                 if matches!(
                                     ev,
-                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter { .. }
                                 ) {
                                     let name = state.read(cx).value().to_string();
                                     this.command_instance_upsert(&name);
@@ -23384,19 +23377,19 @@ fn main() {
                         },
                     );
                     let features_input = cx.new(|cx| {
-                        gpui_component::input::TextareaState::new(window, cx)
+                        widgets::input::InputState::new(window, cx).multi_line()
                     });
                     let sub_features = cx.subscribe_in(
                         &features_input,
                         window,
                         |this: &mut Workspace,
                          _,
-                         ev: &gpui_component::input::InputEvent,
+                         ev: &widgets::input::InputEvent,
                          _,
                          cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::Change
+                                widgets::input::InputEvent::Change
                             ) {
                                 this.features_edited = true;
                                 cx.notify();
@@ -23407,12 +23400,12 @@ fn main() {
                         let state = slant_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let Ok(angle) = state
                                     .read(cx)
@@ -23437,19 +23430,19 @@ fn main() {
                     });
                     let metric_sub = |cx: &mut Context<Workspace>,
                                       window: &mut Window,
-                                      state: &gpui::Entity<gpui_component::input::InputState>,
+                                      state: &gpui::Entity<widgets::input::InputState>,
                                       which: MetricField| {
                         let state = state.clone();
                         cx.subscribe_in(&state, window, {
                             let state = state.clone();
                             move |this: &mut Workspace,
                                   _,
-                                  ev: &gpui_component::input::InputEvent,
+                                  ev: &widgets::input::InputEvent,
                                   window,
                                   cx| {
                                 if matches!(
                                     ev,
-                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter { .. }
                                 ) {
                                     let text = state.read(cx).value().to_string();
                                     if let Ok(v) = text.trim().parse::<f64>() {
@@ -23467,19 +23460,19 @@ fn main() {
                     let sub_r = metric_sub(cx, window, &rsb_input, MetricField::Rsb);
                     let coord_sub = |cx: &mut Context<Workspace>,
                                      window: &mut Window,
-                                     state: &gpui::Entity<gpui_component::input::InputState>,
+                                     state: &gpui::Entity<widgets::input::InputState>,
                                      is_x: bool| {
                         let state = state.clone();
                         cx.subscribe_in(&state, window, {
                             let state = state.clone();
                             move |this: &mut Workspace,
                                   _,
-                                  ev: &gpui_component::input::InputEvent,
+                                  ev: &widgets::input::InputEvent,
                                   window,
                                   cx| {
                                 if matches!(
                                     ev,
-                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter { .. }
                                 ) {
                                     let text = state.read(cx).value().to_string();
                                     if let Ok(v) = text.trim().parse::<f64>() {
@@ -23496,7 +23489,7 @@ fn main() {
                     let size_sub = |cx: &mut Context<Workspace>,
                                     window: &mut Window,
                                     state: &gpui::Entity<
-                        gpui_component::input::InputState,
+                        widgets::input::InputState,
                     >,
                                     is_width: bool| {
                         let state = state.clone();
@@ -23504,12 +23497,12 @@ fn main() {
                             let state = state.clone();
                             move |this: &mut Workspace,
                                   _,
-                                  ev: &gpui_component::input::InputEvent,
+                                  ev: &widgets::input::InputEvent,
                                   window,
                                   cx| {
                                 if matches!(
                                     ev,
-                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter { .. }
                                 ) {
                                     let text = state.read(cx).value().to_string();
                                     if let Ok(v) = text.trim().parse::<f64>() {
@@ -23531,7 +23524,7 @@ fn main() {
                     let glyph_sub = |cx: &mut Context<Workspace>,
                                      window: &mut Window,
                                      state: &gpui::Entity<
-                        gpui_component::input::InputState,
+                        widgets::input::InputState,
                     >,
                                      which: u8| {
                         let state = state.clone();
@@ -23539,12 +23532,12 @@ fn main() {
                             let state = state.clone();
                             move |this: &mut Workspace,
                                   _,
-                                  ev: &gpui_component::input::InputEvent,
+                                  ev: &widgets::input::InputEvent,
                                   window,
                                   cx| {
                                 if matches!(
                                     ev,
-                                    gpui_component::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter { .. }
                                 ) {
                                     let text =
                                         state.read(cx).value().to_string();
@@ -23572,23 +23565,23 @@ fn main() {
                         })
                     };
                     let component_name_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("glyph name")
                     });
                     let reference_glyph_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("glyph name")
                     });
                     let sub_ref = cx.subscribe_in(&reference_glyph_input, window, {
                         let state = reference_glyph_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _window,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text =
                                     state.read(cx).value().trim().to_string();
@@ -23599,19 +23592,19 @@ fn main() {
                         }
                     });
                     let anchor_name_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("anchor name")
                     });
                     let sub_anchor = cx.subscribe_in(&anchor_name_input, window, {
                         let state = anchor_name_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _window,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 this.apply_anchor_name(&text);
@@ -23620,19 +23613,19 @@ fn main() {
                         }
                     });
                     let corner_name_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("corner name")
                     });
                     let sub_corner = cx.subscribe_in(&corner_name_input, window, {
                         let state = corner_name_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               window,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 let node = this
@@ -23651,19 +23644,19 @@ fn main() {
                         }
                     });
                     let smart_axis_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("Width,0,100")
                     });
                     let sub_smart_axis = cx.subscribe_in(&smart_axis_input, window, {
                         let state = smart_axis_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 this.command_make_smart_axis(&text);
@@ -23672,19 +23665,19 @@ fn main() {
                         }
                     });
                     let group_name_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("new group · o or |o")
                     });
                     let sub_group_name = cx.subscribe_in(&group_name_input, window, {
                         let state = group_name_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               window,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 let trimmed = text.trim();
@@ -23706,19 +23699,19 @@ fn main() {
                         }
                     });
                     let axis_map_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("400,430")
                     });
                     let sub_axis_map = cx.subscribe_in(&axis_map_input, window, {
                         let state = axis_map_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               window,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 let mut parts =
@@ -23739,19 +23732,19 @@ fn main() {
                         }
                     });
                     let smart_value_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("value")
                     });
                     let sub_smart_value = cx.subscribe_in(&smart_value_input, window, {
                         let state = smart_value_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               _,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text =
                                     state.read(cx).value().trim().to_string();
@@ -23763,19 +23756,19 @@ fn main() {
                         }
                     });
                     let annotation_input = cx.new(|cx| {
-                        gpui_component::input::InputState::new(window, cx)
+                        widgets::input::InputState::new(window, cx)
                             .placeholder("note text")
                     });
                     let sub_note = cx.subscribe_in(&annotation_input, window, {
                         let state = annotation_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               window,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 let at = this
@@ -23803,12 +23796,12 @@ fn main() {
                         let state = component_name_input.clone();
                         move |this: &mut Workspace,
                               _,
-                              ev: &gpui_component::input::InputEvent,
+                              ev: &widgets::input::InputEvent,
                               window,
                               cx| {
                             if matches!(
                                 ev,
-                                gpui_component::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter { .. }
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 this.commit_add_component(&text);
@@ -24106,7 +24099,10 @@ fn main() {
                     }
                 })
                 .detach();
-                cx.new(|cx| gpui_component::Root::new(workspace, window, cx))
+                // The workspace is the window root: nothing here used
+                // the dialog, sheet, notification, and tooltip layers
+                // the old wrapper existed to provide.
+                workspace
             },
         )
         .unwrap();

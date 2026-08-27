@@ -4,5 +4,6 @@
 //! `cargo install --locked` and breaks the browser build.
 
 pub mod input;
+pub mod menu_bar;
 pub mod resizable;
 pub mod slider;

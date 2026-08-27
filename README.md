@@ -18,16 +18,15 @@ cargo run
 Or install it and open a font from anywhere:
 
 ```sh
-cargo install --locked --git https://github.com/eliheuer/runebender-gpui
+cargo install --git https://github.com/eliheuer/runebender-gpui
 runebender-gpui path/to/Font.designspace
 ```
 
-Every dependency comes from crates.io or a public git repository, so a
-plain clone builds. Use `--locked` when installing: several
-dependencies track a git branch, and the committed `Cargo.lock` holds
-the revisions this editor is known to build against. The repo pins the stable Rust toolchain in
-`rust-toolchain.toml`. A GPUI dependency (`pathfinder_simd`) does not
-compile on current nightly toolchains.
+Every dependency comes from crates.io or a public git repository, and
+every git one is pinned to a revision, so a fresh resolve lands on the
+same graph and `--locked` is not needed. The repo pins the stable Rust
+toolchain in `rust-toolchain.toml`. A GPUI dependency
+(`pathfinder_simd`) does not compile on current nightly toolchains.
 
 The shared editing crate,
 [runebender-core](https://github.com/eliheuer/runebender-core), is a
@@ -46,10 +45,16 @@ paths = ["runebender-core"]
 Put that file above the two repositories, not inside them: the
 override is a local development setting, not part of either repo.
 
-GPUI and `gpui_platform` come from the Zed git repository (not
-crates.io) because the editor shell uses
-[gpui-component](https://github.com/longbridge/gpui-component),
-which tracks Zed main.
+GPUI and `gpui_platform` come from the Zed git repository, which does
+not publish to crates.io. Both are pinned to a revision; bump them
+together.
+
+The widgets this editor needs are in `src/widgets`: text fields on
+[parley](https://github.com/linebender/parley)'s `PlainEditor`, a
+slider, resizable panel groups, and an in-window menu bar. They
+replace gpui-component, which pulled gpui by bare URL (so revisions
+could not be pinned) and force-enabled gpui's `profiler` feature,
+whose `Instant::now()` call panics on wasm.
 
 ## The browser build
 

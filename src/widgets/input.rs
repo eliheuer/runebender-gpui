@@ -568,6 +568,7 @@ use crate::theme as t;
 pub struct Input {
     state: gpui::Entity<InputState>,
     full_height: bool,
+    small: bool,
 }
 
 impl Input {
@@ -575,12 +576,19 @@ impl Input {
         Self {
             state: state.clone(),
             full_height: false,
+            small: false,
         }
     }
 
     /// Fill the space given, for the feature editor.
     pub fn h_full(mut self) -> Self {
         self.full_height = true;
+        self
+    }
+
+    /// A shorter field, for rows that pack several together.
+    pub fn small(mut self) -> Self {
+        self.small = true;
         self
     }
 }
@@ -622,6 +630,8 @@ impl gpui::RenderOnce for Input {
             field.h_full()
         } else if multi_line {
             field.min_h(px(LINE_HEIGHT * 3.0))
+        } else if self.small {
+            field.h(px(LINE_HEIGHT))
         } else {
             field.h(px(LINE_HEIGHT + PAD_Y * 2.0))
         };
