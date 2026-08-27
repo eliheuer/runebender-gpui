@@ -56,6 +56,15 @@ parley = { version = "0.8", default-features = false, features = ["std", "system
 # from git so a plain clone (or `cargo install --git`) builds without
 # a sibling checkout. To develop the two together, point cargo at a
 # local copy — see "Building" in the README.
+# Local model inference: outline models over font sources. Pinned like
+# every other git dependency so a fresh resolve lands on the same
+# graph. The accelerate feature is what makes a prediction fast enough
+# to offer while someone is drawing.
+[dependencies.font-ml]
+git = "https://github.com/eliheuer/font-ml"
+rev = "a7b845f"
+features = ["accelerate"]
+
 [dependencies.runebender-core]
 git = "https://github.com/eliheuer/runebender-core"
 rev = "3e3c879d3e3e02e461c0cfee6b7aaf7fe89840a4"

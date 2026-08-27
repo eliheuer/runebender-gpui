@@ -115,6 +115,7 @@ gpui::actions!(
         QuadsToCubics,
         CubicsToQuads,
         TraceImage,
+        BoldenWithModel,
         PlaceImage,
         ImportSvg,
         RemoveImage,
@@ -299,6 +300,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Export Glyph as SVG", ExportGlyphSvg),
                 MenuItem::separator(),
                 MenuItem::action("Trace Image…", TraceImage),
+                MenuItem::action("Bolden With Model…", BoldenWithModel),
                 MenuItem::action("Place Image…", PlaceImage),
                 MenuItem::action("Import SVG…", ImportSvg),
                 MenuItem::action("Remove Image", RemoveImage),
@@ -18473,6 +18475,125 @@ impl Workspace {
         .detach();
     }
 
+    /// Glyph > Bolden With Model…: pick a model directory, predict a
+    /// heavier version of the open glyph, and install it as a proposal.
+    ///
+    /// The prediction is structure-forced: the model may only move the
+    /// points that are already there, so the result stays
+    /// point-compatible with what it came from. It lands in the
+    /// current glyph and is undoable, so the way to reject it is
+    /// Cmd+Z.
+    fn command_bolden_with_model(&mut self, cx: &mut Context<Self>) {
+        let Mode::Editor(index) = self.mode else {
+            self.status_note = Some("Open a glyph first".into());
+            return;
+        };
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose model".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else { return };
+            let Some(dir) = paths.into_iter().next() else { return };
+            this.update(cx, |workspace, cx| {
+                workspace.apply_bolden(index, &dir);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Run the model over the open glyph and install what it predicts.
+    fn apply_bolden(&mut self, index: usize, dir: &std::path::Path) {
+        let checkpoint = match font_ml::Checkpoint::open(dir) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status_note = Some(format!("Model: {e}").into());
+                return;
+            }
+        };
+        let Some(font) = self.font() else { return };
+        let Some(entry) = font.glyphs.get(index) else { return };
+        let name = entry.name.to_string();
+        let advance = entry.advance;
+        let unicode = entry.codepoint.map(|c| c as u32);
+        let Some(glyph) = font.font.get_glyph(name.as_str()) else { return };
+        let Some(ops) = font_ml::ufo::glyph_ops(glyph) else {
+            self.status_note =
+                Some("Nothing to bolden: this glyph is built from components".into());
+            return;
+        };
+
+        let model = match font_ml::outline::OutlineModel::load(&checkpoint) {
+            Ok(m) => m,
+            Err(e) => {
+                self.status_note = Some(format!("Model: {e}").into());
+                return;
+            }
+        };
+        let center = checkpoint
+            .config
+            .delta_center
+            .map(|c| (c[0], c[1]))
+            .unwrap_or((0, 0));
+        let result = match font_ml::bolden::bolden(
+            &model, &name, unicode, advance, &ops, center,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                self.status_note = Some(format!("Bolden: {e}").into());
+                return;
+            }
+        };
+        // The encoding guarantees this; assert it before writing to a
+        // font rather than take it on trust.
+        if !result.is_compatible() {
+            self.status_note =
+                Some("Refused: the prediction changed the point structure".into());
+            return;
+        }
+
+        let expected = glyph
+            .contours
+            .iter()
+            .map(|c| c.points.len() + 1)
+            .sum::<usize>();
+        if result.deltas.len() != expected {
+            self.status_note = Some(
+                format!(
+                    "Refused: model returned {} offsets for {expected} points",
+                    result.deltas.len()
+                )
+                .into(),
+            );
+            return;
+        }
+        let contours = bolden_contours(glyph, &result.deltas, center);
+        let moved = result
+            .deltas
+            .iter()
+            .filter(|(x, y)| *x != 0 || *y != 0)
+            .count();
+        self.push_undo_snapshot(index);
+        self.font_mut().and_then(|f| {
+            f.edit_glyph(index, |g| {
+                g.contours = contours.clone();
+            })
+        });
+        self.editor.selected.clear();
+        self.status_note = Some(
+            format!(
+                "Boldened {name}: {moved}/{} points moved, advance {:+}. Undo to reject.",
+                result.deltas.len(),
+                result.advance_delta
+            )
+            .into(),
+        );
+    }
+
     /// Glyph > Place Image…: copy a picture into the UFO's images
     /// store and set it as this glyph's background image, scaled to
     /// the em and sitting on the descender. The tracing-template
@@ -22843,6 +22964,9 @@ impl Render for Workspace {
                 this.command_remove_image();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &BoldenWithModel, _, cx| {
+                this.command_bolden_with_model(cx);
+            }))
             .on_action(cx.listener(|this, _: &TraceImage, _, cx| {
                 this.command_trace_image(cx);
             }))
@@ -26158,4 +26282,42 @@ unitsPerEm = 1000;
         }
         copy_dir(src, dst).is_ok()
     }
+}
+
+/// Move a glyph's points by the model's offsets, in the order the
+/// outline reader produced them.
+///
+/// Walks the same contours in the same rotation `font_ml::ufo` uses,
+/// so offset *n* lands on the point it was predicted for. Point types
+/// and smooth flags are left alone: this moves points and nothing
+/// else.
+fn bolden_contours(
+    glyph: &norad::Glyph,
+    deltas: &[(i32, i32)],
+    center: (i32, i32),
+) -> Vec<norad::Contour> {
+    let mut next = deltas.iter();
+    let mut out = Vec::with_capacity(glyph.contours.len());
+    for contour in &glyph.contours {
+        let points = &contour.points;
+        let start = points
+            .iter()
+            .position(|p| p.typ != norad::PointType::OffCurve)
+            .unwrap_or(0);
+        let n = points.len();
+        let mut moved = points.clone();
+        // Visit in pen order, starting where the reader started.
+        for step in 0..n {
+            let i = (start + step) % n;
+            let Some((dx, dy)) = next.next().copied() else { break };
+            moved[i].x += (dx + center.0) as f64;
+            moved[i].y += (dy + center.1) as f64;
+        }
+        // The reader ends a closed contour by returning to its start,
+        // so it yields one offset more than the contour has points.
+        // Drop it, or every later contour is shifted by one point.
+        next.next();
+        out.push(norad::Contour::new(moved, contour.identifier().cloned()));
+    }
+    out
 }
