@@ -559,6 +559,50 @@ impl skrifa::outline::OutlinePen for OutlineToPath {
     }
 }
 
+/// Outlines already extracted, keyed by font, glyph and size.
+///
+/// Pulling an outline out of a font file is the expensive half of
+/// drawing text this way, and a field redraws every frame with almost
+/// the same glyphs. Without this the editor spends its time asking
+/// skrifa for the letter "e" over and over.
+type OutlineKey = (usize, u32, u32, u32);
+
+thread_local! {
+    static OUTLINE_CACHE: std::cell::RefCell<
+        std::collections::HashMap<OutlineKey, Option<kurbo::BezPath>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Cached outline lookup.
+fn glyph_outline_cached(
+    font: &parley::FontData,
+    size: f32,
+    coords: &[i16],
+    glyph_id: u32,
+) -> Option<kurbo::BezPath> {
+    // The blob's address identifies the font: two fonts loaded at once
+    // do not share one, and a reload gets a fresh entry.
+    let key: OutlineKey = (
+        font.data.as_ref().as_ptr() as usize,
+        font.index,
+        glyph_id,
+        size.to_bits(),
+    );
+    // Variable coordinates would need to be in the key; fields are
+    // drawn at one instance, so a font with any is not cached.
+    if !coords.is_empty() {
+        return glyph_outline(font, size, coords, glyph_id);
+    }
+    OUTLINE_CACHE.with(|cache| {
+        if let Some(hit) = cache.borrow().get(&key) {
+            return hit.clone();
+        }
+        let outline = glyph_outline(font, size, coords, glyph_id);
+        cache.borrow_mut().insert(key, outline.clone());
+        outline
+    })
+}
+
 /// The outline of one glyph, in pixels, with the baseline at y = 0 and
 /// y running down the way gpui expects.
 fn glyph_outline(
@@ -845,7 +889,7 @@ fn paint_layout(
             let coords = run.run().normalized_coords().to_vec();
             for glyph in run.positioned_glyphs() {
                 let Some(outline) =
-                    glyph_outline(&font, size, &coords, glyph.id)
+                    glyph_outline_cached(&font, size, &coords, glyph.id)
                 else {
                     continue;
                 };

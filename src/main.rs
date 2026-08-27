@@ -136,6 +136,21 @@ gpui::actions!(
 /// text draws at all, so the preferences are tried in order and the
 /// first family the text system reports wins.
 fn ui_font_family(cx: &gpui::App) -> gpui::SharedString {
+    // Cached: asking the platform for its font list takes about 140ms,
+    // and this is read once per frame. Uncached it capped the whole
+    // editor at roughly seven frames a second.
+    static RESOLVED: std::sync::OnceLock<gpui::SharedString> =
+        std::sync::OnceLock::new();
+    if let Some(name) = RESOLVED.get() {
+        return name.clone();
+    }
+    let name = resolve_ui_font_family(cx);
+    RESOLVED.set(name.clone()).ok();
+    name
+}
+
+/// The uncached lookup. Runs once.
+fn resolve_ui_font_family(cx: &gpui::App) -> gpui::SharedString {
     const PREFERRED: &[&str] = &[
         ".SystemUIFont",
         "SF Pro Text",

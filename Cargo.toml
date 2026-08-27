@@ -58,9 +58,16 @@ parley = { version = "0.8", default-features = false, features = ["std", "system
 # local copy — see "Building" in the README.
 # Local model inference: outline models over font sources. Pinned like
 # every other git dependency so a fresh resolve lands on the same
-# graph. The accelerate feature is what makes a prediction fast enough
-# to offer while someone is drawing.
+# graph.
 [dependencies.font-ml]
+git = "https://github.com/eliheuer/font-ml"
+rev = "a7b845f"
+
+# Accelerate is Apple's BLAS and links a framework, so it can only be
+# asked for on Apple targets: naming it unconditionally breaks the
+# wasm build at link time. It is what takes a prediction from tens of
+# seconds to under one.
+[target.'cfg(target_vendor = "apple")'.dependencies.font-ml]
 git = "https://github.com/eliheuer/font-ml"
 rev = "a7b845f"
 features = ["accelerate"]

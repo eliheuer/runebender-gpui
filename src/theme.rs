@@ -386,3 +386,27 @@ mod colour_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod perf {
+    /// Theme accessors are called hundreds of times per frame, so the
+    /// cost of one has to be negligible. This is a floor check, not a
+    /// benchmark: it fails only if a lookup becomes expensive enough
+    /// to matter at that rate.
+    #[test]
+    fn a_theme_lookup_is_cheap() {
+        let n = 100_000;
+        let start = std::time::Instant::now();
+        let mut sink = 0f32;
+        for _ in 0..n {
+            sink += super::text().r + super::accent().g;
+        }
+        let each = start.elapsed().as_nanos() as f64 / n as f64;
+        println!("{each:.0} ns per lookup (sink {sink})");
+        assert!(
+            each < 2000.0,
+            "a theme lookup costs {each:.0}ns; at ~1000 per frame that is \
+             visible"
+        );
+    }
+}
