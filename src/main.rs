@@ -4160,6 +4160,15 @@ struct Workspace {
     /// way a point moves and short on how far, which looks like a
     /// prediction that is too light.
     model_strength: f64,
+    /// The chosen model directory, kept so a run does not re-ask.
+    model_dir: Option<PathBuf>,
+    /// What the directory says it is, for the panel.
+    model_summary: Option<SharedString>,
+    /// Loaded weights. Cached: reading them is the slow part.
+    model_loaded: Option<std::rc::Rc<font_ml::outline::OutlineModel>>,
+    /// Last judgement: glyph, model error, baseline error.
+    model_score: Option<(SharedString, f64, f64)>,
+    model_strength_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
     status_note: Option<SharedString>,
     search: gpui::Entity<widgets::input::InputState>,
     search_query: String,
@@ -7089,7 +7098,8 @@ impl Workspace {
                     .flex_col()
                     .child(self.section(cx, "Categories", categories))
                     .child(self.section(cx, "Languages", languages))
-                    .child(self.section(cx, "Filters", filters)),
+                    .child(self.section(cx, "Filters", filters))
+                    .child(self.local_ai_section(cx)),
             )
             // Mark colours sit at the foot of the sidebar, beside the
             // glyphs they apply to, the way the web places them.
@@ -18494,6 +18504,245 @@ impl Workspace {
         .detach();
     }
 
+    /// The Local AI section: choose a model, run it, and see how the
+    /// result scores against a master already drawn.
+    ///
+    /// Both halves matter. Running a model is easy to offer and easy
+    /// to trust too far; scoring it against work done by hand is what
+    /// says whether the proposal was worth having.
+    fn local_ai_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let body = div().flex().flex_col().gap_1p5();
+
+        // Which model, and a way to change it.
+        let label: SharedString = self
+            .model_summary
+            .clone()
+            .unwrap_or_else(|| "No model chosen".into());
+        let body = body.child(
+            div()
+                .id("ai-model")
+                .px_1()
+                .py_0p5()
+                .border_1()
+                .border_color(t::panel_outline())
+                .cursor_pointer()
+                .text_xs()
+                .text_color(t::text())
+                .child(label)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.command_choose_model(cx);
+                })),
+        );
+
+        if self.model_dir.is_none() {
+            return self.section(cx, "Local AI", body.child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("A model is a folder holding config.json, weights and vocab."),
+            ));
+        }
+
+        // Strength, because a model can be right about direction and
+        // short on distance.
+        let body = match &self.model_strength_slider {
+            Some(slider) => body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .w(px(58.0))
+                            .text_xs()
+                            .text_color(t::text_muted())
+                            .child(format!("{:.2}x", self.model_strength)),
+                    )
+                    .child(div().flex_1().child(flat_slider(slider, cx))),
+            ),
+            None => body,
+        };
+
+        let in_editor = matches!(self.mode, Mode::Editor(_));
+        let body = body.child(
+            div()
+                .id("ai-run")
+                .px_1()
+                .py_0p5()
+                .border_1()
+                .border_color(if in_editor {
+                    t::accent()
+                } else {
+                    t::panel_outline()
+                })
+                .cursor_pointer()
+                .text_xs()
+                .text_color(if in_editor { t::text() } else { t::text_muted() })
+                .child(if in_editor {
+                    "Bolden this glyph"
+                } else {
+                    "Open a glyph to run"
+                })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Mode::Editor(index) = this.mode {
+                        let dir = this.model_dir.clone();
+                        if let Some(dir) = dir {
+                            this.apply_bolden(index, &dir);
+                            cx.notify();
+                        }
+                    }
+                })),
+        );
+
+        // The judgement, when there is another master to judge against.
+        let body = body.child(
+            div()
+                .id("ai-score")
+                .px_1()
+                .py_0p5()
+                .border_1()
+                .border_color(t::panel_outline())
+                .cursor_pointer()
+                .text_xs()
+                .text_color(t::text_muted())
+                .child("Score against the other master")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.command_score_model();
+                    cx.notify();
+                })),
+        );
+
+        let body = match &self.model_score {
+            Some((glyph, model, baseline)) => {
+                let better = model < baseline;
+                body.child(
+                    div()
+                        .text_xs()
+                        .text_color(if better { t::accent() } else { t::text_muted() })
+                        .child(format!(
+                            "{glyph}: model {model:.1}, mean-shift {baseline:.1}"
+                        )),
+                )
+            }
+            None => body,
+        };
+        self.section(cx, "Local AI", body)
+    }
+
+    /// Choose a model directory and remember it.
+    fn command_choose_model(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose model".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else { return };
+            let Some(dir) = paths.into_iter().next() else { return };
+            this.update(cx, |workspace, cx| {
+                workspace.load_model(&dir);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Read a model directory and cache the weights.
+    fn load_model(&mut self, dir: &std::path::Path) {
+        let checkpoint = match font_ml::Checkpoint::open(dir) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status_note = Some(format!("Model: {e}").into());
+                return;
+            }
+        };
+        match font_ml::outline::OutlineModel::load(&checkpoint) {
+            Ok(model) => {
+                self.model_summary = Some(checkpoint.summary().into());
+                self.model_loaded = Some(std::rc::Rc::new(model));
+                self.model_dir = Some(dir.to_path_buf());
+                self.model_score = None;
+                self.status_note = Some("Model loaded".into());
+            }
+            Err(e) => self.status_note = Some(format!("Model: {e}").into()),
+        }
+    }
+
+    /// Score the model on the open glyph against the master furthest
+    /// from the active one, which is the one it is trying to predict.
+    fn command_score_model(&mut self) {
+        let Mode::Editor(index) = self.mode else {
+            self.status_note = Some("Open a glyph first".into());
+            return;
+        };
+        let Some(dir) = self.model_dir.clone() else { return };
+        let Ok(checkpoint) = font_ml::Checkpoint::open(&dir) else { return };
+        let Some(project) = self.project.as_ref() else { return };
+        if project.masters.len() < 2 {
+            self.status_note =
+                Some("Nothing to score against: one master".into());
+            return;
+        }
+        let target = if project.active == 0 { project.masters.len() - 1 } else { 0 };
+        let Some(entry) = project.active_font().glyphs.get(index) else { return };
+        let name = entry.name.to_string();
+        let advance = entry.advance;
+        let unicode = entry.codepoint.map(|c| c as u32);
+        let (Some(from), Some(actual)) = (
+            project.active_font().font.get_glyph(name.as_str()),
+            project.masters[target].font.get_glyph(name.as_str()),
+        ) else {
+            return;
+        };
+        let (Some(from_ops), Some(actual_ops)) =
+            (font_ml::ufo::glyph_ops(from), font_ml::ufo::glyph_ops(actual))
+        else {
+            self.status_note = Some("No outline to score".into());
+            return;
+        };
+        let Some(model) = self.model_loaded.clone() else { return };
+        let center = checkpoint
+            .config
+            .delta_center
+            .map(|c| (c[0], c[1]))
+            .unwrap_or((0, 0));
+        let Ok(result) = font_ml::bolden::bolden(
+            &model,
+            &name,
+            unicode,
+            advance,
+            &from_ops,
+            center,
+            checkpoint.config.trim_close,
+            self.model_strength,
+        ) else {
+            return;
+        };
+        let score = font_ml::eval::score(
+            &name,
+            &result.to,
+            &actual_ops,
+            &result.from,
+            (center.0 as f64, center.1 as f64),
+        );
+        if score.model.is_nan() {
+            self.status_note =
+                Some("Masters are not point-compatible here".into());
+            return;
+        }
+        self.status_note = Some(
+            format!(
+                "{name}: model {:.1}, mean-shift {:.1}",
+                score.model, score.baseline
+            )
+            .into(),
+        );
+        self.model_score =
+            Some((name.into(), score.model, score.baseline));
+    }
+
     /// Glyph > Bolden With Model…: pick a model directory, predict a
     /// heavier version of the open glyph, and install it as a proposal.
     ///
@@ -18534,6 +18783,10 @@ impl Workspace {
                 return;
             }
         };
+        if self.model_loaded.is_none() {
+            self.load_model(dir);
+        }
+        let Some(model) = self.model_loaded.clone() else { return };
         let Some(font) = self.font() else { return };
         let Some(entry) = font.glyphs.get(index) else { return };
         let name = entry.name.to_string();
@@ -18546,20 +18799,13 @@ impl Workspace {
             return;
         };
 
-        let model = match font_ml::outline::OutlineModel::load(&checkpoint) {
-            Ok(m) => m,
-            Err(e) => {
-                self.status_note = Some(format!("Model: {e}").into());
-                return;
-            }
-        };
         let center = checkpoint
             .config
             .delta_center
             .map(|c| (c[0], c[1]))
             .unwrap_or((0, 0));
         let result = match font_ml::bolden::bolden(
-            &model,
+            model.as_ref(),
             &name,
             unicode,
             advance,
@@ -21563,6 +21809,42 @@ impl Workspace {
         self.preview_blur_slider = Some(slider);
     }
 
+    /// The strength control for model predictions.
+    fn ensure_model_strength_slider(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.model_strength_slider.is_some() {
+            return;
+        }
+        let slider = cx.new(|_| {
+            widgets::slider::SliderState::new()
+                .min(0.25)
+                .max(3.0)
+                .step(0.05)
+                .default_value(1.0)
+        });
+        let sub = cx.subscribe_in(&slider, window, {
+            move |this: &mut Workspace,
+                  _,
+                  event: &widgets::slider::SliderEvent,
+                  _window,
+                  cx| {
+                let widgets::slider::SliderEvent::Change(value) = event
+                else {
+                    return;
+                };
+                this.model_strength = *value as f64;
+                // The last judgement was made at the old strength.
+                this.model_score = None;
+                cx.notify();
+            }
+        });
+        self._subscriptions.push(sub);
+        self.model_strength_slider = Some(slider);
+    }
+
     fn ensure_sidebar_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sidebar_slider.is_some() {
             return;
@@ -22369,6 +22651,7 @@ impl Render for Workspace {
         self.ensure_cell_slider(window, cx);
         self.ensure_sidebar_slider(window, cx);
         self.ensure_preview_slider(window, cx);
+        self.ensure_model_strength_slider(window, cx);
         if self.sidebar_counts.is_none() && self.project.is_some() {
             self.rebuild_sidebar_cache();
         }
@@ -24168,6 +24451,11 @@ fn main() {
                         app_menu_bar: app_menu_bar.clone(),
                         focus_handle: cx.focus_handle(),
                         model_strength: 1.0,
+                        model_dir: None,
+                        model_summary: None,
+                        model_loaded: None,
+                        model_score: None,
+                        model_strength_slider: None,
                         status_note: None,
                         search,
                         search_query: String::new(),
