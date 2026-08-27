@@ -147,12 +147,22 @@ fn ui_font_family(cx: &gpui::App) -> gpui::SharedString {
         "Arial",
     ];
     let available = cx.text_system().all_font_names();
-    // One line at startup, so a window with no text can be diagnosed
-    // from the terminal instead of guessed at.
+    // A handful of families means gpui is on its embedded fallback
+    // list rather than the platform's fonts, which is what happens if
+    // gpui_platform loses the font-kit feature. Text then shapes and
+    // paints without ever reaching the screen, so say so here rather
+    // than leave a wordless window to be puzzled over.
     static REPORTED: std::sync::Once = std::sync::Once::new();
-    REPORTED.call_once(|| {
-        eprintln!("interface font: {} families available", available.len());
-    });
+    if available.len() < 50 {
+        REPORTED.call_once(|| {
+            eprintln!(
+                "warning: only {} font families visible, so text may not \
+                 render. Check that gpui_platform still has the font-kit \
+                 feature; --fonts lists what it can see.",
+                available.len()
+            );
+        });
+    }
     for name in PREFERRED {
         if available.iter().any(|f| f == name) {
             return (*name).into();
