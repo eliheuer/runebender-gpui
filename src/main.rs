@@ -7735,19 +7735,22 @@ impl Workspace {
                    which: u8,
                    cx: &mut Context<Self>| {
             let active = self.sidebar_tab == which;
-            let colour = if active { t::accent() } else { t::text_muted() };
+            // Same treatment as the edit-mode toolbar: a filled tile
+            // when active, no outline either way.
             div()
                 .id(id)
-                .size(px(24.0))
+                .size(px(26.0))
                 .flex()
                 .items_center()
                 .justify_center()
                 .flex_shrink_0()
-                .rounded_sm()
-                .border_1()
-                .border_color(if active { t::accent() } else { t::cell_border() })
+                .rounded_md()
                 .cursor_pointer()
-                .child(icon_svg(icon, colour))
+                .when(active, |el| el.bg(t::cell_selected_bg()))
+                .child(icon_svg(
+                    icon,
+                    if active { t::accent() } else { t::text_muted() },
+                ))
                 .tooltip(move |_, cx| {
                     cx.new(|_| TabTooltip { label }).into()
                 })
