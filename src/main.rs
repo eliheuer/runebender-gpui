@@ -7098,8 +7098,7 @@ impl Workspace {
                     .flex_col()
                     .child(self.section(cx, "Categories", categories))
                     .child(self.section(cx, "Languages", languages))
-                    .child(self.section(cx, "Filters", filters))
-                    .child(self.local_ai_section(cx)),
+                    .child(self.section(cx, "Filters", filters)),
             )
             // Mark colours sit at the foot of the sidebar, beside the
             // glyphs they apply to, the way the web places them.
@@ -7752,7 +7751,7 @@ impl Workspace {
                     .when(has_axes, |el| {
                         el.child(tab("sidebar-tab-axes", "Axes", 2, cx))
                     })
-                    .child(tab("sidebar-tab-chat", "Chat", 3, cx)),
+                    .child(tab("sidebar-tab-ai", "Local AI", 3, cx)),
             )
             .when(tab_now == 1, |el| {
                 el.child(
@@ -7776,18 +7775,12 @@ impl Workspace {
             .when(tab_now == 3, |el| {
                 el.child(
                     div()
+                        .id("sidebar-ai")
                         .flex_1()
                         .min_h(px(0.0))
+                        .overflow_y_scroll()
                         .p_2()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child("Chat")
-                        .child(
-                            "A place for an assistant that can see the                              glyph. Not wired up yet.",
-                        ),
+                        .child(self.local_ai_panel(cx)),
                 )
             })
             .when(on_glyphs, |el| el
@@ -18510,7 +18503,7 @@ impl Workspace {
     /// Both halves matter. Running a model is easy to offer and easy
     /// to trust too far; scoring it against work done by hand is what
     /// says whether the proposal was worth having.
-    fn local_ai_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn local_ai_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
         let body = div().flex().flex_col().gap_1p5();
 
         // Which model, and a way to change it.
@@ -18535,12 +18528,16 @@ impl Workspace {
         );
 
         if self.model_dir.is_none() {
-            return self.section(cx, "Local AI", body.child(
+            return body.child(
                 div()
                     .text_xs()
                     .text_color(t::text_muted())
-                    .child("A model is a folder holding config.json, weights and vocab."),
-            ));
+                    .child(
+                        "A model is a folder holding config.json, \
+                         weights.safetensors and vocab.txt. Nothing is \
+                         downloaded.",
+                    ),
+            );
         }
 
         // Strength, because a model can be right about direction and
@@ -18626,7 +18623,7 @@ impl Workspace {
             }
             None => body,
         };
-        self.section(cx, "Local AI", body)
+        body
     }
 
     /// Choose a model directory and remember it.
