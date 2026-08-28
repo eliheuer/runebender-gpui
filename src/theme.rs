@@ -13,11 +13,10 @@ use runebender_core::theme::ColorRgba;
 use runebender_core::theme_oklch::{self, Theme};
 
 /// The themes in the shared token file, in menu order.
-pub const THEMES: [(&str, &str); 5] = [
+pub const THEMES: [(&str, &str); 4] = [
     ("dark", "Dark"),
     ("midnight", "Midnight"),
     ("gray", "Gray"),
-    ("paper", "Paper"),
     ("light", "Light"),
 ];
 

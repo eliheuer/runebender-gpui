@@ -72,7 +72,6 @@ gpui::actions!(
         SetThemeDark,
         SetThemeMidnight,
         SetThemeGray,
-        SetThemePaper,
         SetThemeLight,
         RemoveOverlap,
         Decompose,
@@ -232,7 +231,6 @@ fn theme_action(id: &str) -> Option<Box<dyn gpui::Action>> {
         "dark" => Box::new(SetThemeDark),
         "midnight" => Box::new(SetThemeMidnight),
         "gray" => Box::new(SetThemeGray),
-        "paper" => Box::new(SetThemePaper),
         "light" => Box::new(SetThemeLight),
         _ => return None,
     })
@@ -23088,9 +23086,6 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SetThemeGray, window, cx| {
                 this.command_set_theme("gray", window, cx);
             }))
-            .on_action(cx.listener(|this, _: &SetThemePaper, window, cx| {
-                this.command_set_theme("paper", window, cx);
-            }))
             .on_action(cx.listener(|this, _: &SetThemeLight, window, cx| {
                 this.command_set_theme("light", window, cx);
             }))
@@ -26718,12 +26713,12 @@ mod theme_geometry_tests {
         let _guard = THEME.lock().unwrap_or_else(|e| e.into_inner());
         t::set_theme("dark");
         let (dark_r, dark_s) = (t::radius(), t::stroke());
-        t::set_theme("paper");
-        let (paper_r, paper_s) = (t::radius(), t::stroke());
-        assert_ne!(dark_r, paper_r, "Paper should be square");
-        assert_ne!(dark_s, paper_s, "Paper should draw a heavier rule");
-        assert_eq!(paper_r, gpui::px(0.0));
-        assert_eq!(paper_s, gpui::px(2.0));
+        t::set_theme("gray");
+        let (gray_r, gray_s) = (t::radius(), t::stroke());
+        assert_ne!(dark_r, gray_r, "Gray should be square");
+        assert_ne!(dark_s, gray_s, "Gray should draw a heavier rule");
+        assert_eq!(gray_r, gpui::px(0.0));
+        assert_eq!(gray_s, gpui::px(2.0));
         t::set_theme("dark");
     }
 }
