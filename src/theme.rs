@@ -67,6 +67,38 @@ fn c(color: ColorRgba) -> Rgba {
     }
 }
 
+// ---- marks ----
+
+/// How a mark is drawn on a cell. Themes disagree: tinting a rule
+/// works on a near-black or near-white ground and fails on a mid grey,
+/// where a hue saturated enough to read sits at mid lightness too.
+pub struct MarkPaint {
+    /// Cell fill, when the theme fills its marks.
+    pub bg: Option<Rgba>,
+    /// Cell rule.
+    pub border: Rgba,
+    /// Label colour.
+    pub ink: Rgba,
+}
+
+/// The paint for a marked cell, or `None` when the glyph has no mark.
+/// One place decides, so the grid, the detail view and the list cannot
+/// drift apart on it.
+pub fn mark_paint(label: Option<&str>) -> Option<MarkPaint> {
+    let color = mark_color(label?)?;
+    let theme = theme();
+    Some(match theme.mark_style {
+        runebender_core::theme_oklch::MarkStyle::Fill => MarkPaint {
+            bg: Some(color),
+            border: theme.mark_outline.map(c).unwrap_or_else(cell_border),
+            ink: theme.mark_ink.map(c).unwrap_or_else(text),
+        },
+        runebender_core::theme_oklch::MarkStyle::Border => {
+            MarkPaint { bg: None, border: color, ink: color }
+        }
+    })
+}
+
 // ---- geometry ----
 //
 // Shape is themed the same way colour is. Call these instead of

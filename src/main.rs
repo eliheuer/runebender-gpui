@@ -5352,7 +5352,8 @@ impl Workspace {
             .is_some_and(|ok| !ok);
 
 
-        let mark = entry.mark.as_deref().and_then(t::mark_color);
+        let paint = t::mark_paint(entry.mark.as_deref());
+        let mark = paint.as_ref().map(|p| p.ink);
         let _ = font;
         div()
             .id(index)
@@ -5360,12 +5361,16 @@ impl Workspace {
             .h(px(cell_h))
             .flex()
             .flex_col()
-            .bg(if selected { t::cell_selected_bg() } else { t::cell_bg() })
+            .bg(match (selected, paint.as_ref().and_then(|p| p.bg)) {
+                (true, _) => t::cell_selected_bg(),
+                (false, Some(fill)) => fill,
+                (false, None) => t::cell_bg(),
+            })
             .border(t::stroke())
             .border_color(if selected {
                 t::cell_selected_ring()
             } else {
-                mark.unwrap_or_else(t::cell_border)
+                paint.as_ref().map(|p| p.border).unwrap_or_else(t::cell_border)
             })
             .rounded(t::radius_control())
             .cursor_pointer()
@@ -5523,7 +5528,7 @@ impl Workspace {
             let name = entry.name.clone();
             let selected = self.selected == Some(index)
                 || self.multi_selected.contains(name.as_ref());
-            let mark = entry.mark.as_deref().and_then(t::mark_color);
+            let mark = t::mark_paint(entry.mark.as_deref()).map(|p| p.ink);
             let ink = font.ink_bounds(index);
             let (lsb, rsb) = match ink {
                 Some(r) => (
@@ -6448,10 +6453,8 @@ impl Workspace {
             let color = if selected {
                 t::cell_selected_ring()
             } else {
-                entry
-                    .mark
-                    .as_deref()
-                    .and_then(t::mark_color)
+                t::mark_paint(entry.mark.as_deref())
+                    .map(|p| p.ink)
                     .unwrap_or_else(t::glyph_fill)
             };
             ink.insert(
@@ -26719,6 +26722,44 @@ mod theme_geometry_tests {
         assert_ne!(dark_s, gray_s, "Gray should draw a heavier rule");
         assert_eq!(gray_r, gpui::px(0.0));
         assert_eq!(gray_s, gpui::px(2.0));
+        t::set_theme("dark");
+    }
+}
+
+#[cfg(test)]
+mod mark_paint_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static THEME: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn an_unmarked_glyph_has_no_paint() {
+        let _g = THEME.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(t::mark_paint(None).is_none());
+        assert!(t::mark_paint(Some("not-a-mark")).is_none());
+    }
+
+    /// Dark tints the rule and leaves the fill alone; Gray fills the
+    /// cell and keys it. The treatment is the theme's, not the grid's.
+    #[test]
+    fn the_treatment_follows_the_theme() {
+        let _g = THEME.lock().unwrap_or_else(|e| e.into_inner());
+
+        t::set_theme("dark");
+        let dark = t::mark_paint(Some("yellow")).expect("yellow is a mark");
+        assert!(dark.bg.is_none(), "Dark should not fill the cell");
+        assert_eq!(dark.border, dark.ink, "a tinted rule and its label match");
+
+        t::set_theme("gray");
+        let gray = t::mark_paint(Some("yellow")).expect("yellow is a mark");
+        let fill = gray.bg.expect("Gray fills the cell");
+        // The bug this guards: the glyph and label used to be painted
+        // in the mark colour. On a filled cell that is the colour they
+        // are sitting on, so the cell would come out blank.
+        assert_ne!(fill, gray.ink, "ink must not be the fill it sits on");
+        assert_ne!(fill, gray.border, "the keyline must not be the fill");
+
         t::set_theme("dark");
     }
 }
