@@ -8355,6 +8355,43 @@ impl Workspace {
     }
 
     /// Read a model directory and cache the weights.
+    /// Where a model is looked for when nobody points at one.
+    ///
+    /// `$RUNEBENDER_MODELS`, else `~/.runebender/models`. A model is a
+    /// directory holding `config.json`, so dropping one in is the whole
+    /// installation step: no rebuild, no account, no file picker.
+    pub(crate) fn models_dir() -> Option<PathBuf> {
+        if let Some(dir) = std::env::var_os("RUNEBENDER_MODELS") {
+            return Some(PathBuf::from(dir));
+        }
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".runebender/models"))
+    }
+
+    /// Every model directory under `models_dir`, by name.
+    ///
+    /// Sorted, so the list does not reshuffle between launches on
+    /// whatever order the filesystem hands back.
+    pub(crate) fn installed_models() -> Vec<(String, PathBuf)> {
+        let Some(root) = Self::models_dir() else {
+            return Vec::new();
+        };
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            return Vec::new();
+        };
+        let mut found: Vec<(String, PathBuf)> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.join("config.json").is_file())
+            .filter_map(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| (n.to_string(), p.clone()))
+            })
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        found
+    }
+
     fn load_model(&mut self, dir: &std::path::Path) {
         let checkpoint = match font_ml::Checkpoint::open(dir) {
             Ok(c) => c,

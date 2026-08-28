@@ -3694,12 +3694,49 @@ impl Workspace {
                 })),
         );
 
+        // Anything installed, listed without a file picker. A model is
+        // a directory with a config.json in it, so installing one is
+        // dropping it in the folder.
+        let installed = Self::installed_models();
+        let body = if installed.is_empty() {
+            body
+        } else {
+            installed
+                .into_iter()
+                .fold(body, |el, (name, path)| {
+                    let current = self.model_dir.as_deref() == Some(path.as_path());
+                    el.child(
+                        div()
+                            .id(SharedString::from(format!("ai-installed-{name}")))
+                            .px_1()
+                            .py_0p5()
+                            .border(t::stroke())
+                            .border_color(if current {
+                                t::accent()
+                            } else {
+                                t::panel_outline()
+                            })
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(if current { t::accent() } else { t::text() })
+                            .child(name)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.load_model(&path);
+                                cx.notify();
+                            })),
+                    )
+                })
+        };
+
         if self.model_dir.is_none() {
-            return body.child(div().text_xs().text_color(t::text_muted()).child(
-                "A model is a folder holding config.json, \
-                         weights.safetensors and vocab.txt. Nothing is \
-                         downloaded.",
-            ));
+            let where_to_put_them = Self::models_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "~/.runebender/models".into());
+            return body.child(div().text_xs().text_color(t::text_muted()).child(format!(
+                "Drop a model folder in {where_to_put_them} and it \
+                 appears here. A model is a folder holding config.json, \
+                 weights.safetensors and vocab.txt. Nothing is downloaded."
+            )));
         }
 
         // Strength, because a model can be right about direction and

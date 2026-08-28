@@ -2004,3 +2004,60 @@ mod mark_paint_tests {
         t::set_theme("dark");
     }
 }
+
+#[cfg(test)]
+mod model_discovery_tests {
+    use crate::*;
+    use std::sync::Mutex;
+
+    /// These set RUNEBENDER_MODELS, which is process-wide, and cargo
+    /// runs tests in parallel. Without this they read each other's
+    /// environment.
+    static ENV: Mutex<()> = Mutex::new(());
+
+    /// The convention is the installation step, so it is pinned: an
+    /// override for people who keep models elsewhere, and one default
+    /// that needs no configuration.
+    #[test]
+    fn the_override_wins_over_the_default() {
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // Read through the same accessor the panel uses, rather than
+        // duplicating the rule here.
+        let dir = Workspace::models_dir();
+        assert!(dir.is_some(), "there is always somewhere to look");
+        assert!(
+            dir.unwrap().ends_with(".runebender/models")
+                || std::env::var_os("RUNEBENDER_MODELS").is_some(),
+            "without the override it is ~/.runebender/models"
+        );
+    }
+
+    /// A directory only counts as a model if it holds a config.json.
+    /// Without that check, every stray folder becomes a broken entry.
+    #[test]
+    fn a_folder_without_a_config_is_not_a_model() {
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join("rb-model-discovery-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("not-a-model")).unwrap();
+        std::fs::create_dir_all(tmp.join("real")).unwrap();
+        std::fs::write(tmp.join("real/config.json"), "{}").unwrap();
+        // SAFETY: single-threaded test process, and the value is read
+        // back through the same accessor immediately.
+        unsafe { std::env::set_var("RUNEBENDER_MODELS", &tmp) };
+        let found = Workspace::installed_models();
+        unsafe { std::env::remove_var("RUNEBENDER_MODELS") };
+        let _ = std::fs::remove_dir_all(&tmp);
+        let names: Vec<_> = found.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["real"]);
+    }
+
+    #[test]
+    fn a_missing_folder_is_not_an_error() {
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("RUNEBENDER_MODELS", "/nope/does/not/exist") };
+        let found = Workspace::installed_models();
+        unsafe { std::env::remove_var("RUNEBENDER_MODELS") };
+        assert!(found.is_empty());
+    }
+}
