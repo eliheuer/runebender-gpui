@@ -73,19 +73,25 @@ fn c(color: ColorRgba) -> Rgba {
 // Shape is themed the same way colour is. Call these instead of
 // `rounded_sm()` / `border_1()`, or a theme cannot change them.
 
-/// Corner radius for small chrome: tiles, tabs, swatches.
-pub fn radius_sm() -> gpui::Pixels {
-    gpui::px(theme().geometry.radius_small)
+/// The default corner, on small chrome.
+pub fn radius() -> gpui::Pixels {
+    gpui::px(theme().geometry.radius)
 }
 
-/// Corner radius for larger surfaces: panels, popovers, buttons.
-pub fn radius_md() -> gpui::Pixels {
-    gpui::px(theme().geometry.radius_medium)
+/// Pressable tiles: toolbar tiles, sidebar tabs, toggles.
+pub fn radius_control() -> gpui::Pixels {
+    gpui::px(theme().geometry.radius_control)
 }
 
-/// Border width for every themed rule.
+/// The ordinary rule, on panels and chrome.
 pub fn stroke() -> gpui::Pixels {
     gpui::px(theme().geometry.stroke)
+}
+
+/// Rings that mark a thing selected or grabbable. Never `stroke()`
+/// doubled: that assumes a 1px base and goes too heavy from a 2px one.
+pub fn stroke_emphasis() -> gpui::Pixels {
+    gpui::px(theme().geometry.stroke_emphasis)
 }
 
 fn with_alpha(color: ColorRgba, a: f32) -> Rgba {
