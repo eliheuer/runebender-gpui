@@ -732,7 +732,7 @@ impl gpui::RenderOnce for Input {
             .w_full()
             .px(px(PAD_X))
             .py(px(PAD_Y))
-            .border_1()
+            .border(t::stroke())
             .border_color(if focused {
                 t::accent()
             } else {

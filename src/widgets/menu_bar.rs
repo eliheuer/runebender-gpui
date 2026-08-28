@@ -139,7 +139,7 @@ impl MenuBar {
             .min_w(px(200.0))
             .py(px(4.0))
             .bg(t::panel_bg())
-            .border_1()
+            .border(t::stroke())
             .border_color(t::panel_outline())
             .flex()
             .flex_col();

@@ -13,10 +13,11 @@ use runebender_core::theme::ColorRgba;
 use runebender_core::theme_oklch::{self, Theme};
 
 /// The themes in the shared token file, in menu order.
-pub const THEMES: [(&str, &str); 4] = [
+pub const THEMES: [(&str, &str); 5] = [
     ("dark", "Dark"),
     ("midnight", "Midnight"),
     ("gray", "Gray"),
+    ("paper", "Paper"),
     ("light", "Light"),
 ];
 
@@ -65,6 +66,26 @@ fn c(color: ColorRgba) -> Rgba {
         b: color.b as f32 / 255.0,
         a: color.a as f32 / 255.0,
     }
+}
+
+// ---- geometry ----
+//
+// Shape is themed the same way colour is. Call these instead of
+// `rounded_sm()` / `border_1()`, or a theme cannot change them.
+
+/// Corner radius for small chrome: tiles, tabs, swatches.
+pub fn radius_sm() -> gpui::Pixels {
+    gpui::px(theme().geometry.radius_small)
+}
+
+/// Corner radius for larger surfaces: panels, popovers, buttons.
+pub fn radius_md() -> gpui::Pixels {
+    gpui::px(theme().geometry.radius_medium)
+}
+
+/// Border width for every themed rule.
+pub fn stroke() -> gpui::Pixels {
+    gpui::px(theme().geometry.stroke)
 }
 
 fn with_alpha(color: ColorRgba, a: f32) -> Rgba {

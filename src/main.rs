@@ -72,6 +72,7 @@ gpui::actions!(
         SetThemeDark,
         SetThemeMidnight,
         SetThemeGray,
+        SetThemePaper,
         SetThemeLight,
         RemoveOverlap,
         Decompose,
@@ -147,9 +148,9 @@ impl Render for TabTooltip {
             .px_1p5()
             .py_0p5()
             .bg(t::panel_bg())
-            .border_1()
+            .border(t::stroke())
             .border_color(t::panel_outline())
-            .rounded_sm()
+            .rounded(t::radius_sm())
             .text_xs()
             .text_color(t::text())
             .child(self.label)
@@ -222,6 +223,21 @@ fn resolve_ui_font_family(cx: &gpui::App) -> gpui::SharedString {
 /// the stored menu Windows/Linux expose to `get_menus`, and the
 /// in-window menu bar drawn on every platform that has no native bar,
 /// the browser included.
+/// The action that switches to a theme. `None` means the token file
+/// gained a theme that nothing here can reach: a fallback arm would
+/// silently hand it Dark's action and the menu item would do the wrong
+/// thing, so callers are made to notice instead.
+fn theme_action(id: &str) -> Option<Box<dyn gpui::Action>> {
+    Some(match id {
+        "dark" => Box::new(SetThemeDark),
+        "midnight" => Box::new(SetThemeMidnight),
+        "gray" => Box::new(SetThemeGray),
+        "paper" => Box::new(SetThemePaper),
+        "light" => Box::new(SetThemeLight),
+        _ => return None,
+    })
+}
+
 /// One item per theme, with the active one checked. The menus are
 /// rebuilt on a switch so the tick follows.
 fn theme_menu_items() -> Vec<gpui::MenuItem> {
@@ -230,12 +246,7 @@ fn theme_menu_items() -> Vec<gpui::MenuItem> {
     t::THEMES
         .iter()
         .map(|(id, label)| {
-            let action: Box<dyn gpui::Action> = match *id {
-                "midnight" => Box::new(SetThemeMidnight),
-                "gray" => Box::new(SetThemeGray),
-                "light" => Box::new(SetThemeLight),
-                _ => Box::new(SetThemeDark),
-            };
+            let action = theme_action(id).expect("every theme has an action");
             MenuItem::Action {
                 name: (*label).into(),
                 action,
@@ -4511,7 +4522,7 @@ fn flat_slider(
                 .h(px(THUMB))
                 .flex_shrink_0()
                 .rounded_full()
-                .border_2()
+                .border(t::stroke() * 2.0)
                 .border_color(t::accent())
                 .bg(t::panel_bg()),
         );
@@ -5352,13 +5363,13 @@ impl Workspace {
             .flex()
             .flex_col()
             .bg(if selected { t::cell_selected_bg() } else { t::cell_bg() })
-            .border_1()
+            .border(t::stroke())
             .border_color(if selected {
                 t::cell_selected_ring()
             } else {
                 mark.unwrap_or_else(t::cell_border)
             })
-            .rounded_md()
+            .rounded(t::radius_md())
             .cursor_pointer()
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                 // Notes are transient: picking a glyph clears them so
@@ -5562,7 +5573,7 @@ impl Workspace {
                     .gap_2()
                     .h(px(24.0))
                     .px_0p5()
-                    .rounded_sm()
+                    .rounded(t::radius_sm())
                     .when(selected, |el| el.bg(t::cell_selected_bg()))
                     .cursor_pointer()
                     .on_click(cx.listener(
@@ -5729,8 +5740,8 @@ impl Workspace {
                             .w(px(THUMB))
                             .h(px(THUMB))
                             .flex_shrink_0()
-                            .rounded_sm()
-                            .border_1()
+                            .rounded(t::radius_sm())
+                            .border(t::stroke())
                             .border_color(if selected {
                                 t::cell_selected_ring()
                             } else {
@@ -5788,8 +5799,8 @@ impl Workspace {
                         .w(px(THUMB))
                         .h(px(THUMB))
                         .flex_shrink_0()
-                        .rounded_sm()
-                        .border_1()
+                        .rounded(t::radius_sm())
+                        .border(t::stroke())
                         .border_color(t::panel_outline())
                         .flex()
                         .items_center()
@@ -6699,14 +6710,14 @@ impl Workspace {
             .h(px(20.0))
             .px_2()
             .when(indent, |el| el.ml_3())
-            .rounded_sm()
+            .rounded(t::radius_sm())
             .text_sm()
             .cursor_pointer()
             .flex()
             .items_center()
             .gap_1()
             .when(active, |el| {
-                el.border_1().border_color(t::accent()).text_color(t::accent())
+                el.border(t::stroke()).border_color(t::accent()).text_color(t::accent())
             })
             .when(!active, |el| el.text_color(t::text()))
             .when_some(chevron, |el, expanded| {
@@ -6750,8 +6761,8 @@ impl Workspace {
             .w(px(24.0))
             // No fixed height: the row stretches these to the search
             // input's height so the whole strip lines up.
-            .rounded_sm()
-            .border_1()
+            .rounded(t::radius_sm())
+            .border(t::stroke())
             .flex()
             .items_center()
             .justify_center()
@@ -6920,8 +6931,8 @@ impl Workspace {
                                         .id(("gen-missing", gi * 100 + fi))
                                         .w(px(18.0))
                                         .h(px(18.0))
-                                        .rounded_sm()
-                                        .border_1()
+                                        .rounded(t::radius_sm())
+                                        .border(t::stroke())
                                         .border_color(t::cell_border())
                                         .flex()
                                         .items_center()
@@ -6986,14 +6997,14 @@ impl Workspace {
                     .group("saved-filter")
                     .h(px(20.0))
                     .px_2()
-                    .rounded_sm()
+                    .rounded(t::radius_sm())
                     .text_sm()
                     .cursor_pointer()
                     .flex()
                     .items_center()
                     .gap_1()
                     .when(active, |el| {
-                        el.border_1()
+                        el.border(t::stroke())
                             .border_color(t::accent())
                             .text_color(t::accent())
                     })
@@ -7048,7 +7059,7 @@ impl Workspace {
                     .id("save-search-filter")
                     .h(px(20.0))
                     .px_2()
-                    .rounded_sm()
+                    .rounded(t::radius_sm())
                     .text_sm()
                     .cursor_pointer()
                     .flex()
@@ -7588,7 +7599,7 @@ impl Workspace {
                     .items_center()
                     .justify_center()
                     .rounded_full()
-                    .border_1()
+                    .border(t::stroke())
                     .border_color(if is_current {
                         color
                     } else {
@@ -7620,7 +7631,7 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .rounded_full()
-                .border_1()
+                .border(t::stroke())
                 .border_color(if current.is_none() {
                     t::text_muted()
                 } else {
@@ -7632,7 +7643,7 @@ impl Workspace {
                         .w(px(SWATCH))
                         .h(px(SWATCH))
                         .rounded_full()
-                        .border_1()
+                        .border(t::stroke())
                         .border_color(t::text_muted())
                         .child(glyph_free_icon(t::text_muted(), IconMark::Cross)),
                 )
@@ -7744,7 +7755,7 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .flex_shrink_0()
-                .rounded_md()
+                .rounded(t::radius_md())
                 .cursor_pointer()
                 .when(active, |el| el.bg(t::cell_selected_bg()))
                 .child(icon_svg(
@@ -7991,7 +8002,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap_2()
-                .rounded_sm()
+                .rounded(t::radius_sm())
                 .text_xs()
                 .cursor_pointer()
                 .when(active, |el| {
@@ -8146,7 +8157,7 @@ impl Workspace {
             .id(id)
             .w(px(30.0))
             .h(px(30.0))
-            .rounded_md()
+            .rounded(t::radius_md())
             .cursor_pointer()
             .when(active, |el| el.bg(t::cell_selected_bg()))
             .child(icon_svg(icon, if active { t::accent() } else { t::text() }))
@@ -8250,8 +8261,8 @@ impl Workspace {
                 .id(id)
                 .px_2()
                 .py_0p5()
-                .rounded_sm()
-                .border_1()
+                .rounded(t::radius_sm())
+                .border(t::stroke())
                 .border_color(if active { t::accent() } else { t::cell_border() })
                 .text_sm()
                 .text_color(if active { t::accent() } else { t::text_muted() })
@@ -8374,8 +8385,8 @@ impl Workspace {
                             "rel-{label}-{related}"
                         )))
                         .px_1()
-                        .rounded_sm()
-                        .border_1()
+                        .rounded(t::radius_sm())
+                        .border(t::stroke())
                         .border_color(t::cell_border())
                         .text_xs()
                         .text_color(t::text())
@@ -8446,8 +8457,8 @@ impl Workspace {
                 .id(id)
                 .px_1()
                 .py_0p5()
-                .rounded_sm()
-                .border_1()
+                .rounded(t::radius_sm())
+                .border(t::stroke())
                 .border_color(if lit { t::accent() } else { t::cell_border() })
                 .flex()
                 .flex_col()
@@ -8588,8 +8599,8 @@ impl Workspace {
                     .id(gpui::SharedString::from(format!("fea-{tag}")))
                     .px_1p5()
                     .py_0p5()
-                    .rounded_sm()
-                    .border_1()
+                    .rounded(t::radius_sm())
+                    .border(t::stroke())
                     .text_xs()
                     .cursor_pointer()
                     .border_color(match state {
@@ -8662,8 +8673,8 @@ impl Workspace {
                     .id(("shaping-locale", li))
                     .px_1p5()
                     .py_0p5()
-                    .rounded_sm()
-                    .border_1()
+                    .rounded(t::radius_sm())
+                    .border(t::stroke())
                     .text_xs()
                     .cursor_pointer()
                     .border_color(if lit {
@@ -8741,11 +8752,11 @@ impl Workspace {
                 .id(id)
                 .px_2()
                 .py_0p5()
-                .rounded_sm()
+                .rounded(t::radius_sm())
                 .text_sm()
                 .text_color(t::text())
                 .cursor_pointer()
-                .border_1()
+                .border(t::stroke())
                 .border_color(t::cell_border())
                 .child(label)
         };
@@ -10173,10 +10184,10 @@ impl Workspace {
                 .id(id)
                 .px_2()
                 .py_0p5()
-                .rounded_sm()
+                .rounded(t::radius_sm())
                 .text_sm()
                 .cursor_pointer()
-                .border_1()
+                .border(t::stroke())
                 .when(active, |el| {
                     el.border_color(t::accent()).text_color(t::accent())
                 })
@@ -10242,10 +10253,10 @@ impl Workspace {
                 .id(id)
                 .px_2()
                 .py_0p5()
-                .rounded_sm()
+                .rounded(t::radius_sm())
                 .text_sm()
                 .cursor_pointer()
-                .border_1()
+                .border(t::stroke())
                 .when(active, |el| {
                     el.border_color(t::accent()).text_color(t::accent())
                 })
@@ -10421,11 +10432,11 @@ impl Workspace {
                             .px_1()
                             .flex()
                             .items_center()
-                            .rounded_sm()
+                            .rounded(t::radius_sm())
                             .text_sm()
                             .cursor_pointer()
                             .when(is_active, |el| {
-                                el.border_1()
+                                el.border(t::stroke())
                                     .border_color(t::accent())
                                     .text_color(t::accent())
                             })
@@ -10541,10 +10552,10 @@ impl Workspace {
                             .mt_1()
                             .px_2()
                             .py_0p5()
-                            .rounded_sm()
+                            .rounded(t::radius_sm())
                             .text_sm()
                             .cursor_pointer()
-                            .border_1()
+                            .border(t::stroke())
                             .border_color(t::cell_border())
                             .text_color(t::text())
                             .child("+ Backup")
@@ -10561,10 +10572,10 @@ impl Workspace {
                             .mt_1()
                             .px_2()
                             .py_0p5()
-                            .rounded_sm()
+                            .rounded(t::radius_sm())
                             .text_sm()
                             .cursor_pointer()
-                            .border_1()
+                            .border(t::stroke())
                             .border_color(t::cell_border())
                             .text_color(t::text())
                             .child("+ Intermediate")
@@ -10902,9 +10913,9 @@ impl Workspace {
                     }),
                 )
                 .bg(t::panel_bg())
-                .border_1()
+                .border(t::stroke())
                 .border_color(t::panel_outline())
-                .rounded_md()
+                .rounded(t::radius_md())
                 .shadow_md()
                 .min_w(px(180.0))
                 .child(list),
@@ -13644,7 +13655,7 @@ impl Workspace {
         let card = || {
             div()
                 .rounded(px(CARD_RADIUS))
-                .border_1()
+                .border(t::stroke())
                 .border_color(t::panel_outline())
                 .bg(t::panel_bg())
                 .flex()
@@ -16347,10 +16358,10 @@ impl Workspace {
                 .id(id)
                 .px_2()
                 .py_0p5()
-                .rounded_sm()
+                .rounded(t::radius_sm())
                 .text_sm()
                 .cursor_pointer()
-                .border_1()
+                .border(t::stroke())
                 .border_color(t::cell_border())
                 .text_color(t::text())
                 .child(label)
@@ -16565,8 +16576,8 @@ impl Workspace {
                             "grp-{name}-{member}"
                         )))
                         .px_1()
-                        .rounded_sm()
-                        .border_1()
+                        .rounded(t::radius_sm())
+                        .border(t::stroke())
                         .border_color(t::cell_border())
                         .text_xs()
                         .text_color(t::text())
@@ -16611,10 +16622,10 @@ impl Workspace {
                                         "grp-add-{name}"
                                     )))
                                     .px_1()
-                                    .rounded_sm()
+                                    .rounded(t::radius_sm())
                                     .text_xs()
                                     .cursor_pointer()
-                                    .border_1()
+                                    .border(t::stroke())
                                     .border_color(t::cell_border())
                                     .text_color(t::text_muted())
                                     .child("+ sel")
@@ -17347,9 +17358,9 @@ impl Workspace {
                     .id(("cpal-swatch", i))
                     .w(px(18.0))
                     .h(px(18.0))
-                    .rounded_sm()
+                    .rounded(t::radius_sm())
                     .bg(swatch_color(c))
-                    .border_2()
+                    .border(t::stroke() * 2.0)
                     .border_color(if selected {
                         t::accent()
                     } else {
@@ -17456,10 +17467,10 @@ impl Workspace {
                             .id("color-layer-add")
                             .px_2()
                             .py_0p5()
-                            .rounded_sm()
+                            .rounded(t::radius_sm())
                             .text_sm()
                             .cursor_pointer()
-                            .border_1()
+                            .border(t::stroke())
                             .border_color(t::cell_border())
                             .text_color(t::text())
                             .child("+ Color Layer")
@@ -17473,10 +17484,10 @@ impl Workspace {
                             .id("color-to-v1")
                             .px_2()
                             .py_0p5()
-                            .rounded_sm()
+                            .rounded(t::radius_sm())
                             .text_sm()
                             .cursor_pointer()
-                            .border_1()
+                            .border(t::stroke())
                             .border_color(t::cell_border())
                             .text_color(t::text())
                             .child("To v1")
@@ -17490,10 +17501,10 @@ impl Workspace {
                             .id("color-preview-toggle")
                             .px_2()
                             .py_0p5()
-                            .rounded_sm()
+                            .rounded(t::radius_sm())
                             .text_sm()
                             .cursor_pointer()
-                            .border_1()
+                            .border(t::stroke())
                             .when(toggle_on, |el| {
                                 el.border_color(t::accent())
                                     .text_color(t::accent())
@@ -18279,7 +18290,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .justify_between()
-                .border_1()
+                .border(t::stroke())
                 .border_color(t::panel_outline())
                 .p(px(3.0));
             for (ri, row_quads) in QUADRANTS.iter().enumerate() {
@@ -18295,7 +18306,7 @@ impl Workspace {
                             .h(px(10.0))
                             .rounded_full()
                             .cursor_pointer()
-                            .border_1()
+                            .border(t::stroke())
                             .when(active, |el| {
                                 el.bg(t::accent()).border_color(t::accent())
                             })
@@ -18389,10 +18400,10 @@ impl Workspace {
                                 .id("component-lock")
                                 .px_2()
                                 .py_0p5()
-                                .rounded_sm()
+                                .rounded(t::radius_sm())
                                 .text_sm()
                                 .cursor_pointer()
-                                .border_1()
+                                .border(t::stroke())
                                 .when(aligned, |el| {
                                     el.border_color(t::accent())
                                         .text_color(t::accent())
@@ -18549,7 +18560,7 @@ impl Workspace {
                 .id("ai-model")
                 .px_1()
                 .py_0p5()
-                .border_1()
+                .border(t::stroke())
                 .border_color(t::panel_outline())
                 .cursor_pointer()
                 .text_xs()
@@ -18599,7 +18610,7 @@ impl Workspace {
                 .id("ai-run")
                 .px_1()
                 .py_0p5()
-                .border_1()
+                .border(t::stroke())
                 .border_color(if in_editor {
                     t::accent()
                 } else {
@@ -18630,7 +18641,7 @@ impl Workspace {
                 .id("ai-score")
                 .px_1()
                 .py_0p5()
-                .border_1()
+                .border(t::stroke())
                 .border_color(t::panel_outline())
                 .cursor_pointer()
                 .text_xs()
@@ -20435,16 +20446,16 @@ impl Workspace {
                 .px_2()
                 .flex()
                 .items_center()
-                .rounded_sm()
+                .rounded(t::radius_sm())
                 .text_sm()
                 .cursor_pointer()
                 .when(active, |el| {
-                    el.border_1()
+                    el.border(t::stroke())
                         .border_color(t::accent())
                         .text_color(t::accent())
                 })
                 .when(!active, |el| {
-                    el.border_1()
+                    el.border(t::stroke())
                         .border_color(t::cell_border())
                         .text_color(t::text_muted())
                 })
@@ -20555,7 +20566,7 @@ impl Workspace {
                         div()
                             .id(("tab-close", i))
                             .px_0p5()
-                            .rounded_sm()
+                            .rounded(t::radius_sm())
                             .text_color(t::text_muted())
                             .hover(|el| el.text_color(t::text()))
                             .child("×")
@@ -20621,7 +20632,7 @@ impl Workspace {
                     .id("toggle-left")
                     .w(px(TAB_H))
                     .h(px(TAB_H))
-                    .rounded_md()
+                    .rounded(t::radius_md())
                     .cursor_pointer()
                     .child(icon_svg("glyph-grid", if self.left_collapsed {
                         t::text_muted()
@@ -20846,8 +20857,8 @@ impl Workspace {
                             div()
                                 .id(("axis-map", i))
                                 .px_1()
-                                .rounded_sm()
-                                .border_1()
+                                .rounded(t::radius_sm())
+                                .border(t::stroke())
                                 .border_color(t::cell_border())
                                 .text_xs()
                                 .text_color(t::text())
@@ -20888,10 +20899,10 @@ impl Workspace {
                         .id("hoi-trajectories")
                         .px_2()
                         .py_0p5()
-                        .rounded_sm()
+                        .rounded(t::radius_sm())
                         .text_sm()
                         .cursor_pointer()
-                        .border_1()
+                        .border(t::stroke())
                         .when(on, |el| {
                             el.border_color(t::accent()).text_color(t::accent())
                         })
@@ -21956,8 +21967,8 @@ impl Workspace {
                     .id(id)
                     .w(px(BAR_BUTTON))
                     .h(px(BAR_BUTTON))
-                    .rounded_sm()
-                    .border_1()
+                    .rounded(t::radius_sm())
+                    .border(t::stroke())
                     .border_color(t::cell_border())
                     .flex()
                     .items_center()
@@ -22005,7 +22016,7 @@ impl Workspace {
                         div()
                             .id(id)
                             .px_1p5()
-                            .rounded_sm()
+                            .rounded(t::radius_sm())
                             .text_xs()
                             .cursor_pointer()
                             .text_color(if mode == current {
@@ -23076,6 +23087,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &SetThemeGray, window, cx| {
                 this.command_set_theme("gray", window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SetThemePaper, window, cx| {
+                this.command_set_theme("paper", window, cx);
             }))
             .on_action(cx.listener(|this, _: &SetThemeLight, window, cx| {
                 this.command_set_theme("light", window, cx);
@@ -26665,4 +26679,51 @@ fn bolden_contours(
         out.push(norad::Contour::new(moved, contour.identifier().cloned()));
     }
     out
+}
+
+#[cfg(test)]
+mod theme_geometry_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// `set_theme` writes a global, and cargo runs tests in parallel,
+    /// so the two tests that switch themes take this first. Without it
+    /// they interleave and read each other's theme.
+    static THEME: Mutex<()> = Mutex::new(());
+
+    /// The bug this catches: `theme_menu_items` used to end in a
+    /// `_ => Box::new(SetThemeDark)` arm, so a theme added to the token
+    /// file got a menu entry that switched to Dark. It looked wired up
+    /// and was not.
+    #[test]
+    fn every_theme_has_its_own_action() {
+        for (id, _) in t::THEMES {
+            assert!(theme_action(id).is_some(), "no action for theme {id}");
+        }
+    }
+
+    #[test]
+    fn every_theme_in_the_menu_loads() {
+        let _guard = THEME.lock().unwrap_or_else(|e| e.into_inner());
+        for (id, _) in t::THEMES {
+            assert!(t::set_theme(id), "theme {id} is not in the token file");
+        }
+        t::set_theme("dark");
+    }
+
+    /// Geometry has to actually follow the theme, or the tokens are
+    /// decoration and the frontend is still hardcoding shape.
+    #[test]
+    fn geometry_changes_with_the_theme() {
+        let _guard = THEME.lock().unwrap_or_else(|e| e.into_inner());
+        t::set_theme("dark");
+        let (dark_r, dark_s) = (t::radius_sm(), t::stroke());
+        t::set_theme("paper");
+        let (paper_r, paper_s) = (t::radius_sm(), t::stroke());
+        assert_ne!(dark_r, paper_r, "Paper should be square");
+        assert_ne!(dark_s, paper_s, "Paper should draw a heavier rule");
+        assert_eq!(paper_r, gpui::px(0.0));
+        assert_eq!(paper_s, gpui::px(2.0));
+        t::set_theme("dark");
+    }
 }
