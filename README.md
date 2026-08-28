@@ -86,6 +86,45 @@ keeping `coi-serviceworker.min.js` and adding its script tag to the
 top of `<head>` — GitHub Pages cannot send the COOP/COEP headers
 that shared memory requires, so the worker sets them client-side.
 
+## Working with AI
+
+Runebender stores no credentials, calls no model service, and has no
+assistant in the window. That is deliberate, and it is what makes
+agents easy to use with it: the seam is the filesystem.
+
+An agent edits the UFO and designspace files on disk. The editor
+reloads what changed. Nothing has to be integrated, and you keep
+whatever agent and subscription you already use.
+
+```sh
+runebender-gpui sources/Font.designspace    # leave it open
+# then let an agent work on sources/ in another window
+```
+
+Three ways to drive it, in the order most people want them:
+
+- **A coding agent on the repository.** Claude Code, Codex, or
+  another. Point it at the font repo and keep the editor open beside
+  it to watch the edits land. Give it the font's rules in `AGENTS.md`
+  or `CLAUDE.md`, and the manual as one file from
+  [runebender.org/llms-full.txt](https://runebender.org/llms-full.txt).
+- **Local models**, through
+  [font-ml](https://github.com/eliheuer/font-ml). Runs on your
+  machine, no account, no network. Every command takes `--json` and
+  the exit codes distinguish a usage mistake from an unbuilt job from
+  a real failure. Run `font-ml tasks` before assuming a job exists.
+- **`runebender-core` as a library**, when you want a tool rather
+  than a session. It is the editing model with no interface attached.
+
+Type design has constraints an agent will not infer. Masters must stay
+point-compatible. Contour direction and start points matter across
+masters. Preserving an advance width is not preserving spacing. Write
+these down, and ask for a check after every batch rather than at the
+end.
+
+The full guide is at
+[runebender.org/docs/agents.html](https://runebender.org/docs/agents.html).
+
 ## Status
 
 Close to feature parity with the previous web editor.
