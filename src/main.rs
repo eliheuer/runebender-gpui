@@ -6,18 +6,22 @@
 //! [runebender-xilem](https://github.com/eliheuer/runebender-xilem).
 
 mod blur;
+mod canvas;
+mod commands;
 mod glyph_path;
+mod input;
+mod panels;
 mod theme;
-mod widgets;
 #[cfg(target_family = "wasm")]
 mod web_host;
+mod widgets;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    canvas, div, prelude::*, px, size, App, Bounds, Context, MouseButton,
-    PathBuilder, Point, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    App, Bounds, Context, MouseButton, PathBuilder, Point, SharedString, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, canvas, div, prelude::*, px, size,
 };
 use kurbo::{Affine, BezPath, PathEl};
 
@@ -138,11 +142,7 @@ struct TabTooltip {
 }
 
 impl Render for TabTooltip {
-    fn render(
-        &mut self,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .px_1p5()
             .py_0p5()
@@ -164,8 +164,7 @@ fn ui_font_family(cx: &gpui::App) -> gpui::SharedString {
     // Cached: asking the platform for its font list takes about 140ms,
     // and this is read once per frame. Uncached it capped the whole
     // editor at roughly seven frames a second.
-    static RESOLVED: std::sync::OnceLock<gpui::SharedString> =
-        std::sync::OnceLock::new();
+    static RESOLVED: std::sync::OnceLock<gpui::SharedString> = std::sync::OnceLock::new();
     if let Some(name) = RESOLVED.get() {
         return name.clone();
     }
@@ -262,22 +261,25 @@ fn theme_menu_items() -> Vec<gpui::MenuItem> {
 fn measure_menu_items() -> Vec<gpui::MenuItem> {
     use gpui::MenuItem;
     let o = *MEASURE_MENU.lock().expect("measure menu");
-    let item = |name: &'static str, action: Box<dyn gpui::Action>, checked: bool| {
-        MenuItem::Action {
+    let item =
+        |name: &'static str, action: Box<dyn gpui::Action>, checked: bool| MenuItem::Action {
             name: name.into(),
             action,
             os_action: None,
             checked,
             disabled: false,
-        }
-    };
+        };
     vec![
         item("Colorize Outline", Box::new(MeasureColorize), o.colorize),
         item("Handle Lengths", Box::new(MeasureHandles), o.handles),
         item("Segment Lengths", Box::new(MeasureSegments), o.segments),
         item("Segment Sizes", Box::new(MeasureSizes), o.sizes),
         item("Stems & Counters", Box::new(MeasureSpans), o.spans),
-        item("Side Bearings", Box::new(MeasureSideBearings), o.sidebearings),
+        item(
+            "Side Bearings",
+            Box::new(MeasureSideBearings),
+            o.sidebearings,
+        ),
         MenuItem::separator(),
         // Not a layer: how the labels that are on get written.
         item("Popcount Sums", Box::new(MeasurePopcount), o.popcount),
@@ -316,17 +318,11 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Copy", CopyContours),
                 MenuItem::action("Paste", PasteContours),
-                MenuItem::action(
-                    "Copy Selected Glyphs as Text",
-                    CopySelectedGlyphs,
-                ),
+                MenuItem::action("Copy Selected Glyphs as Text", CopySelectedGlyphs),
                 MenuItem::separator(),
                 MenuItem::action("Select All", SelectAllPoints),
                 MenuItem::action("Deselect All", DeselectAllPoints),
-                MenuItem::action(
-                    "Invert Selection",
-                    InvertPointSelection,
-                ),
+                MenuItem::action("Invert Selection", InvertPointSelection),
             ],
             disabled: false,
         },
@@ -363,10 +359,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Add Extremes", AddExtremes),
                 MenuItem::action("Round Coordinates", RoundCoordinates),
                 MenuItem::separator(),
-                MenuItem::action(
-                    "Correct Path Direction",
-                    CorrectPathDirection,
-                ),
+                MenuItem::action("Correct Path Direction", CorrectPathDirection),
                 MenuItem::action("Reverse Contours", ReverseContours),
                 MenuItem::action("Set Start Point", SetStartPoint),
                 MenuItem::separator(),
@@ -424,10 +417,7 @@ fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Previous Master", PreviousMaster),
                 MenuItem::separator(),
                 MenuItem::action("Next Sample String", NextSampleString),
-                MenuItem::action(
-                    "Previous Sample String",
-                    PreviousSampleString,
-                ),
+                MenuItem::action("Previous Sample String", PreviousSampleString),
                 MenuItem::separator(),
                 MenuItem::Submenu(Menu {
                     name: "Measure".into(),
@@ -573,9 +563,7 @@ impl FontModel {
             }
             let mut copy = glyph.clone();
             if comp::realign_glyph(&self.font, &mut copy, seed_own) {
-                if let Some(slot) =
-                    self.font.default_layer_mut().get_glyph_mut(name.as_str())
-                {
+                if let Some(slot) = self.font.default_layer_mut().get_glyph_mut(name.as_str()) {
                     *slot = copy;
                 }
                 self.modified_glyphs.insert(name.clone());
@@ -618,12 +606,7 @@ impl FontModel {
 
     /// Remove a glyph outright.
     fn remove_glyph(&mut self, name: &str) -> bool {
-        if self
-            .font
-            .default_layer_mut()
-            .remove_glyph(name)
-            .is_none()
-        {
+        if self.font.default_layer_mut().remove_glyph(name).is_none() {
             return false;
         }
         self.dirty = true;
@@ -653,22 +636,26 @@ impl FontModel {
             .map(|glyph| {
                 let path = Arc::new(glyph_path::glyph_to_bezpath(glyph, &font));
                 GlyphEntry {
-                name: glyph.name().to_string().into(),
-                codepoint: glyph.codepoints.iter().next(),
-                ink: {
-                    use kurbo::Shape as _;
-                    path.bounding_box()
-                },
-                path: path.clone(),
-                contour_path: Arc::new(glyph_path::contours_to_bezpath(glyph)),
-                component_path: Arc::new(glyph_path::components_to_bezpath(glyph, &font)),
-                points: Arc::new(extract_points(glyph)),
-                anchors: Arc::new(extract_anchors(glyph)),
-                advance: glyph.width,
-                component_names: Arc::new(
-                    glyph.components.iter().map(|c| c.base.to_string().into()).collect(),
-                ),
-                mark: t::mark_label(glyph).map(SharedString::from),
+                    name: glyph.name().to_string().into(),
+                    codepoint: glyph.codepoints.iter().next(),
+                    ink: {
+                        use kurbo::Shape as _;
+                        path.bounding_box()
+                    },
+                    path: path.clone(),
+                    contour_path: Arc::new(glyph_path::contours_to_bezpath(glyph)),
+                    component_path: Arc::new(glyph_path::components_to_bezpath(glyph, &font)),
+                    points: Arc::new(extract_points(glyph)),
+                    anchors: Arc::new(extract_anchors(glyph)),
+                    advance: glyph.width,
+                    component_names: Arc::new(
+                        glyph
+                            .components
+                            .iter()
+                            .map(|c| c.base.to_string().into())
+                            .collect(),
+                    ),
+                    mark: t::mark_label(glyph).map(SharedString::from),
                 }
             })
             .collect();
@@ -714,7 +701,11 @@ impl FontModel {
         let contour_path = Arc::new(glyph_path::contours_to_bezpath(glyph));
         let component_path = Arc::new(glyph_path::components_to_bezpath(glyph, &self.font));
         let component_names: Arc<Vec<SharedString>> = Arc::new(
-            glyph.components.iter().map(|c| c.base.to_string().into()).collect(),
+            glyph
+                .components
+                .iter()
+                .map(|c| c.base.to_string().into())
+                .collect(),
         );
         let points = Arc::new(extract_points(glyph));
         let anchors = Arc::new(extract_anchors(glyph));
@@ -962,7 +953,10 @@ impl FontModel {
     /// nothing changed.
     fn remove_overlap(&mut self, glyph_index: usize) -> bool {
         let name = self.glyphs[glyph_index].name.to_string();
-        let Some(unioned) = self.font.get_glyph(name.as_str()).and_then(ops::remove_overlap)
+        let Some(unioned) = self
+            .font
+            .get_glyph(name.as_str())
+            .and_then(ops::remove_overlap)
         else {
             return false;
         };
@@ -1106,9 +1100,7 @@ impl Project {
     /// shows is an interpolated instance, and nothing there is
     /// editable.
     fn showing_instance(&self) -> bool {
-        self.model.is_some()
-            && !self.axes.is_empty()
-            && self.master_at_location().is_none()
+        self.model.is_some() && !self.axes.is_empty() && self.master_at_location().is_none()
     }
 
     /// Put `location` back on a master, for a master switch.
@@ -1162,21 +1154,16 @@ impl Project {
                 GlyphsSource::Neither
             }
         });
-        if let Some(kind @ (GlyphsSource::File | GlyphsSource::Package)) =
-            glyphs_ext
-        {
+        if let Some(kind @ (GlyphsSource::File | GlyphsSource::Package)) = glyphs_ext {
             // Convert the Glyphs source to UFO + designspace files in
             // a sibling directory, then open the converted project.
             let result = match kind {
                 GlyphsSource::Package => {
                     let entries = read_glyphspackage(path)?;
-                    runebender_core::glyphs_import::glyphs_package_to_ufo_files(
-                        &entries,
-                    )?
+                    runebender_core::glyphs_import::glyphs_package_to_ufo_files(&entries)?
                 }
                 _ => {
-                    let text = std::fs::read_to_string(path)
-                        .map_err(|e| format!("{e}"))?;
+                    let text = std::fs::read_to_string(path).map_err(|e| format!("{e}"))?;
                     runebender_core::glyphs_import::glyphs_to_ufo_files(&text)?
                 }
             };
@@ -1210,9 +1197,10 @@ impl Project {
             project.export_source = Some(open);
             return Ok(project);
         }
-        if path.extension().is_some_and(|e| {
-            e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf")
-        }) {
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf"))
+        {
             // A compiled font opens as an editable in-memory UFO.
             // Save writes that UFO next to the binary — never over
             // it — and Export compiles from the UFO.
@@ -1247,15 +1235,17 @@ impl Project {
         if path.extension().is_some_and(|e| e == "designspace") {
             let doc = norad::designspace::DesignSpaceDocument::load(path)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
-            let dir = path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+            let dir = path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf();
             return Self::from_designspace(doc, move |filename| {
                 let ufo_path = dir.join(filename);
                 FontModel::load(&ufo_path).map_err(|e| format!("{}: {e}", ufo_path.display()))
             });
         }
         {
-            let model =
-                FontModel::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let model = FontModel::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
             let name: SharedString = model
                 .font
                 .font_info
@@ -1328,7 +1318,10 @@ impl Project {
                     location.insert(
                         axis.name.clone(),
                         runebender_core::var_model::normalize_value(
-                            raw, axis.min, axis.default, axis.max,
+                            raw,
+                            axis.min,
+                            axis.default,
+                            axis.max,
                         ),
                     );
                 }
@@ -1371,7 +1364,10 @@ impl Project {
                     location.insert(
                         axis.name.clone(),
                         runebender_core::var_model::normalize_value(
-                            raw, axis.min, axis.default, axis.max,
+                            raw,
+                            axis.min,
+                            axis.default,
+                            axis.max,
                         ),
                     );
                 }
@@ -1389,15 +1385,11 @@ impl Project {
             }
             let model = (masters.len() > 1)
                 .then(|| runebender_core::var_model::VariationModel::new(&master_locations));
-            let location = axes
-                .iter()
-                .map(|a| (a.name.clone(), 0.0))
-                .collect();
+            let location = axes.iter().map(|a| (a.name.clone(), 0.0)).collect();
             let brace: Vec<BraceSource> = layer_sources
                 .into_iter()
                 .filter_map(|(filename, layer, location)| {
-                    let master =
-                        master_files.iter().position(|f| *f == filename)?;
+                    let master = master_files.iter().position(|f| *f == filename)?;
                     Some(BraceSource {
                         master,
                         layer,
@@ -1429,9 +1421,7 @@ impl Project {
     /// Returns the project plus per-master UFO path prefixes
     /// (workspace-root relative), aligned with `masters`.
     #[cfg(target_family = "wasm")]
-    fn from_fetched(
-        fetched: &web_host::FetchedWorkspace,
-    ) -> Result<(Self, Vec<String>), String> {
+    fn from_fetched(fetched: &web_host::FetchedWorkspace) -> Result<(Self, Vec<String>), String> {
         use std::cell::RefCell;
         let prefixes: RefCell<Vec<String>> = RefCell::new(Vec::new());
         let build_master = |prefix: String| -> Result<FontModel, String> {
@@ -1446,13 +1436,10 @@ impl Project {
             if files.is_empty() {
                 return Err(format!("no files under {prefix}"));
             }
-            let ufo = runebender_core::font_memory::ufo_from_files(
-                files.iter().map(|(p, b)| (*p, *b)),
-            )?;
-            let mut model = FontModel::from_font(
-                ufo.font,
-                PathBuf::from(prefix.trim_end_matches('/')),
-            );
+            let ufo =
+                runebender_core::font_memory::ufo_from_files(files.iter().map(|(p, b)| (*p, *b)))?;
+            let mut model =
+                FontModel::from_font(ufo.font, PathBuf::from(prefix.trim_end_matches('/')));
             model.glif_paths = ufo.glif_paths;
             prefixes.borrow_mut().push(prefix);
             Ok(model)
@@ -1464,9 +1451,7 @@ impl Project {
                 Some(i) => &fetched.entry[..=i],
                 None => "",
             };
-            Self::from_designspace(doc, |filename| {
-                build_master(format!("{ds_dir}{filename}/"))
-            })?
+            Self::from_designspace(doc, |filename| build_master(format!("{ds_dir}{filename}/")))?
         } else {
             // Bare UFO entry.
             let model = build_master(format!("{}/", fetched.entry.trim_end_matches('/')))?;
@@ -1503,9 +1488,8 @@ impl Project {
     /// UFOs compiled into the binary.
     #[cfg(target_family = "wasm")]
     fn demo_embedded() -> Result<Self, String> {
-        static DEMO: include_dir::Dir<'_> = include_dir::include_dir!(
-            "$CARGO_MANIFEST_DIR/../runebender-web/assets/test-fonts"
-        );
+        static DEMO: include_dir::Dir<'_> =
+            include_dir::include_dir!("$CARGO_MANIFEST_DIR/../runebender-web/assets/test-fonts");
         let ds_text = DEMO
             .get_file("VirtuaGrotesk.designspace")
             .and_then(|f| f.contents_utf8())
@@ -1550,9 +1534,7 @@ impl Project {
     /// structure disagrees, with contour and point counts. None when
     /// compatible or single-master.
     fn compat_detail(&self, name: &str) -> Option<String> {
-        if self.masters.len() < 2
-            || self.compat.get(name).copied().unwrap_or(true)
-        {
+        if self.masters.len() < 2 || self.compat.get(name).copied().unwrap_or(true) {
             return None;
         }
         let first_sig = Self::glyph_signature(&self.masters[0], name);
@@ -1564,9 +1546,7 @@ impl Project {
                 format!("{}c · {}pt", contours.len(), points)
             }
         };
-        for (master, master_name) in
-            self.masters.iter().zip(&self.master_names).skip(1)
-        {
+        for (master, master_name) in self.masters.iter().zip(&self.master_names).skip(1) {
             let sig = Self::glyph_signature(master, name);
             if sig == first_sig {
                 continue;
@@ -1585,7 +1565,9 @@ impl Project {
     /// Rebuild the Instances display rows (name + normalized
     /// location) from the designspace document.
     fn refresh_instances_from_doc(&mut self) {
-        let Some(doc) = self.ds_doc.as_ref() else { return };
+        let Some(doc) = self.ds_doc.as_ref() else {
+            return;
+        };
         self.instances = doc
             .instances
             .iter()
@@ -1608,7 +1590,10 @@ impl Project {
                     location.insert(
                         axis.name.clone(),
                         runebender_core::var_model::normalize_value(
-                            raw, axis.min, axis.default, axis.max,
+                            raw,
+                            axis.min,
+                            axis.default,
+                            axis.max,
                         ),
                     );
                 }
@@ -1659,10 +1644,7 @@ impl Project {
     /// master, evaluated at the active master's own location —
     /// Glyphs' Re-Interpolate, for repairing one broken master from
     /// the others. With one other source this is a straight copy.
-    fn reinterpolated_from_others(
-        &self,
-        glyph_name: &str,
-    ) -> Result<norad::Glyph, String> {
+    fn reinterpolated_from_others(&self, glyph_name: &str) -> Result<norad::Glyph, String> {
         let flatten = |glyph: &norad::Glyph| {
             let mut v = vec![glyph.width];
             for contour in &glyph.contours {
@@ -1674,8 +1656,7 @@ impl Project {
             v
         };
         let mut values: Vec<Vec<f64>> = Vec::new();
-        let mut locations: Vec<runebender_core::var_model::Location> =
-            Vec::new();
+        let mut locations: Vec<runebender_core::var_model::Location> = Vec::new();
         let mut template: Option<norad::Glyph> = None;
         for (mi, master) in self.masters.iter().enumerate() {
             if mi == self.active {
@@ -1774,8 +1755,7 @@ impl Project {
         // Brace layers holding this glyph join the master set: the
         // model grows their locations, per glyph (Glyphs' intermediate
         // layers).
-        let mut brace_locations: Vec<runebender_core::var_model::Location> =
-            Vec::new();
+        let mut brace_locations: Vec<runebender_core::var_model::Location> = Vec::new();
         for b in &self.brace {
             let Some(glyph) = self
                 .masters
@@ -1816,22 +1796,21 @@ impl Project {
         // quadratic, overriding the piecewise answer the baked brace
         // layers gave the model — the bake stays for compilers, the
         // preview is exact.
-        if let (Some(axis), Some((lo, hi))) =
-            (self.axes.first(), self.axis_end_masters())
-        {
+        if let (Some(axis), Some((lo, hi))) = (self.axes.first(), self.axis_end_masters()) {
             let curves = self.masters[lo]
                 .font
                 .get_glyph(glyph_name)
                 .map(read_hoi_intermediates)
                 .unwrap_or_default();
             if !curves.is_empty() {
-                let normalized =
-                    location.get(&axis.name).copied().unwrap_or(0.0);
+                let normalized = location.get(&axis.name).copied().unwrap_or(0.0);
                 let design = runebender_core::var_model::denormalize_value(
-                    normalized, axis.min, axis.default, axis.max,
+                    normalized,
+                    axis.min,
+                    axis.default,
+                    axis.max,
                 );
-                let t01 = ((design - axis.min) / (axis.max - axis.min))
-                    .clamp(0.0, 1.0);
+                let t01 = ((design - axis.min) / (axis.max - axis.min)).clamp(0.0, 1.0);
                 let (a_glyph, b_glyph) = (
                     self.masters[lo].font.get_glyph(glyph_name),
                     self.masters[hi].font.get_glyph(glyph_name),
@@ -1839,23 +1818,12 @@ impl Project {
                 if let (Some(a_glyph), Some(b_glyph)) = (a_glyph, b_glyph) {
                     for (&(ci, pi), &q) in &curves {
                         let (Some(pa), Some(pb)) = (
-                            a_glyph
-                                .contours
-                                .get(ci)
-                                .and_then(|c| c.points.get(pi)),
-                            b_glyph
-                                .contours
-                                .get(ci)
-                                .and_then(|c| c.points.get(pi)),
+                            a_glyph.contours.get(ci).and_then(|c| c.points.get(pi)),
+                            b_glyph.contours.get(ci).and_then(|c| c.points.get(pi)),
                         ) else {
                             continue;
                         };
-                        let pos = hoi_quad_at(
-                            (pa.x, pa.y),
-                            (pb.x, pb.y),
-                            q,
-                            t01,
-                        );
+                        let pos = hoi_quad_at((pa.x, pa.y), (pb.x, pb.y), q, t01);
                         if let Some(point) = glyph
                             .contours
                             .get_mut(ci)
@@ -1884,10 +1852,8 @@ impl Project {
                 .and_then(|l| l.get(&axis.name).copied())
                 .unwrap_or(0.0)
         };
-        let lo = (0..self.masters.len())
-            .min_by(|&a, &b| value(a).total_cmp(&value(b)))?;
-        let hi = (0..self.masters.len())
-            .max_by(|&a, &b| value(a).total_cmp(&value(b)))?;
+        let lo = (0..self.masters.len()).min_by(|&a, &b| value(a).total_cmp(&value(b)))?;
+        let hi = (0..self.masters.len()).max_by(|&a, &b| value(a).total_cmp(&value(b)))?;
         (lo != hi).then_some((lo, hi))
     }
 
@@ -1895,11 +1861,7 @@ impl Project {
     /// along the first axis (min to max), through the same per-glyph
     /// model the ghost uses — brace layers bend the trajectories.
     /// Outer index: point (flattened contour order); inner: stop.
-    fn trajectory_samples(
-        &self,
-        glyph_name: &str,
-        steps: usize,
-    ) -> Option<Vec<Vec<kurbo::Point>>> {
+    fn trajectory_samples(&self, glyph_name: &str, steps: usize) -> Option<Vec<Vec<kurbo::Point>>> {
         self.model.as_ref()?;
         let axis = self.axes.first()?;
         let mut per_point: Vec<Vec<kurbo::Point>> = Vec::new();
@@ -1910,7 +1872,10 @@ impl Project {
             location.insert(
                 axis.name.clone(),
                 runebender_core::var_model::normalize_value(
-                    design, axis.min, axis.default, axis.max,
+                    design,
+                    axis.min,
+                    axis.default,
+                    axis.max,
                 ),
             );
             let glyph = self.interpolated_at(glyph_name, &location)?;
@@ -1945,12 +1910,14 @@ impl Project {
             .axes
             .iter()
             .map(|axis| {
-                let normalized =
-                    self.location.get(&axis.name).copied().unwrap_or(0.0);
+                let normalized = self.location.get(&axis.name).copied().unwrap_or(0.0);
                 (
                     axis.name.as_str(),
                     runebender_core::var_model::denormalize_value(
-                        normalized, axis.min, axis.default, axis.max,
+                        normalized,
+                        axis.min,
+                        axis.default,
+                        axis.max,
                     ),
                 )
             })
@@ -1963,9 +1930,7 @@ impl Project {
                             return false;
                         };
                         c.minimum.is_none_or(|min| value >= min as f64 - 1e-6)
-                            && c
-                                .maximum
-                                .is_none_or(|max| value <= max as f64 + 1e-6)
+                            && c.maximum.is_none_or(|max| value <= max as f64 + 1e-6)
                     })
                 });
             if !applies {
@@ -2026,8 +1991,7 @@ fn icon_svg(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
     canvas(
         move |bounds, _, _| bounds,
         move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-            let Some(icon) = runebender_core::theme_oklch::toolbar_icons().get(name)
-            else {
+            let Some(icon) = runebender_core::theme_oklch::toolbar_icons().get(name) else {
                 return;
             };
             let w: f32 = bounds.size.width.into();
@@ -2036,8 +2000,8 @@ fn icon_svg(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
             // bigger tiles and crowded it in small ones.
             let pad = (w.min(h) as f64) * 0.12;
             let vb = icon.view_box;
-            let scale = ((w as f64 - pad * 2.0) / vb.width())
-                .min((h as f64 - pad * 2.0) / vb.height());
+            let scale =
+                ((w as f64 - pad * 2.0) / vb.width()).min((h as f64 - pad * 2.0) / vb.height());
             let dx = (w as f64 - vb.width() * scale) / 2.0;
             let dy = (h as f64 - vb.height() * scale) / 2.0;
             // Icon space is Y-down SVG, same as gpui.
@@ -2100,17 +2064,14 @@ fn expand_stroke_contours(
             continue;
         }
         let path = runebender_core::glyph_paths::contour_to_bezpath(contour);
-        let stroked =
-            kurbo::stroke(path.elements().iter().copied(), &style, &opts, 0.25);
+        let stroked = kurbo::stroke(path.elements().iter().copied(), &style, &opts, 0.25);
         // One stroked outline can be several subpaths (a closed
         // skeleton keeps its counter).
         let mut sub = BezPath::new();
         let mut made = false;
         for el in stroked.elements() {
             if matches!(el, PathEl::MoveTo(_)) && !sub.elements().is_empty() {
-                if let Some(c) =
-                    runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty)
-                {
+                if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty) {
                     out.push(c);
                     made = true;
                 }
@@ -2119,9 +2080,7 @@ fn expand_stroke_contours(
             sub.push(*el);
         }
         if !sub.elements().is_empty() {
-            if let Some(c) =
-                runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty)
-            {
+            if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty) {
                 out.push(c);
                 made = true;
             }
@@ -2166,8 +2125,7 @@ fn offset_glyph_contours(glyph: &mut norad::Glyph, delta: f64) -> bool {
     } else {
         linesweeper::BinaryOp::Difference
     };
-    let Ok(result) =
-        linesweeper::binary_op(&combined, &band, linesweeper::FillRule::NonZero, op)
+    let Ok(result) = linesweeper::binary_op(&combined, &band, linesweeper::FillRule::NonZero, op)
     else {
         return false;
     };
@@ -2180,10 +2138,7 @@ fn offset_glyph_contours(glyph: &mut norad::Glyph, delta: f64) -> bool {
         .collect();
     let mut contours: Vec<norad::Contour> = Vec::new();
     for contour in result.contours() {
-        if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(
-            &contour.path,
-            &smooth_at,
-        ) {
+        if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(&contour.path, &smooth_at) {
             contours.push(c);
         }
     }
@@ -2298,8 +2253,8 @@ fn add_extreme_points(
             let kurbo::PathSeg::Cubic(cubic) = hit.seg else {
                 continue;
             };
-            let in_scope = selected.is_empty()
-                || hit.point_ids().iter().any(|id| selected.contains(id));
+            let in_scope =
+                selected.is_empty() || hit.point_ids().iter().any(|id| selected.contains(id));
             if !in_scope {
                 continue;
             }
@@ -2311,11 +2266,7 @@ fn add_extreme_points(
                 if !(0.02..=0.98).contains(&t) {
                     continue;
                 }
-                if runebender_core::segment_ops::insert_point_on_segment(
-                    glyph, &hit, t,
-                )
-                .is_some()
-                {
+                if runebender_core::segment_ops::insert_point_on_segment(glyph, &hit, t).is_some() {
                     changed = true;
                     continue 'outer;
                 }
@@ -2348,9 +2299,7 @@ fn extrude_glyph_contours(
         let path = runebender_core::glyph_paths::contour_to_bezpath(contour);
         front.extend(path.elements().iter().copied());
         combined.extend(path.elements().iter().copied());
-        combined.extend(
-            (Affine::translate(d) * &path).elements().iter().copied(),
-        );
+        combined.extend((Affine::translate(d) * &path).elements().iter().copied());
         // Wall quads, each wound positive so the nonzero union eats
         // them all the same way.
         let mut walls = BezPath::new();
@@ -2407,9 +2356,7 @@ fn extrude_glyph_contours(
     let mut sub = BezPath::new();
     for el in result.elements() {
         if matches!(el, PathEl::MoveTo(_)) && !sub.elements().is_empty() {
-            if let Some(c) =
-                runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty_map)
-            {
+            if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty_map) {
                 contours.push(c);
             }
             sub = BezPath::new();
@@ -2417,9 +2364,7 @@ fn extrude_glyph_contours(
         sub.push(*el);
     }
     if !sub.elements().is_empty() {
-        if let Some(c) =
-            runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty_map)
-        {
+        if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty_map) {
             contours.push(c);
         }
     }
@@ -2521,12 +2466,7 @@ fn toggle_contour_open(glyph: &mut norad::Glyph, ci: usize, pi: usize) -> bool {
 /// A standalone SVG document for one glyph: the outline in font
 /// units, y flipped into SVG space, the viewBox spanning the em
 /// (ascender down to descender) across the advance.
-fn glyph_svg(
-    path: &BezPath,
-    advance: f64,
-    ascender: f64,
-    descender: f64,
-) -> String {
+fn glyph_svg(path: &BezPath, advance: f64, ascender: f64, descender: f64) -> String {
     let height = ascender - descender;
     format!(
         concat!(
@@ -2603,8 +2543,7 @@ fn correct_path_directions(glyph: &mut norad::Glyph) -> usize {
         .iter()
         .map(runebender_core::glyph_paths::contour_to_bezpath)
         .collect();
-    let mut flip: std::collections::HashSet<(usize, usize)> =
-        std::collections::HashSet::new();
+    let mut flip: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
     let mut flipped = 0usize;
     for (ci, contour) in glyph.contours.iter().enumerate() {
         let Some(probe) = contour
@@ -2658,12 +2597,7 @@ fn round_glyph_coordinates(glyph: &mut norad::Glyph) -> usize {
 /// edge on purpose (the anti-seam tongue), so the test is
 /// one-sided. None when nothing reaches the edge — for a form that
 /// should join, that is itself the defect.
-fn joining_band(
-    outline: &BezPath,
-    advance: f64,
-    left: bool,
-    tolerance: f64,
-) -> Option<(f64, f64)> {
+fn joining_band(outline: &BezPath, advance: f64, left: bool, tolerance: f64) -> Option<(f64, f64)> {
     let mut band: Option<(f64, f64)> = None;
     let mut visit = |p: kurbo::Point| {
         let reaches = if left {
@@ -2702,8 +2636,7 @@ fn joining_band(
 /// The explicit color-layers key, fontTools buildCOLR's input.
 /// Once present, ufo2ft skips its own layer exploding — so writing
 /// any v1 entry means exploding every color glyph ourselves.
-const COLOR_LAYERS_EXPLICIT_KEY: &str =
-    "com.github.googlei18n.ufo2ft.colorLayers";
+const COLOR_LAYERS_EXPLICIT_KEY: &str = "com.github.googlei18n.ufo2ft.colorLayers";
 
 /// A COLRv1 linear-gradient paint dict in fontTools' unbuilt form:
 /// two palette stops, running from `p0` to `p1` (x2/y2 is the
@@ -2739,14 +2672,8 @@ fn linear_gradient_paint(
     paint.insert("x1".into(), plist::Value::Real(p1.0));
     paint.insert("y1".into(), plist::Value::Real(p1.1));
     // Rotation vector: perpendicular to p0->p1.
-    paint.insert(
-        "x2".into(),
-        plist::Value::Real(p0.0 + (p1.1 - p0.1)),
-    );
-    paint.insert(
-        "y2".into(),
-        plist::Value::Real(p0.1 - (p1.0 - p0.0)),
-    );
+    paint.insert("x2".into(), plist::Value::Real(p0.0 + (p1.1 - p0.1)));
+    paint.insert("y2".into(), plist::Value::Real(p0.1 - (p1.0 - p0.0)));
     plist::Value::Dictionary(paint)
 }
 
@@ -2834,7 +2761,11 @@ fn bake_masks(glyph: &mut norad::Glyph) -> bool {
     let mut cut = BezPath::new();
     for (ci, contour) in glyph.contours.iter().enumerate() {
         let path = runebender_core::glyph_paths::contour_to_bezpath(contour);
-        let target = if masks.contains(&ci) { &mut cut } else { &mut keep };
+        let target = if masks.contains(&ci) {
+            &mut cut
+        } else {
+            &mut keep
+        };
         target.extend(path.elements().iter().copied());
     }
     let Ok(result) = linesweeper::binary_op(
@@ -2848,10 +2779,7 @@ fn bake_masks(glyph: &mut norad::Glyph) -> bool {
     let empty = std::collections::HashMap::new();
     let mut contours = Vec::new();
     for contour in result.contours() {
-        if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(
-            &contour.path,
-            &empty,
-        ) {
+        if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(&contour.path, &empty) {
             contours.push(c);
         }
     }
@@ -2879,16 +2807,13 @@ const PSNAMES_KEY: &str = "public.postscriptNames";
 
 fn read_production_name(font: &norad::Font, glyph: &str) -> Option<String> {
     match font.lib.get(PSNAMES_KEY)? {
-        plist::Value::Dictionary(d) => {
-            d.get(glyph)?.as_string().map(str::to_string)
-        }
+        plist::Value::Dictionary(d) => d.get(glyph)?.as_string().map(str::to_string),
         _ => None,
     }
 }
 
 fn read_saved_filters(font: &norad::Font) -> Vec<(String, String)> {
-    let Some(plist::Value::Array(rows)) = font.lib.get(SAVED_FILTERS_KEY)
-    else {
+    let Some(plist::Value::Array(rows)) = font.lib.get(SAVED_FILTERS_KEY) else {
         return Vec::new();
     };
     rows.iter()
@@ -2967,10 +2892,7 @@ fn write_annotations(glyph: &mut norad::Glyph, notes: &[Annotation]) {
             dict.insert("x".into(), plist::Value::Real(a.x));
             dict.insert("y".into(), plist::Value::Real(a.y));
             if !a.text.is_empty() {
-                dict.insert(
-                    "text".into(),
-                    plist::Value::String(a.text.clone()),
-                );
+                dict.insert("text".into(), plist::Value::String(a.text.clone()));
             }
             plist::Value::Dictionary(dict)
         })
@@ -2996,16 +2918,14 @@ fn svg_to_contours(
     let mut rest = svg_text;
     while let Some(at) = rest.find(" d=") {
         let after = &rest[at + 3..];
-        let Some(quote) = after.chars().next().filter(|c| *c == '"' || *c == '\'')
-        else {
+        let Some(quote) = after.chars().next().filter(|c| *c == '"' || *c == '\'') else {
             rest = after;
             continue;
         };
         let body = &after[1..];
         let Some(end) = body.find(quote) else { break };
         let data = &body[..end];
-        let path = BezPath::from_svg(data)
-            .map_err(|e| format!("SVG path: {e}"))?;
+        let path = BezPath::from_svg(data).map_err(|e| format!("SVG path: {e}"))?;
         combined.extend(path.elements().iter().copied());
         rest = &body[end..];
     }
@@ -3028,9 +2948,7 @@ fn svg_to_contours(
     let mut sub = BezPath::new();
     for el in fitted.elements() {
         if matches!(el, PathEl::MoveTo(_)) && !sub.elements().is_empty() {
-            if let Some(c) =
-                runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty)
-            {
+            if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty) {
                 contours.push(c);
             }
             sub = BezPath::new();
@@ -3038,9 +2956,7 @@ fn svg_to_contours(
         sub.push(*el);
     }
     if !sub.elements().is_empty() {
-        if let Some(c) =
-            runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty)
-        {
+        if let Some(c) = runebender_core::glyph_ops::bezpath_to_contour(&sub, &empty) {
             contours.push(c);
         }
     }
@@ -3062,10 +2978,7 @@ fn quads_to_cubics(glyph: &mut norad::Glyph) -> bool {
         if n < 3 {
             continue;
         }
-        let has_quads = contour
-            .points
-            .iter()
-            .any(|p| p.typ == PointType::QCurve);
+        let has_quads = contour.points.iter().any(|p| p.typ == PointType::QCurve);
         if !has_quads {
             continue;
         }
@@ -3087,16 +3000,12 @@ fn quads_to_cubics(glyph: &mut norad::Glyph) -> bool {
             }
             // Replace the emitted offcurve with the two cubic ones.
             let popped = points.pop();
-            debug_assert!(popped
-                .is_some_and(|q| q.typ == PointType::OffCurve));
+            debug_assert!(popped.is_some_and(|q| q.typ == PointType::OffCurve));
             let c1 = (
                 p0.x + (c.x - p0.x) * 2.0 / 3.0,
                 p0.y + (c.y - p0.y) * 2.0 / 3.0,
             );
-            let c2 = (
-                p.x + (c.x - p.x) * 2.0 / 3.0,
-                p.y + (c.y - p.y) * 2.0 / 3.0,
-            );
+            let c2 = (p.x + (c.x - p.x) * 2.0 / 3.0, p.y + (c.y - p.y) * 2.0 / 3.0);
             let off = |x: f64, y: f64| {
                 norad::ContourPoint::new(
                     x.round(),
@@ -3110,7 +3019,12 @@ fn quads_to_cubics(glyph: &mut norad::Glyph) -> bool {
             points.push(off(c1.0, c1.1));
             points.push(off(c2.0, c2.1));
             points.push(norad::ContourPoint::new(
-                p.x, p.y, PointType::Curve, p.smooth, None, None,
+                p.x,
+                p.y,
+                PointType::Curve,
+                p.smooth,
+                None,
+                None,
             ));
             changed = true;
         }
@@ -3154,10 +3068,7 @@ fn cubics_to_quads(glyph: &mut norad::Glyph, tolerance: f64) -> bool {
         if n < 4 {
             continue;
         }
-        let has_cubics = contour
-            .points
-            .iter()
-            .any(|p| p.typ == PointType::Curve);
+        let has_cubics = contour.points.iter().any(|p| p.typ == PointType::Curve);
         if !has_cubics {
             continue;
         }
@@ -3249,17 +3160,11 @@ impl BinaryImportPen {
         // Closed contour: the leading Move either duplicates the
         // final on-point (drop it) or becomes an ordinary point.
         let mut points = points;
-        if points.len() >= 2
-            && points[0].typ == norad::PointType::Move
-        {
+        if points.len() >= 2 && points[0].typ == norad::PointType::Move {
             let (fx, fy) = (points[0].x, points[0].y);
             let last_matches = points
                 .last()
-                .is_some_and(|l| {
-                    l.typ != norad::PointType::OffCurve
-                        && l.x == fx
-                        && l.y == fy
-                });
+                .is_some_and(|l| l.typ != norad::PointType::OffCurve && l.x == fx && l.y == fy);
             if last_matches {
                 points.remove(0);
             } else {
@@ -3275,12 +3180,10 @@ impl BinaryImportPen {
 impl skrifa::outline::OutlinePen for BinaryImportPen {
     fn move_to(&mut self, x: f32, y: f32) {
         self.finish_contour();
-        self.current
-            .push(Self::point(x, y, norad::PointType::Move));
+        self.current.push(Self::point(x, y, norad::PointType::Move));
     }
     fn line_to(&mut self, x: f32, y: f32) {
-        self.current
-            .push(Self::point(x, y, norad::PointType::Line));
+        self.current.push(Self::point(x, y, norad::PointType::Line));
     }
     fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
         self.current
@@ -3306,11 +3209,10 @@ impl skrifa::outline::OutlinePen for BinaryImportPen {
 /// qcurves, CFF cubics kept cubic). Kerning and features are not
 /// decompiled in this slice.
 fn import_binary_font(path: &std::path::Path) -> Result<norad::Font, String> {
-    use skrifa::raw::TableProvider as _;
     use skrifa::MetadataProvider as _;
+    use skrifa::raw::TableProvider as _;
     let bytes = std::fs::read(path).map_err(|e| format!("{e}"))?;
-    let font_ref =
-        skrifa::FontRef::new(&bytes).map_err(|e| format!("{e}"))?;
+    let font_ref = skrifa::FontRef::new(&bytes).map_err(|e| format!("{e}"))?;
     let size = skrifa::instance::Size::unscaled();
     let location = skrifa::instance::LocationRef::default();
     let metrics = font_ref.metrics(size, location);
@@ -3325,10 +3227,8 @@ fn import_binary_font(path: &std::path::Path) -> Result<norad::Font, String> {
     let info = &mut font.font_info;
     info.family_name = english(skrifa::string::StringId::FAMILY_NAME);
     info.style_name = english(skrifa::string::StringId::SUBFAMILY_NAME);
-    info.units_per_em = norad::fontinfo::NonNegativeIntegerOrFloat::try_from(
-        metrics.units_per_em as f64,
-    )
-    .ok();
+    info.units_per_em =
+        norad::fontinfo::NonNegativeIntegerOrFloat::try_from(metrics.units_per_em as f64).ok();
     info.ascender = Some(metrics.ascent as f64);
     // skrifa's descent is signed; UFO wants it below zero.
     let descent = metrics.descent as f64;
@@ -3336,8 +3236,7 @@ fn import_binary_font(path: &std::path::Path) -> Result<norad::Font, String> {
     info.x_height = metrics.x_height.map(|v| v as f64);
     info.cap_height = metrics.cap_height.map(|v| v as f64);
     // gid → codepoints.
-    let mut encodings: std::collections::HashMap<u32, Vec<char>> =
-        std::collections::HashMap::new();
+    let mut encodings: std::collections::HashMap<u32, Vec<char>> = std::collections::HashMap::new();
     for (codepoint, gid) in font_ref.charmap().mappings() {
         if let Some(c) = char::from_u32(codepoint) {
             encodings.entry(gid.to_u32()).or_default().push(c);
@@ -3373,12 +3272,9 @@ fn import_binary_font(path: &std::path::Path) -> Result<norad::Font, String> {
         };
         let mut glyph = norad::Glyph::new(glyph_name.as_str());
         glyph.contours = pen.contours;
-        glyph.width = glyph_metrics
-            .advance_width(gid)
-            .unwrap_or(0.0) as f64;
+        glyph.width = glyph_metrics.advance_width(gid).unwrap_or(0.0) as f64;
         if let Some(codepoints) = encodings.get(&raw_gid) {
-            glyph.codepoints =
-                norad::Codepoints::new(codepoints.iter().copied());
+            glyph.codepoints = norad::Codepoints::new(codepoints.iter().copied());
         }
         font.default_layer_mut().insert_glyph(glyph);
     }
@@ -3392,12 +3288,7 @@ fn import_binary_font(path: &std::path::Path) -> Result<norad::Font, String> {
 /// unequal angles) — and spliced in place of the node. Both
 /// neighbors must be on-curve (line corners) in this first slice.
 /// The result is a plain outline: pipelines see baked points.
-fn apply_corner_at(
-    glyph: &mut norad::Glyph,
-    corner: &norad::Glyph,
-    ci: usize,
-    pi: usize,
-) -> bool {
+fn apply_corner_at(glyph: &mut norad::Glyph, corner: &norad::Glyph, ci: usize, pi: usize) -> bool {
     use norad::PointType;
     let Some(corner_contour) = corner.contours.first() else {
         return false;
@@ -3441,14 +3332,7 @@ fn apply_corner_at(
                 PointType::Move => PointType::Line,
                 other => other,
             };
-            norad::ContourPoint::new(
-                x.round(),
-                y.round(),
-                typ,
-                p.smooth,
-                None,
-                None,
-            )
+            norad::ContourPoint::new(x.round(), y.round(), typ, p.smooth, None, None)
         })
         .collect();
     let contour = glyph.contours.get_mut(ci).expect("checked");
@@ -3461,10 +3345,8 @@ fn apply_corner_at(
 /// glyph.leftMetricsKey" / rightMetricsKey). "=n" copies n's same
 /// sidebearing, "=|o" the opposite one, "=n+10" and "=n*1.1" add
 /// arithmetic, "=50" is a constant.
-const LEFT_METRICS_KEY: &str =
-    "com.schriftgestaltung.Glyphs.glyph.leftMetricsKey";
-const RIGHT_METRICS_KEY: &str =
-    "com.schriftgestaltung.Glyphs.glyph.rightMetricsKey";
+const LEFT_METRICS_KEY: &str = "com.schriftgestaltung.Glyphs.glyph.leftMetricsKey";
+const RIGHT_METRICS_KEY: &str = "com.schriftgestaltung.Glyphs.glyph.rightMetricsKey";
 
 /// A parsed metrics-key formula.
 #[derive(Clone, Debug, PartialEq)]
@@ -3508,7 +3390,11 @@ fn parse_metrics_key(text: &str) -> Option<MetricsFormula> {
 }
 
 fn read_metrics_key(glyph: &norad::Glyph, left: bool) -> Option<String> {
-    let key = if left { LEFT_METRICS_KEY } else { RIGHT_METRICS_KEY };
+    let key = if left {
+        LEFT_METRICS_KEY
+    } else {
+        RIGHT_METRICS_KEY
+    };
     glyph
         .lib
         .get(key)
@@ -3517,7 +3403,11 @@ fn read_metrics_key(glyph: &norad::Glyph, left: bool) -> Option<String> {
 }
 
 fn write_metrics_key(glyph: &mut norad::Glyph, left: bool, value: &str) {
-    let key = if left { LEFT_METRICS_KEY } else { RIGHT_METRICS_KEY };
+    let key = if left {
+        LEFT_METRICS_KEY
+    } else {
+        RIGHT_METRICS_KEY
+    };
     let value = value.trim();
     if value.is_empty() {
         glyph.lib.remove(key);
@@ -3568,10 +3458,7 @@ fn write_hoi_intermediates(
     for ((c, p), (x, y)) in map {
         dict.insert(
             format!("{c},{p}"),
-            plist::Value::Array(vec![
-                plist::Value::Real(*x),
-                plist::Value::Real(*y),
-            ]),
+            plist::Value::Array(vec![plist::Value::Real(*x), plist::Value::Real(*y)]),
         );
     }
     glyph
@@ -3581,12 +3468,7 @@ fn write_hoi_intermediates(
 
 /// Quadratic through Q at the middle: position at `t` between `a`
 /// and `b` when the path must pass through `q` at t = 0.5.
-fn hoi_quad_at(
-    a: (f64, f64),
-    b: (f64, f64),
-    q: (f64, f64),
-    t: f64,
-) -> (f64, f64) {
+fn hoi_quad_at(a: (f64, f64), b: (f64, f64), q: (f64, f64), t: f64) -> (f64, f64) {
     // Control C with (1-t)²A + 2(1-t)tC + t²B passing Q at 0.5:
     // Q = A/4 + C/2 + B/4  =>  C = 2Q - (A+B)/2.
     let c = (2.0 * q.0 - (a.0 + b.0) / 2.0, 2.0 * q.1 - (a.1 + b.1) / 2.0);
@@ -3669,8 +3551,7 @@ const SAMPLE_STRINGS: &[&str] = &[
 // layers. Fontra edits the same keys.
 
 const COLOR_PALETTES_KEY: &str = "com.github.googlei18n.ufo2ft.colorPalettes";
-const COLOR_LAYER_MAPPING_KEY: &str =
-    "com.github.googlei18n.ufo2ft.colorLayerMapping";
+const COLOR_LAYER_MAPPING_KEY: &str = "com.github.googlei18n.ufo2ft.colorLayerMapping";
 
 /// The first palette: [r, g, b, a] float rows.
 fn read_color_palette(font: &norad::Font) -> Vec<[f64; 4]> {
@@ -3703,11 +3584,7 @@ fn write_color_palette(font: &mut norad::Font, palette: &[[f64; 4]]) {
     let value = plist::Value::Array(vec![plist::Value::Array(
         palette
             .iter()
-            .map(|c| {
-                plist::Value::Array(
-                    c.iter().map(|&v| plist::Value::Real(v)).collect(),
-                )
-            })
+            .map(|c| plist::Value::Array(c.iter().map(|&v| plist::Value::Real(v)).collect()))
             .collect(),
     )]);
     font.lib.insert(COLOR_PALETTES_KEY.into(), value);
@@ -4133,9 +4010,8 @@ struct Workspace {
     /// Decoded glyph background images from the UFO images store,
     /// keyed by file name; None caches a failed decode. Behind a
     /// mutex because rendering (which fills it) holds &self.
-    glyph_image_cache: Arc<
-        Mutex<std::collections::HashMap<String, Option<Arc<gpui::RenderImage>>>>,
-    >,
+    glyph_image_cache:
+        Arc<Mutex<std::collections::HashMap<String, Option<Arc<gpui::RenderImage>>>>>,
     preview_invert: bool,
     preview_blur_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
     /// Grid cell size in px, driven by the bottom bar's zoom slider.
@@ -4365,16 +4241,15 @@ impl Default for MeasureOpts {
 /// What the Measure menu shows as ticked. The menu is built outside
 /// the view, so the live options are mirrored here whenever they
 /// change.
-static MEASURE_MENU: std::sync::Mutex<MeasureOpts> =
-    std::sync::Mutex::new(MeasureOpts {
-        colorize: false,
-        handles: false,
-        segments: false,
-        spans: false,
-        sidebearings: false,
-        sizes: false,
-        popcount: true,
-    });
+static MEASURE_MENU: std::sync::Mutex<MeasureOpts> = std::sync::Mutex::new(MeasureOpts {
+    colorize: false,
+    handles: false,
+    segments: false,
+    spans: false,
+    sidebearings: false,
+    sizes: false,
+    popcount: true,
+});
 
 impl MeasureOpts {
     fn any(&self) -> bool {
@@ -4529,14 +4404,7 @@ fn flat_slider(
 
 /// Everything the blurred preview image depends on, hashed: the line
 /// itself, the pane size, the radius and the two colours.
-fn blur_key(
-    line: &BezPath,
-    w: f64,
-    h: f64,
-    blur: f32,
-    ink: gpui::Rgba,
-    ground: gpui::Rgba,
-) -> u64 {
+fn blur_key(line: &BezPath, w: f64, h: f64, blur: f32, ink: gpui::Rgba, ground: gpui::Rgba) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for element in line.elements() {
@@ -4545,8 +4413,7 @@ fn blur_key(
                 (p.x.to_bits(), p.y.to_bits()).hash(&mut hasher)
             }
             PathEl::QuadTo(a, b) => {
-                (a.x.to_bits(), a.y.to_bits(), b.x.to_bits(), b.y.to_bits())
-                    .hash(&mut hasher)
+                (a.x.to_bits(), a.y.to_bits(), b.x.to_bits(), b.y.to_bits()).hash(&mut hasher)
             }
             PathEl::CurveTo(a, b, c) => (
                 a.x.to_bits(),
@@ -4588,9 +4455,7 @@ fn eye_icon(color: gpui::Rgba, open: bool) -> impl IntoElement {
             let (cx_, cy_) = (w / 2.0, h / 2.0);
             let rx = w * 0.40;
             let ry = h * 0.30;
-            let pt = |x: f64, y: f64| {
-                gpui::point(o.x + px(x as f32), o.y + px(y as f32))
-            };
+            let pt = |x: f64, y: f64| gpui::point(o.x + px(x as f32), o.y + px(y as f32));
             let mut pb = PathBuilder::stroke(px(1.2));
             // The almond: one curve over, one curve back.
             pb.move_to(pt(cx_ - rx, cy_));
@@ -4629,9 +4494,7 @@ fn glyph_free_icon(color: gpui::Rgba, kind: IconMark) -> impl IntoElement {
             let o = bounds.origin;
             let (cx_, cy_) = (w / 2.0, h / 2.0);
             let r = (w.min(h) / 2.0) * 0.42;
-            let pt = |x: f64, y: f64| {
-                gpui::point(o.x + px(x as f32), o.y + px(y as f32))
-            };
+            let pt = |x: f64, y: f64| gpui::point(o.x + px(x as f32), o.y + px(y as f32));
             let mut pb = PathBuilder::stroke(px(1.3));
             match kind {
                 IconMark::Plus | IconMark::Minus => {
@@ -4677,12 +4540,7 @@ fn invert_icon(color: gpui::Rgba) -> impl IntoElement {
             let r = (w.min(h) / 2.0) - 1.5;
             let center = (w / 2.0, h / 2.0);
             let ring = kurbo::Circle::new(center, r).to_path(0.1);
-            if let Some(p) = build_path(
-                &ring,
-                Affine::IDENTITY,
-                o,
-                PathBuilder::stroke(px(1.2)),
-            ) {
+            if let Some(p) = build_path(&ring, Affine::IDENTITY, o, PathBuilder::stroke(px(1.2))) {
                 window.paint_path(p, color);
             }
             // The filled half, as a half-turn arc closed across the
@@ -4784,14 +4642,12 @@ fn place_cells(
     viewport: gpui::Size<gpui::Pixels>,
     start_row: usize,
 ) -> Vec<PlacedCell> {
-    let rows: Vec<&Vec<(usize, usize)>> =
-        packed.iter().skip(start_row).take(fit.rows).collect();
+    let rows: Vec<&Vec<(usize, usize)>> = packed.iter().skip(start_row).take(fit.rows).collect();
     if rows.is_empty() {
         return Vec::new();
     }
     let content_w = fit.content_w();
-    let block_h =
-        fit.cell_h * rows.len() as f32 + GRID_GAP * (rows.len() - 1) as f32;
+    let block_h = fit.cell_h * rows.len() as f32 + GRID_GAP * (rows.len() - 1) as f32;
     let vw: f32 = viewport.width.into();
     let vh: f32 = viewport.height.into();
     let x0 = ((vw - content_w) / 2.0).max(0.0);
@@ -5091,18 +4947,13 @@ impl Workspace {
         if switching {
             self.park_active_session();
             let slot = &mut self.sessions[target];
-            self.editor =
-                std::mem::replace(&mut slot.editor, EditorState::new());
-            self.edit_buffer = std::mem::replace(
-                &mut slot.buffer,
-                runebender_core::text::TextBuffer::new(),
-            );
+            self.editor = std::mem::replace(&mut slot.editor, EditorState::new());
+            self.edit_buffer =
+                std::mem::replace(&mut slot.buffer, runebender_core::text::TextBuffer::new());
             self.active_session = target;
         }
         let name = self.sessions[target].glyph_name.clone();
-        let Some(&index) =
-            self.font().and_then(|f| f.name_map.get(name.as_str()))
-        else {
+        let Some(&index) = self.font().and_then(|f| f.name_map.get(name.as_str())) else {
             // The glyph is gone (removed, or absent from this
             // master): drop the dead tab.
             self.close_session(target);
@@ -5136,12 +4987,9 @@ impl Workspace {
                 // neighbor without parking.
                 let next = target.min(self.sessions.len() - 1);
                 let slot = &mut self.sessions[next];
-                self.editor =
-                    std::mem::replace(&mut slot.editor, EditorState::new());
-                self.edit_buffer = std::mem::replace(
-                    &mut slot.buffer,
-                    runebender_core::text::TextBuffer::new(),
-                );
+                self.editor = std::mem::replace(&mut slot.editor, EditorState::new());
+                self.edit_buffer =
+                    std::mem::replace(&mut slot.buffer, runebender_core::text::TextBuffer::new());
                 self.active_session = next;
                 let name = self.sessions[next].glyph_name.clone();
                 match self
@@ -5161,30 +5009,6 @@ impl Workspace {
             }
             std::cmp::Ordering::Greater => {}
         }
-    }
-
-    /// The tab strip's "+": a fresh session on the current glyph.
-    fn command_new_session(&mut self) {
-        let glyph = match self.mode {
-            Mode::Editor(i) => Some(i),
-            Mode::Grid => self.last_editor.or(self.selected),
-        };
-        let Some(glyph) = glyph else { return };
-        let Some(name) = self
-            .font()
-            .and_then(|f| f.glyphs.get(glyph))
-            .map(|g| g.name.to_string())
-        else {
-            return;
-        };
-        self.park_active_session();
-        self.sessions.push(EditSession {
-            glyph_name: name,
-            editor: EditorState::new(),
-            buffer: runebender_core::text::TextBuffer::new(),
-        });
-        self.active_session = self.sessions.len() - 1;
-        self.open_editor(glyph);
     }
 
     fn open_editor(&mut self, index: usize) {
@@ -5268,11 +5092,7 @@ impl Workspace {
         changed
     }
 
-    fn solve_grid(
-        viewport: gpui::Size<gpui::Pixels>,
-        target: f32,
-        pad: f32,
-    ) -> GridFit {
+    fn solve_grid(viewport: gpui::Size<gpui::Pixels>, target: f32, pad: f32) -> GridFit {
         let label_h = |w: f32| cell_label_metrics(w).height;
         let target = target.max(24.0);
         let vw: f32 = viewport.width.into();
@@ -5288,534 +5108,19 @@ impl Workspace {
             };
         }
         let usable_w = (vw - pad * 2.0).max(target);
-        let cols = (((usable_w + GRID_GAP) / (target + GRID_GAP)).floor()
-            as usize)
-            .max(1);
-        let cell_w =
-            ((usable_w - GRID_GAP * (cols - 1) as f32) / cols as f32).floor();
+        let cols = (((usable_w + GRID_GAP) / (target + GRID_GAP)).floor() as usize).max(1);
+        let cell_w = ((usable_w - GRID_GAP * (cols - 1) as f32) / cols as f32).floor();
 
         let target_row = cell_w + label_h(cell_w);
         let usable_h = (vh - pad.min(GRID_PAD_Y) * 2.0).max(target_row);
-        let rows = (((usable_h + GRID_GAP) / (target_row + GRID_GAP)).round()
-            as usize)
-            .max(1);
-        let cell_h =
-            ((usable_h - GRID_GAP * (rows - 1) as f32) / rows as f32).floor();
+        let rows = (((usable_h + GRID_GAP) / (target_row + GRID_GAP)).round() as usize).max(1);
+        let cell_h = ((usable_h - GRID_GAP * (rows - 1) as f32) / rows as f32).floor();
         GridFit {
             cell_w,
             cell_h,
             cols,
             rows,
         }
-    }
-
-    fn glyph_cell_sized(
-        &self,
-        index: usize,
-        cell: f32,
-        cell_h: f32,
-        jump_on_click: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let font = self.font().unwrap();
-        let entry = &font.glyphs[index];
-        let name = entry.name.clone();
-        let unicode_label: Option<SharedString> = entry
-            .codepoint
-            .map(|c| format!("U+{:04X}", c as u32).into());
-        let detail_info: Option<SharedString> = (self.font_view_mode
-            == FontViewMode::Detail
-            && !jump_on_click)
-            .then(|| {
-                let category = entry
-                    .codepoint
-                    .map(|c| {
-                        runebender_core::category::GlyphCategory::from_codepoint(c)
-                            .display_name()
-                    })
-                    .unwrap_or("Unencoded");
-                format!("{category} · {:.0}", entry.advance).into()
-            });
-        let selected = if jump_on_click {
-            matches!(self.mode, Mode::Editor(i) if i == index)
-        } else {
-            self.selected == Some(index)
-                || self.multi_selected.contains(name.as_ref())
-        };
-        let labels = cell_label_metrics(cell);
-        let (show_labels, label_px, label_h) =
-            (labels.show, labels.size, labels.height);
-        let incompatible = self
-            .project
-            .as_ref()
-            .and_then(|p| p.compat.get(entry.name.as_ref()))
-            .is_some_and(|ok| !ok);
-
-
-        let paint = t::mark_paint(entry.mark.as_deref());
-        let mark = paint.as_ref().map(|p| p.ink);
-        let _ = font;
-        div()
-            .id(index)
-            .w(px(cell))
-            .h(px(cell_h))
-            .flex()
-            .flex_col()
-            .bg(match (selected, paint.as_ref().and_then(|p| p.bg)) {
-                (true, _) => t::cell_selected_bg(),
-                (false, Some(fill)) => fill,
-                (false, None) => t::cell_bg(),
-            })
-            .border(t::stroke())
-            .border_color(if selected {
-                t::cell_selected_ring()
-            } else {
-                paint.as_ref().map(|p| p.border).unwrap_or_else(t::cell_border)
-            })
-            .rounded(t::radius_control())
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                // Notes are transient: picking a glyph clears them so
-                // the bottom bar's count shows again.
-                this.status_note = None;
-                if jump_on_click {
-                    this.open_editor(index);
-                } else {
-                    let modifiers = event.modifiers();
-                    if modifiers.platform {
-                        // Cmd-click toggles membership.
-                        this.grid_toggle_multi(index);
-                    } else if modifiers.shift {
-                        this.grid_extend_multi(index);
-                    } else {
-                        this.selected = Some(index);
-                        this.multi_selected.clear();
-                    }
-                    if event.click_count() >= 2 {
-                        this.open_editor(index);
-                    }
-                }
-                cx.notify();
-            }))
-            // The outline itself is painted by one canvas over the
-            // whole grid, not per cell: gpui ends its render pass at
-            // every run of paths, so a canvas per cell meant a pass
-            // switch per cell.
-            .child(div().flex_1())
-            .when(show_labels, |el| el.child(
-                // Same inset left, right and bottom, a little air above,
-                // and the two lines close together (the web's
-                // cell-labels box).
-                div()
-                    .h(px(label_h))
-                    .pl(px(8.0))
-                    .pr(px(8.0))
-                    .pb(px(8.0))
-                    .pt(px(4.0))
-                    .flex()
-                    .flex_col()
-                    .justify_end()
-                    .gap(px(2.0))
-                    .text_size(px(label_px))
-                    .line_height(px(labels.line))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .text_color(if selected {
-                                t::cell_selected_ring()
-                            } else {
-                                mark.unwrap_or_else(t::text)
-                            })
-                            .when(incompatible, |el| {
-                                el.child(
-                                    div()
-                                        .w(px(6.0))
-                                        .h(px(6.0))
-                                        .rounded_full()
-                                        .bg(t::anchor()),
-                                )
-                            })
-                            .child(name),
-                    )
-                    .when(labels.height >= 40.0, |el| {
-                        el.child(
-                            div()
-                                .text_color(if selected {
-                                    t::cell_selected_ring()
-                                } else {
-                                    mark.unwrap_or_else(t::text_muted)
-                                })
-                                .child(unicode_label.unwrap_or_else(|| "".into())),
-                        )
-                    })
-                    // Detail mode's extra line: category and advance,
-                    // the Glyphs 4 detail-grid info.
-                    .when(detail_info.is_some(), |el| {
-                        el.child(
-                            div()
-                                .text_color(t::text_muted())
-                                .child(detail_info.clone().unwrap_or_default()),
-                        )
-                    }),
-            ))
-    }
-
-    /// The List view: one row per glyph, one column per property —
-    /// the Glyphs table. Click selects (cmd toggles, shift extends),
-    /// double-click opens the editor; values are the active
-    /// master's, edited through the Glyph panel, which already
-    /// batch-edits a multi-selection.
-    fn glyph_list_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let Some(font) = self.font() else {
-            return div().into_any_element();
-        };
-        let order = self.glyph_order();
-        const W_UNI: f32 = 68.0;
-        const W_NUM: f32 = 52.0;
-        const W_GROUP: f32 = 84.0;
-        const W_CAT: f32 = 92.0;
-        let head = |label: &'static str, w: f32| {
-            div()
-                .w(px(w))
-                .flex_shrink_0()
-                .text_xs()
-                .text_color(t::text_muted())
-                .child(label)
-        };
-        let mut list = div()
-            .flex_1()
-            .min_h(px(0.0))
-            .flex()
-            .flex_col()
-            .px_2()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(t::panel_outline())
-                    .child(div().w(px(14.0)).flex_shrink_0())
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(80.0))
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child("Name"),
-                    )
-                    .child(head("Unicode", W_UNI))
-                    .child(head("Width", W_NUM))
-                    .child(head("LSB", W_NUM))
-                    .child(head("RSB", W_NUM))
-                    .child(head("Group L", W_GROUP))
-                    .child(head("Group R", W_GROUP))
-                    .child(head("Category", W_CAT)),
-            );
-        let mut rows = div()
-            .id("glyph-list")
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col();
-        for &index in order.iter() {
-            let entry = &font.glyphs[index];
-            let name = entry.name.clone();
-            let selected = self.selected == Some(index)
-                || self.multi_selected.contains(name.as_ref());
-            let mark = t::mark_paint(entry.mark.as_deref()).map(|p| p.ink);
-            let ink = font.ink_bounds(index);
-            let (lsb, rsb) = match ink {
-                Some(r) => (
-                    format!("{:.0}", r.x0),
-                    format!("{:.0}", entry.advance - r.x1),
-                ),
-                None => (String::new(), String::new()),
-            };
-            let group = |left: bool| {
-                runebender_core::glyph_ops::kern_group(
-                    &font.font,
-                    name.as_ref(),
-                    left,
-                )
-                .map(|g| {
-                    g.as_str()
-                        .replace("public.kern1.", "")
-                        .replace("public.kern2.", "")
-                })
-                .unwrap_or_default()
-            };
-            let category = entry
-                .codepoint
-                .map(|c| {
-                    runebender_core::category::GlyphCategory::from_codepoint(c)
-                        .display_name()
-                        .to_string()
-                })
-                .unwrap_or_else(|| "Unencoded".into());
-            let text_color = if selected { t::text() } else { t::text_muted() };
-            let cell = |value: String, w: f32| {
-                div()
-                    .w(px(w))
-                    .flex_shrink_0()
-                    .text_xs()
-                    .text_color(text_color)
-                    .overflow_hidden()
-                    .child(value)
-            };
-            rows = rows.child(
-                div()
-                    .id(("glyph-row", index))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .h(px(24.0))
-                    .px_0p5()
-                    .rounded(t::radius())
-                    .when(selected, |el| el.bg(t::cell_selected_bg()))
-                    .cursor_pointer()
-                    .on_click(cx.listener(
-                        move |this, event: &gpui::ClickEvent, _, cx| {
-                            this.status_note = None;
-                            let modifiers = event.modifiers();
-                            if modifiers.platform {
-                                this.grid_toggle_multi(index);
-                            } else if modifiers.shift {
-                                this.grid_extend_multi(index);
-                            } else {
-                                this.selected = Some(index);
-                                this.multi_selected.clear();
-                            }
-                            if event.click_count() >= 2 {
-                                this.open_editor(index);
-                            }
-                            cx.notify();
-                        },
-                    ))
-                    .child(
-                        div()
-                            .w(px(14.0))
-                            .flex_shrink_0()
-                            .child(div().w(px(9.0)).h(px(9.0)).rounded_full().bg(
-                                mark.unwrap_or(gpui::Rgba {
-                                    r: 0.0,
-                                    g: 0.0,
-                                    b: 0.0,
-                                    a: 0.0,
-                                }),
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(80.0))
-                            .text_sm()
-                            .text_color(if selected {
-                                t::accent()
-                            } else {
-                                t::text()
-                            })
-                            .overflow_hidden()
-                            .child(name.clone()),
-                    )
-                    .child(cell(
-                        entry
-                            .codepoint
-                            .map(|c| format!("U+{:04X}", c as u32))
-                            .unwrap_or_default(),
-                        W_UNI,
-                    ))
-                    .child(cell(format!("{:.0}", entry.advance), W_NUM))
-                    .child(cell(lsb, W_NUM))
-                    .child(cell(rsb, W_NUM))
-                    .child(cell(group(true), W_GROUP))
-                    .child(cell(group(false), W_GROUP))
-                    .child(cell(category, W_CAT)),
-            );
-        }
-        list.child(rows).into_any_element()
-    }
-
-    /// The positional-forms matrix (Counterpunch's Matrix Mode, the
-    /// Arabic review surface): one row per base letter that carries
-    /// positional variants, isol/init/medi/fina as columns, each a
-    /// live thumbnail. Click a form to open it; a dash marks a
-    /// missing form.
-    fn glyph_matrix_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let Some(font) = self.font() else {
-            return div().into_any_element();
-        };
-        // Families: base name → indices of [isol, init, medi, fina].
-        let mut families: std::collections::BTreeMap<String, [Option<usize>; 4]> =
-            std::collections::BTreeMap::new();
-        for (i, entry) in font.glyphs.iter().enumerate() {
-            let name = entry.name.as_ref();
-            let (base, slot) = if let Some(b) = name.strip_suffix(".init") {
-                (b, 1)
-            } else if let Some(b) = name.strip_suffix(".medi") {
-                (b, 2)
-            } else if let Some(b) = name.strip_suffix(".fina") {
-                (b, 3)
-            } else {
-                (name, 0)
-            };
-            let family = families.entry(base.to_string()).or_default();
-            family[slot] = Some(i);
-        }
-        families.retain(|_, forms| forms[1..].iter().any(Option::is_some));
-        if families.is_empty() {
-            return div()
-                .p_4()
-                .text_sm()
-                .text_color(t::text_muted())
-                .child("No positional forms (.init/.medi/.fina) in this font")
-                .into_any_element();
-        }
-        const THUMB: f32 = 56.0;
-        let header = |label: &'static str| {
-            div()
-                .w(px(THUMB))
-                .flex_shrink_0()
-                .text_xs()
-                .text_color(t::text_muted())
-                .child(label)
-        };
-        let mut rows = div()
-            .id("glyph-matrix")
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .px_2();
-        rows = rows.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .py_1()
-                .border_b_1()
-                .border_color(t::panel_outline())
-                .child(
-                    div()
-                        .w(px(140.0))
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child("Base"),
-                )
-                // RTL reading order: isolated at the right end would
-                // be truer, but columns read left-to-right here with
-                // the joining flow explicit in the labels.
-                .child(header("isol"))
-                .child(header("init"))
-                .child(header("medi"))
-                .child(header("fina")),
-        );
-        for (base, forms) in &families {
-            let mut row = div().flex().items_center().gap_2().py_0p5().child(
-                div()
-                    .w(px(140.0))
-                    .flex_shrink_0()
-                    .text_sm()
-                    .text_color(t::text())
-                    .overflow_hidden()
-                    .child(base.clone()),
-            );
-            for (slot, form) in forms.iter().enumerate() {
-                row = row.child(match *form {
-                    Some(index) => {
-                        let entry = &font.glyphs[index];
-                        let (path, advance, asc, desc) = (
-                            entry.path.clone(),
-                            entry.advance,
-                            font.ascender,
-                            font.descender,
-                        );
-                        let selected = self.selected == Some(index);
-                        div()
-                            .id(("matrix-cell", index * 4 + slot))
-                            .w(px(THUMB))
-                            .h(px(THUMB))
-                            .flex_shrink_0()
-                            .rounded(t::radius())
-                            .border(t::stroke())
-                            .border_color(if selected {
-                                t::cell_selected_ring()
-                            } else {
-                                t::cell_border()
-                            })
-                            .cursor_pointer()
-                            .on_click(cx.listener(
-                                move |this, ev: &gpui::ClickEvent, _, cx| {
-                                    this.selected = Some(index);
-                                    this.multi_selected.clear();
-                                    if ev.click_count() >= 2 {
-                                        this.open_editor(index);
-                                    }
-                                    cx.notify();
-                                },
-                            ))
-                            .child(
-                                canvas(
-                                    move |bounds, _, _| bounds,
-                                    move |_,
-                                          bounds: Bounds<gpui::Pixels>,
-                                          window,
-                                          _| {
-                                        let h: f32 =
-                                            bounds.size.height.into();
-                                        let w: f32 = bounds.size.width.into();
-                                        let em = (asc - desc).max(1.0);
-                                        let scale = (h as f64 / em)
-                                            .min(w as f64 / advance.max(1.0));
-                                        let ox = (w as f64 - advance * scale)
-                                            / 2.0;
-                                        let baseline =
-                                            h as f64 + desc * scale;
-                                        let view = Affine::translate((
-                                            ox, baseline,
-                                        ))
-                                            * Affine::scale_non_uniform(
-                                                scale, -scale,
-                                            );
-                                        if let Some(p) = build_fill_path(
-                                            &path,
-                                            view,
-                                            bounds.origin,
-                                        ) {
-                                            window
-                                                .paint_path(p, t::glyph_fill());
-                                        }
-                                    },
-                                )
-                                .size_full(),
-                            )
-                            .into_any_element()
-                    }
-                    None => div()
-                        .w(px(THUMB))
-                        .h(px(THUMB))
-                        .flex_shrink_0()
-                        .rounded(t::radius())
-                        .border(t::stroke())
-                        .border_color(t::panel_outline())
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(t::text_muted())
-                        .child("–")
-                        .into_any_element(),
-                });
-            }
-            rows = rows.child(row);
-        }
-        rows.into_any_element()
     }
 
     /// Left sidebar tile: search plus the category filter list,
@@ -5848,39 +5153,29 @@ impl Workspace {
                     return false;
                 };
                 match parse_search_predicates(query) {
-                    Some(preds) => {
-                        Self::glyph_matches_preds(font, name, codepoint, &preds)
-                    }
+                    Some(preds) => Self::glyph_matches_preds(font, name, codepoint, &preds),
                     None => name.contains(query.trim()),
                 }
             }
             SidebarFilter::Category(c) => category == *c,
             SidebarFilter::Subfilter(c, sub) => {
                 category == *c
-                    && sb::glyph_matches_subfilter(
-                        name,
-                        &Self::glyph_codepoints(font, name),
-                        sub,
-                    )
+                    && sb::glyph_matches_subfilter(name, &Self::glyph_codepoints(font, name), sub)
             }
-            SidebarFilter::LanguageGroup(gi) => sb::language_groups()
-                .get(*gi)
-                .is_some_and(|group| {
+            SidebarFilter::LanguageGroup(gi) => {
+                sb::language_groups().get(*gi).is_some_and(|group| {
                     sb::glyph_matches_language_group(
                         name,
                         &Self::glyph_codepoints(font, name),
                         group,
                     )
-                }),
+                })
+            }
             SidebarFilter::Language(gi, fi) => sb::language_groups()
                 .get(*gi)
                 .and_then(|group| group.filters.get(*fi))
                 .is_some_and(|f| {
-                    sb::glyph_matches_character_filter(
-                        name,
-                        &Self::glyph_codepoints(font, name),
-                        f,
-                    )
+                    sb::glyph_matches_character_filter(name, &Self::glyph_codepoints(font, name), f)
                 }),
             SidebarFilter::Builtin(bi) => {
                 let Some(builtin) = sb::builtin_filters().get(*bi) else {
@@ -5937,8 +5232,7 @@ impl Workspace {
                     glyphs
                         .iter()
                         .filter(|(_, cp, _)| {
-                            cp.map(GC::from_codepoint).unwrap_or(GC::Other)
-                                == *category
+                            cp.map(GC::from_codepoint).unwrap_or(GC::Other) == *category
                         })
                         .count()
                 }
@@ -5946,14 +5240,11 @@ impl Workspace {
             .collect();
         let mut subfilters = std::collections::HashMap::new();
         for (ci, (category, label)) in SIDEBAR_CATEGORIES.iter().enumerate() {
-            for (si, (sub, _)) in
-                sb::category_subfilters(label).iter().enumerate()
-            {
+            for (si, (sub, _)) in sb::category_subfilters(label).iter().enumerate() {
                 let count = glyphs
                     .iter()
                     .filter(|(name, cp, cps)| {
-                        cp.map(GC::from_codepoint).unwrap_or(GC::Other)
-                            == *category
+                        cp.map(GC::from_codepoint).unwrap_or(GC::Other) == *category
                             && sb::glyph_matches_subfilter(name, cps, sub)
                     })
                     .count();
@@ -5971,9 +5262,7 @@ impl Workspace {
             groups.push(
                 glyphs
                     .iter()
-                    .filter(|(name, _, cps)| {
-                        sb::glyph_matches_language_group(name, cps, group)
-                    })
+                    .filter(|(name, _, cps)| sb::glyph_matches_language_group(name, cps, group))
                     .count(),
             );
             languages.push(
@@ -5984,9 +5273,7 @@ impl Workspace {
                         glyphs
                             .iter()
                             .filter(|(name, _, cps)| {
-                                sb::glyph_matches_character_filter(
-                                    name, cps, filter,
-                                )
+                                sb::glyph_matches_character_filter(name, cps, filter)
                             })
                             .count()
                     })
@@ -5996,9 +5283,7 @@ impl Workspace {
                 group
                     .filters
                     .iter()
-                    .map(|filter| {
-                        sb::missing_targets(&name_cps, filter).len()
-                    })
+                    .map(|filter| sb::missing_targets(&name_cps, filter).len())
                     .collect(),
             );
         }
@@ -6007,9 +5292,7 @@ impl Workspace {
             .map(|builtin| match &builtin.glyphset {
                 Some(set) => glyphs
                     .iter()
-                    .filter(|(name, _, cps)| {
-                        sb::glyph_matches_character_filter(name, cps, set)
-                    })
+                    .filter(|(name, _, cps)| sb::glyph_matches_character_filter(name, cps, set))
                     .count(),
                 None => match builtin.id.as_str() {
                     "incompatible" => self
@@ -6031,9 +5314,7 @@ impl Workspace {
                         glyphs
                             .iter()
                             .filter(|(name, cp, _)| match &preds {
-                                Some(preds) => Self::glyph_matches_preds(
-                                    font, name, *cp, preds,
-                                ),
+                                Some(preds) => Self::glyph_matches_preds(font, name, *cp, preds),
                                 None => name.contains(query.trim()),
                             })
                             .count()
@@ -6069,94 +5350,18 @@ impl Workspace {
             .glyphs
             .iter()
             .filter(|entry| {
-                self.glyph_passes_filter(
-                    font,
-                    entry.name.as_ref(),
-                    entry.codepoint,
-                    &filter,
-                )
+                self.glyph_passes_filter(font, entry.name.as_ref(), entry.codepoint, &filter)
             })
             .map(|entry| entry.name.to_string())
             .collect();
         self.sidebar_matches = Some(matches);
     }
 
-    /// File → New Font: an Untitled GF-template UFO, in memory until
-    /// Save As picks a destination.
-    fn command_new_font(&mut self) {
-        // No std::env::temp_dir here: it panics on wasm. The path is
-        // provisional either way — Save As replaces it.
-        #[cfg(target_family = "wasm")]
-        let path = PathBuf::from("Untitled.ufo");
-        #[cfg(not(target_family = "wasm"))]
-        let path = std::env::temp_dir().join("Untitled.ufo");
-        self.axis_sliders.clear();
-        self.sessions.clear();
-        self.active_session = 0;
-        self.project = Some(Project::new_font(path));
-        self.mode = Mode::Grid;
-        self.selected = None;
-        self.multi_selected.clear();
-        self.last_editor = None;
-        self.sidebar_counts = None;
-        self.sidebar_matches = None;
-        self.sidebar_filter = SidebarFilter::All;
-        self.search_query.clear();
-        self.rebuild_text_models();
-        self.status_note = Some(
-            "New font · Save As… picks where it lives on disk".into(),
-        );
-    }
-
-    /// Save As: pick a directory; the active master saves there under
-    /// its family-style name and keeps saving there from now on.
-    fn command_save_as(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Save In".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else {
-                return;
-            };
-            let Some(dir) = paths.into_iter().next() else {
-                return;
-            };
-            this.update(cx, |workspace, cx| {
-                if let Some(project) = workspace.project.as_mut() {
-                    for master in project.masters.iter_mut() {
-                        let family = master
-                            .font
-                            .font_info
-                            .family_name
-                            .clone()
-                            .unwrap_or_else(|| "Untitled".into())
-                            .replace(' ', "");
-                        let style = master
-                            .font
-                            .font_info
-                            .style_name
-                            .clone()
-                            .unwrap_or_else(|| "Regular".into())
-                            .replace(' ', "");
-                        master.source_path =
-                            dir.join(format!("{family}-{style}.ufo"));
-                        master.dirty = true;
-                    }
-                }
-                workspace.command_save(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     /// The grid's visible order (same filter + sort the grid draws).
     fn visible_grid_indices(&self) -> Vec<usize> {
-        let Some(font) = self.font() else { return Vec::new() };
+        let Some(font) = self.font() else {
+            return Vec::new();
+        };
         let mut indices: Vec<usize> = (0..font.glyphs.len())
             .filter(|&i| {
                 let entry = &font.glyphs[i];
@@ -6174,14 +5379,11 @@ impl Workspace {
 
     /// Cmd-click: toggle a glyph in the multi-selection.
     fn grid_toggle_multi(&mut self, index: usize) {
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string()) else {
             return;
         };
         if let Some(primary) = self.selected {
-            if let Some(primary_name) =
-                self.font().map(|f| f.glyphs[primary].name.to_string())
-            {
+            if let Some(primary_name) = self.font().map(|f| f.glyphs[primary].name.to_string()) {
                 self.multi_selected.insert(primary_name);
             }
         }
@@ -6220,7 +5422,9 @@ impl Workspace {
 
     /// Every selected glyph name (primary plus multi), in font order.
     fn selection_names(&self) -> Vec<String> {
-        let Some(font) = self.font() else { return Vec::new() };
+        let Some(font) = self.font() else {
+            return Vec::new();
+        };
         let mut names: Vec<String> = font
             .glyphs
             .iter()
@@ -6234,32 +5438,6 @@ impl Workspace {
             .collect();
         names.dedup();
         names
-    }
-
-    /// Copy the selection as text (the glyphs' characters), the web
-    /// sidebar footer's action.
-    fn command_copy_selection_text(&mut self, cx: &mut Context<Self>) {
-        let Some(font) = self.font() else { return };
-        let text: String = self
-            .selection_names()
-            .iter()
-            .filter_map(|name| {
-                font.name_map
-                    .get(name)
-                    .and_then(|&i| font.glyphs[i].codepoint)
-            })
-            .collect();
-        if text.is_empty() {
-            self.status_note = Some("Nothing encoded to copy".into());
-            return;
-        }
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
-        self.status_note = Some(
-            format!("Copied {} character{}", text.chars().count(), {
-                if text.chars().count() == 1 { "" } else { "s" }
-            })
-            .into(),
-        );
     }
 
     /// Does a glyph match the sidebar search, honoring scope, regex,
@@ -6277,35 +5455,33 @@ impl Workspace {
         };
         let entry = &font.glyphs[index];
         preds.iter().all(|pred| match pred {
-                SearchPred::Width(order, value) => {
-                    let diff = entry.advance - value;
-                    match order {
-                        std::cmp::Ordering::Greater => diff > 0.5,
-                        std::cmp::Ordering::Less => diff < -0.5,
-                        std::cmp::Ordering::Equal => diff.abs() <= 0.5,
-                    }
+            SearchPred::Width(order, value) => {
+                let diff = entry.advance - value;
+                match order {
+                    std::cmp::Ordering::Greater => diff > 0.5,
+                    std::cmp::Ordering::Less => diff < -0.5,
+                    std::cmp::Ordering::Equal => diff.abs() <= 0.5,
                 }
-                SearchPred::Category(want) => codepoint
-                    .map(|c| {
-                        runebender_core::category::GlyphCategory::from_codepoint(c)
-                            .display_name()
-                            .to_lowercase()
-                            .starts_with(want.as_str())
-                    })
-                    .unwrap_or(want == "unencoded"),
-                SearchPred::MarkLabel(want) => match entry.mark.as_deref() {
-                    Some(label) => label.to_lowercase() == *want,
-                    None => want == "none",
-                },
-                SearchPred::Encoded(want) => codepoint.is_some() == *want,
-                SearchPred::UsesComponent(base) => font
-                    .font
-                    .get_glyph(name)
-                    .is_some_and(|g| {
-                        g.components.iter().any(|c| c.base.as_str() == base)
-                    }),
-                SearchPred::Has(what) => font
-                    .font
+            }
+            SearchPred::Category(want) => codepoint
+                .map(|c| {
+                    runebender_core::category::GlyphCategory::from_codepoint(c)
+                        .display_name()
+                        .to_lowercase()
+                        .starts_with(want.as_str())
+                })
+                .unwrap_or(want == "unencoded"),
+            SearchPred::MarkLabel(want) => match entry.mark.as_deref() {
+                Some(label) => label.to_lowercase() == *want,
+                None => want == "none",
+            },
+            SearchPred::Encoded(want) => codepoint.is_some() == *want,
+            SearchPred::UsesComponent(base) => font
+                .font
+                .get_glyph(name)
+                .is_some_and(|g| g.components.iter().any(|c| c.base.as_str() == base)),
+            SearchPred::Has(what) => {
+                font.font
                     .get_glyph(name)
                     .is_some_and(|g| match what.as_str() {
                         "contours" => !g.contours.is_empty(),
@@ -6313,8 +5489,9 @@ impl Workspace {
                         "anchors" => !g.anchors.is_empty(),
                         "note" => g.note.is_some(),
                         _ => false,
-                    }),
-            })
+                    })
+            }
+        })
     }
 
     fn search_matches(&self, name: &str, codepoint: Option<char>) -> bool {
@@ -6348,9 +5525,7 @@ impl Workspace {
                 [name, hex.as_str(), chars.as_str()]
             }
         };
-        let any = |f: &dyn Fn(&str) -> bool| {
-            haystacks.iter().any(|h| !h.is_empty() && f(h))
-        };
+        let any = |f: &dyn Fn(&str) -> bool| haystacks.iter().any(|h| !h.is_empty() && f(h));
         if self.search_regex {
             // Compiled once when the query changed, not per glyph: a
             // font-wide filter used to build 862 regexes a frame.
@@ -6395,18 +5570,13 @@ impl Workspace {
                         matches
                             .as_ref()
                             .is_none_or(|m| m.contains(entry.name.as_ref()))
-                            && self.search_matches(
-                                entry.name.as_ref(),
-                                entry.codepoint,
-                            )
+                            && self.search_matches(entry.name.as_ref(), entry.codepoint)
                     })
                     .collect();
                 if !self.sort_unicode {
                     // Font order is already unicode order, so the Name
                     // toggle sorts alphabetically.
-                    indices.sort_by(|a, b| {
-                        font.glyphs[*a].name.cmp(&font.glyphs[*b].name)
-                    });
+                    indices.sort_by(|a, b| font.glyphs[*a].name.cmp(&font.glyphs[*b].name));
                 }
                 indices
             }
@@ -6416,110 +5586,6 @@ impl Workspace {
         self.glyph_order = Some(order.clone());
         self.order_key = Some(key);
         order
-    }
-
-    /// One canvas for every glyph in a grid, batched by colour. The
-    /// cells themselves are plain divs: gpui breaks its render pass at
-    /// each run of paths, so a canvas per cell cost a pass per cell.
-    ///
-    /// `rows` is the packed rows that are on screen. Where each cell
-    /// lands is worked out in the paint closure, against the bounds
-    /// the overlay was actually given, so the outlines follow the
-    /// cells through a resize instead of trailing the probe.
-    fn glyph_overlay(
-        &self,
-        rows: Vec<Vec<(usize, usize)>>,
-        fit: GridFit,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
-        let _ = cx;
-        let font = self.font()?;
-        let upm = font.units_per_em;
-        // Everything the paint closure needs about a glyph, pulled out
-        // here because it cannot borrow the font.
-        let mut ink: std::collections::HashMap<
-            usize,
-            (Arc<BezPath>, kurbo::Rect, f64, gpui::Rgba),
-        > = std::collections::HashMap::new();
-        for &(glyph, _) in rows.iter().flatten() {
-            let Some(entry) = font.glyphs.get(glyph) else {
-                continue;
-            };
-            if entry.path.elements().is_empty() {
-                continue;
-            }
-            let selected = self.selected == Some(glyph)
-                || self.multi_selected.contains(entry.name.as_ref());
-            let color = if selected {
-                t::cell_selected_ring()
-            } else {
-                t::mark_paint(entry.mark.as_deref())
-                    .map(|p| p.ink)
-                    .unwrap_or_else(t::glyph_fill)
-            };
-            ink.insert(
-                glyph,
-                (entry.path.clone(), entry.ink, entry.advance, color),
-            );
-        }
-        if ink.is_empty() {
-            return None;
-        }
-        Some(
-            canvas(
-                move |bounds, _, _| bounds,
-                move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                    // One path per ink colour, so the whole grid is a
-                    // handful of draws however many cells are on screen.
-                    let mut batches: std::collections::BTreeMap<
-                        u32,
-                        (gpui::Rgba, Vec<BezPath>),
-                    > = std::collections::BTreeMap::new();
-                    for cell in place_cells(&rows, fit, bounds.size, 0) {
-                        let Some((path, bbox, advance, color)) = ink.get(&cell.glyph)
-                        else {
-                            continue;
-                        };
-                        // The cell sizes its own label block from its
-                        // own width, so a cell spanning two columns
-                        // gets a taller one: ask the same question.
-                        let label_h = cell_label_metrics(cell.w).height;
-                        let transform = cell_glyph_transform(
-                            *bbox,
-                            false,
-                            *advance,
-                            upm,
-                            cell.w as f64,
-                            (cell.h - label_h) as f64,
-                        );
-                        let place =
-                            Affine::translate((cell.x as f64, cell.y as f64)) * transform;
-                        let key = u32::from_be_bytes([
-                            (color.r * 255.0) as u8,
-                            (color.g * 255.0) as u8,
-                            (color.b * 255.0) as u8,
-                            (color.a * 255.0) as u8,
-                        ]);
-                        batches
-                            .entry(key)
-                            .or_insert_with(|| (*color, Vec::new()))
-                            .1
-                            .push(place * path.as_ref().clone());
-                    }
-                    for (color, paths) in batches.values() {
-                        paint_batched(window, bounds.origin, *color, paths, None);
-                    }
-                },
-            )
-            // An absolute element with no inset lands at its static
-            // position, which for the last child of a column is below
-            // everything before it: without this the whole grid was
-            // painted a viewport lower and clipped away.
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full(),
-        )
     }
 
     /// The cached order, for the panels that only hold `&self`.
@@ -6543,68 +5609,6 @@ impl Workspace {
             format!("(?i){query}")
         };
         self.search_re = regex::Regex::new(&pattern).ok();
-    }
-
-    /// Add every glyph a target-bearing language filter still misses
-    /// (web generateMissing): empty glyphs named and encoded from the
-    /// filter's targets, in every master.
-    fn command_generate_missing(&mut self, group: usize, filter_index: usize) {
-        use runebender_core::sidebar as sb;
-        let Some(filter) = sb::language_groups()
-            .get(group)
-            .and_then(|g| g.filters.get(filter_index))
-        else {
-            return;
-        };
-        let existing: Vec<(String, Vec<u32>)> = self
-            .font()
-            .map(|f| {
-                f.glyphs
-                    .iter()
-                    .map(|entry| {
-                        (
-                            entry.name.to_string(),
-                            Self::glyph_codepoints(f, entry.name.as_ref()),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let targets: Vec<(String, u32)> = sb::missing_targets(&existing, filter)
-            .into_iter()
-            .map(|t| (t.name.clone(), t.unicode))
-            .collect();
-        if targets.is_empty() {
-            return;
-        }
-        let Some(project) = self.project.as_mut() else { return };
-        let upm = project.active_font().units_per_em;
-        let mut added = 0usize;
-        for master in project.masters.iter_mut() {
-            for (name, unicode) in &targets {
-                if master.name_map.contains_key(name) {
-                    continue;
-                }
-                let mut glyph = norad::Glyph::new(name.as_str());
-                glyph.width = (upm * 0.5).round();
-                if let Some(c) = char::from_u32(*unicode) {
-                    glyph.codepoints = norad::Codepoints::new([c]);
-                }
-                master.font.default_layer_mut().insert_glyph(glyph);
-                master.dirty = true;
-                master.modified_glyphs.insert(name.clone());
-            }
-            master.refresh_from_font();
-        }
-        added += targets.len();
-        self.sidebar_counts = None;
-        self.status_note = Some(
-            format!(
-                "Added {added} missing glyph{}",
-                if added == 1 { "" } else { "s" }
-            )
-            .into(),
-        );
     }
 
     /// Pin the current search query as a saved filter in the font lib.
@@ -6667,9 +5671,7 @@ impl Workspace {
                 let h: f32 = bounds.size.height.into();
                 let (cx_, cy) = (w / 2.0, h / 2.0);
                 let mut path = gpui::PathBuilder::fill();
-                let pt = |dx: f32, dy: f32| {
-                    gpui::point(o.x + px(cx_ + dx), o.y + px(cy + dy))
-                };
+                let pt = |dx: f32, dy: f32| gpui::point(o.x + px(cx_ + dx), o.y + px(cy + dy));
                 if expanded {
                     path.move_to(pt(-3.5, -1.5));
                     path.line_to(pt(3.5, -1.5));
@@ -6718,7 +5720,9 @@ impl Workspace {
             .items_center()
             .gap_1()
             .when(active, |el| {
-                el.border(t::stroke()).border_color(t::accent()).text_color(t::accent())
+                el.border(t::stroke())
+                    .border_color(t::accent())
+                    .text_color(t::accent())
             })
             .when(!active, |el| el.text_color(t::text()))
             .when_some(chevron, |el, expanded| {
@@ -6728,11 +5732,7 @@ impl Workspace {
                 el.child(
                     div()
                         .w(px(16.0))
-                        .text_color(if active {
-                            t::accent()
-                        } else {
-                            t::text_muted()
-                        })
+                        .text_color(if active { t::accent() } else { t::text_muted() })
                         .child(icon),
                 )
             })
@@ -6773,897 +5773,14 @@ impl Workspace {
                 el.border_color(t::accent()).text_color(t::accent())
             })
             .when(!active, |el| {
-                el.border_color(t::cell_border()).text_color(t::text_muted())
+                el.border_color(t::cell_border())
+                    .text_color(t::text_muted())
             })
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| {
                 on(this);
                 cx.notify();
             }))
-    }
-
-    fn category_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        use runebender_core::sidebar as sb;
-        let counts = self.sidebar_counts.as_ref();
-
-        // Categories: expandable rows with the web's subfilters.
-        let mut categories = div().flex().flex_col();
-        for (ci, (category, label)) in SIDEBAR_CATEGORIES.iter().enumerate() {
-            let subs = sb::category_subfilters(label);
-            let count = counts.map(|c| c.categories[ci]).unwrap_or(0);
-            let expanded = self.expanded_categories.contains(&ci);
-            let mut row = self
-                .sidebar_row(
-                    ("category", ci),
-                    false,
-                    (!subs.is_empty()).then_some(expanded),
-                    None,
-                    SharedString::from(*label),
-                    format!("{count}").into(),
-                    if ci == 0 {
-                        SidebarFilter::All
-                    } else {
-                        SidebarFilter::Category(*category)
-                    },
-                    cx,
-                )
-                .into_any_element();
-            if !subs.is_empty() {
-                // A separate click target for the chevron would fight
-                // the row click; double-purpose: clicking an already
-                // selected row toggles expansion instead.
-                let category = *category;
-                let selected = self.sidebar_filter
-                    == SidebarFilter::Category(category)
-                    || subs.iter().any(|(sub, _)| {
-                        self.sidebar_filter
-                            == SidebarFilter::Subfilter(category, sub)
-                    });
-                row = self
-                    .sidebar_row(
-                        ("category", ci),
-                        false,
-                        Some(expanded),
-                        None,
-                        SharedString::from(*label),
-                        format!("{count}").into(),
-                        SidebarFilter::Category(category),
-                        cx,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if selected {
-                            if !this.expanded_categories.remove(&ci) {
-                                this.expanded_categories.insert(ci);
-                            }
-                        }
-                        this.set_sidebar_filter(SidebarFilter::Category(
-                            category,
-                        ));
-                        cx.notify();
-                    }))
-                    .into_any_element();
-            }
-            categories = categories.child(row);
-            if expanded {
-                for (si, (sub, sub_label)) in subs.iter().enumerate() {
-                    let count = counts
-                        .and_then(|c| c.subfilters.get(&(ci, si)).copied())
-                        .unwrap_or(0);
-                    categories = categories.child(self.sidebar_row(
-                        ("subfilter", ci * 100 + si),
-                        true,
-                        None,
-                        None,
-                        SharedString::from(*sub_label),
-                        format!("{count}").into(),
-                        SidebarFilter::Subfilter(*category, sub),
-                        cx,
-                    ));
-                }
-            }
-        }
-
-        // Languages: script groups with per-set coverage, like the
-        // web sidebar and Glyphs.
-        let mut languages = div().flex().flex_col();
-        for (gi, group) in sb::language_groups().iter().enumerate() {
-            let count = counts.map(|c| c.groups[gi]).unwrap_or(0);
-            let expanded = self.expanded_scripts.contains(&gi);
-            let selected = self.sidebar_filter
-                == SidebarFilter::LanguageGroup(gi)
-                || (0..group.filters.len()).any(|fi| {
-                    self.sidebar_filter == SidebarFilter::Language(gi, fi)
-                });
-            languages = languages.child(
-                self.sidebar_row(
-                    ("script", gi),
-                    false,
-                    Some(expanded),
-                    Some(group.icon.clone().into()),
-                    group.label.clone().into(),
-                    format!("{count}").into(),
-                    SidebarFilter::LanguageGroup(gi),
-                    cx,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if selected {
-                        if !this.expanded_scripts.remove(&gi) {
-                            this.expanded_scripts.insert(gi);
-                        }
-                    } else {
-                        this.expanded_scripts.insert(gi);
-                    }
-                    this.set_sidebar_filter(SidebarFilter::LanguageGroup(gi));
-                    cx.notify();
-                })),
-            );
-            if expanded {
-                for (fi, filter) in group.filters.iter().enumerate() {
-                    let count = counts
-                        .map(|c| c.languages[gi][fi])
-                        .unwrap_or(0);
-                    let missing = counts
-                        .map(|c| c.missing[gi][fi])
-                        .unwrap_or(0);
-                    let count_text = match filter.expected_count {
-                        Some(expected) => format!("{count}/{expected}"),
-                        None => format!("{count}"),
-                    };
-                    let row = self.sidebar_row(
-                        ("language", gi * 100 + fi),
-                        true,
-                        None,
-                        None,
-                        filter.label.clone().into(),
-                        count_text.into(),
-                        SidebarFilter::Language(gi, fi),
-                        cx,
-                    );
-                    if missing > 0 {
-                        // "+" generates the filter's missing glyphs.
-                        languages = languages.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(div().flex_1().child(row))
-                                .child(
-                                    div()
-                                        .id(("gen-missing", gi * 100 + fi))
-                                        .w(px(18.0))
-                                        .h(px(18.0))
-                                        .rounded(t::radius())
-                                        .border(t::stroke())
-                                        .border_color(t::cell_border())
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_sm()
-                                        .text_color(t::text_muted())
-                                        .cursor_pointer()
-                                        .child("+")
-                                        .on_click(cx.listener(
-                                            move |this, _, _, cx| {
-                                                this.command_generate_missing(
-                                                    gi, fi,
-                                                );
-                                                cx.notify();
-                                            },
-                                        )),
-                                ),
-                        );
-                    } else {
-                        languages = languages.child(row);
-                    }
-                }
-            }
-        }
-
-        // Filters: the Runebender builtins plus headline GF sets.
-        let mut filters = div().flex().flex_col();
-        for (bi, builtin) in sb::builtin_filters().iter().enumerate() {
-            let count = counts.map(|c| c.builtins[bi]).unwrap_or(0);
-            let count_text = match builtin
-                .glyphset
-                .as_ref()
-                .and_then(|set| set.expected_count)
-            {
-                Some(expected) => format!("{count}/{expected}"),
-                None => format!("{count}"),
-            };
-            filters = filters.child(self.sidebar_row(
-                ("builtin", bi),
-                false,
-                None,
-                None,
-                builtin.label.clone().into(),
-                count_text.into(),
-                SidebarFilter::Builtin(bi),
-                cx,
-            ));
-        }
-        // Saved searches (Glyphs' smart filters): pinned queries from
-        // the search field, stored in the font lib.
-        let saved_defs = self
-            .font()
-            .map(|f| read_saved_filters(&f.font))
-            .unwrap_or_default();
-        for (si, (label, _)) in saved_defs.iter().enumerate() {
-            let count =
-                counts.and_then(|c| c.saved.get(si).copied()).unwrap_or(0);
-            let active = self.sidebar_filter == SidebarFilter::Saved(si);
-            filters = filters.child(
-                div()
-                    .id(("saved-filter", si))
-                    .group("saved-filter")
-                    .h(px(20.0))
-                    .px_2()
-                    .rounded(t::radius())
-                    .text_sm()
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .when(active, |el| {
-                        el.border(t::stroke())
-                            .border_color(t::accent())
-                            .text_color(t::accent())
-                    })
-                    .when(!active, |el| el.text_color(t::text()))
-                    .child(
-                        div()
-                            .w(px(16.0))
-                            .text_color(if active {
-                                t::accent()
-                            } else {
-                                t::text_muted()
-                            })
-                            .child("⌕"),
-                    )
-                    .child(div().flex_1().child(SharedString::from(
-                        label.clone(),
-                    )))
-                    .child(
-                        div()
-                            .id(("saved-filter-del", si))
-                            .text_color(t::text_muted())
-                            .invisible()
-                            .group_hover("saved-filter", |el| el.visible())
-                            .child("×")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.delete_saved_filter(si);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_color(if active {
-                                t::accent()
-                            } else {
-                                t::text_muted()
-                            })
-                            .child(SharedString::from(format!("{count}"))),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.set_sidebar_filter(SidebarFilter::Saved(si));
-                        cx.notify();
-                    })),
-            );
-        }
-        let pending_query = self.search_query.trim().to_string();
-        if !pending_query.is_empty()
-            && !saved_defs.iter().any(|(_, q)| *q == pending_query)
-        {
-            filters = filters.child(
-                div()
-                    .id("save-search-filter")
-                    .h(px(20.0))
-                    .px_2()
-                    .rounded(t::radius())
-                    .text_sm()
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_color(t::text_muted())
-                    .child(div().w(px(16.0)).child("+"))
-                    .child(div().flex_1().child(SharedString::from(format!(
-                        "Save \u{201c}{pending_query}\u{201d}"
-                    ))))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.save_current_search_as_filter();
-                        cx.notify();
-                    })),
-            );
-        }
-
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .p_2()
-                    .flex()
-                    .items_stretch()
-                    .gap_1()
-                    .border_b_1()
-                    .border_color(t::panel_outline())
-                    .child(div().flex_1().child(
-                        widgets::input::Input::new(&self.search),
-                    ))
-                    .child(self.search_toggle(
-                        "search-mode",
-                        match self.search_mode {
-                            1 => "N",
-                            2 => "U",
-                            _ => "A",
-                        },
-                        self.search_mode != 0,
-                        |this| this.search_mode = (this.search_mode + 1) % 3,
-                        cx,
-                    ))
-                    .child(self.search_toggle(
-                        "search-regex",
-                        ".*",
-                        self.search_regex,
-                        |this| {
-                            this.search_regex = !this.search_regex;
-                            this.rebuild_search_regex();
-                        },
-                        cx,
-                    ))
-                    .child(self.search_toggle(
-                        "search-case",
-                        "Aa",
-                        self.search_case,
-                        |this| {
-                            this.search_case = !this.search_case;
-                            this.rebuild_search_regex();
-                        },
-                        cx,
-                    )),
-            )
-            .child(
-                div()
-                    .id("sidebar-scroll")
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .child(self.section(cx, "Categories", categories))
-                    .child(self.section(cx, "Languages", languages))
-                    .child(self.section(cx, "Filters", filters)),
-            )
-            // Mark colours sit at the foot of the sidebar, beside the
-            // glyphs they apply to, the way the web places them.
-            .child(self.mark_colors_panel(cx))
-    }
-
-    /// Right tile: details of the selected glyph, like
-    /// runebender-web's GlyphInfoSidebar.
-    fn glyph_info_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
-        // Read-only facts read as one line each, label left and value
-        // right. A stack of big accent-green headings for one-word
-        // values was most of what made this panel shout.
-        let row = |header: &'static str, value: SharedString| {
-            div()
-                .h(px(18.0))
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .text_xs()
-                .child(div().text_color(t::text_muted()).child(header))
-                .child(div().text_sm().text_color(t::text()).child(value))
-        };
-        let mut panel = div().flex().flex_col().gap_2();
-        let (Some(project), Some(index)) = (self.project.as_ref(), self.selected) else {
-            return self.section(
-                cx,
-                "Glyph",
-                div()
-                    .text_sm()
-                    .text_color(t::text_muted())
-                    .child("Select a glyph"),
-            );
-        };
-        let font = project.active_font();
-        let Some(entry) = font.glyphs.get(index) else {
-            return self.section(cx, "Glyph", div());
-        };
-        let name = entry.name.to_string();
-        let master = project.master_names[project.active].clone();
-        let _ = name;
-        // Editable fields commit on Enter (rename, unicode, kerning
-        // groups); the rest stay read-only rows.
-        let input_row = |header: &'static str,
-                         input: &gpui::Entity<widgets::input::InputState>| {
-            div()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .child(div().text_xs().text_color(t::text_muted()).child(header))
-                .child(widgets::input::Input::new(input))
-        };
-        let pair_row = |header: &'static str,
-                        a: &gpui::Entity<widgets::input::InputState>,
-                        b: &gpui::Entity<widgets::input::InputState>| {
-            div()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .child(div().text_xs().text_color(t::text_muted()).child(header))
-                .child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .child(div().flex_1().child(
-                            widgets::input::Input::new(a),
-                        ))
-                        .child(div().flex_1().child(
-                            widgets::input::Input::new(b),
-                        )),
-                )
-        };
-        // Width and the sidebearings are edited here, beside the name
-        // and the kerning groups, the way the web keeps a glyph's
-        // metrics in one panel. Enter commits each field.
-        let metric_field = |label_text: &'static str,
-                            input: &gpui::Entity<widgets::input::InputState>| {
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child(label_text),
-                )
-                .child(widgets::input::Input::new(input))
-        };
-        // In the editor the metric fields live in the floating panel
-        // over the canvas (Glyphs-style), so they appear here only in
-        // the grid: one input entity, one place on screen.
-        let in_editor = matches!(self.mode, Mode::Editor(_));
-        panel = panel
-            .child(row("Master", master))
-            // Why the glyph is not interpolating, when it is not: the
-            // grid dot says that something is wrong, this says what.
-            .when_some(
-                self.project
-                    .as_ref()
-                    .and_then(|p| p.compat_detail(entry.name.as_ref())),
-                |el, detail| {
-                    el.child(
-                        div()
-                            .text_xs()
-                            .text_color(t::status_yellow())
-                            .child(format!("Not interpolating: {detail}")),
-                    )
-                },
-            )
-            .child(input_row("Glyph Name", &self.glyph_inputs.name))
-            .when(in_editor, |el| {
-                el.child(row("Width", format!("{:.0}", entry.advance).into()))
-            })
-            .when(!in_editor, |el| {
-                el.child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .child(metric_field("Width", &self.metric_inputs.width))
-                        .child(metric_field("LSB", &self.metric_inputs.lsb))
-                        .child(metric_field("RSB", &self.metric_inputs.rsb)),
-                )
-            })
-            .child(pair_row(
-                "Kerning Groups (L · R)",
-                &self.glyph_inputs.group_l,
-                &self.glyph_inputs.group_r,
-            ))
-            .child(pair_row(
-                "Metrics Keys (L · R)",
-                &self.glyph_inputs.lsb_key,
-                &self.glyph_inputs.rsb_key,
-            ))
-            .child(input_row("Unicode", &self.glyph_inputs.unicode))
-            // The character's Unicode name, the Glyph Info window's
-            // headline fact, quietly under the code point.
-            .when_some(
-                entry
-                    .codepoint
-                    .and_then(unicode_names2::name)
-                    .map(|n| n.to_string()),
-                |el, uni_name| {
-                    el.child(
-                        div()
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child(uni_name),
-                    )
-                },
-            )
-            .child(input_row(
-                "Production Name",
-                &self.glyph_inputs.production,
-            ))
-            .child(input_row("Note", &self.glyph_inputs.note))
-            // A part glyph's smart axis ("Width,0,100"): defines the
-            // axis and seeds the top pole layer.
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child("Smart Axis (name,min,max)"),
-                    )
-                    .child(widgets::input::Input::new(
-                        &self.glyph_smart_axis_ref(),
-                    )),
-            )
-            // Bracket layers: the shape switch on this glyph, or the
-            // field that creates one at a typed axis value.
-            .child({
-                let switch = self.project.as_ref().and_then(|p| {
-                    p.ds_doc.as_ref()?.rules.rules.iter().find_map(|rule| {
-                        let sub = rule
-                            .substitutions
-                            .iter()
-                            .find(|sub| sub.name.as_ref() == entry.name.as_ref())?;
-                        let cond = rule
-                            .condition_sets
-                            .first()
-                            .and_then(|set| set.conditions.first());
-                        Some((
-                            sub.with.to_string(),
-                            cond.and_then(|c| c.minimum),
-                            cond.map(|c| c.name.clone()),
-                        ))
-                    })
-                });
-                match switch {
-                    Some((with, min, axis)) => div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .text_xs()
-                        .child(div().text_color(t::text_muted()).child(
-                            format!(
-                                "→ {with} at {} ≥ {}",
-                                axis.unwrap_or_else(|| "axis".into()),
-                                min.map(|v| format!("{v:.0}"))
-                                    .unwrap_or_else(|| "?".into()),
-                            ),
-                        ))
-                        .child(
-                            div()
-                                .id("switch-remove")
-                                .px_1()
-                                .cursor_pointer()
-                                .text_color(t::text_muted())
-                                .hover(|el| el.text_color(t::text()))
-                                .child("×")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.command_remove_shape_switch();
-                                    cx.notify();
-                                })),
-                        ),
-                    None => div()
-                        .flex()
-                        .flex_col()
-                        .gap_0p5()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(t::text_muted())
-                                .child("Switch At (axis value)"),
-                        )
-                        .child(widgets::input::Input::new(
-                            &self.glyph_inputs.switch_at,
-                        )),
-                }
-            });
-        self.section(cx, "Glyph", panel)
-    }
-
-    /// Colors panel: mark-color swatches for the selected glyph, like
-    /// the web grid's bottom-right panel.
-    /// Right-panel live preview of the selected glyph: outline plus
-    /// control points, the way runebender-web fills the space between
-    /// the info sections and the colors.
-    fn glyph_preview_panel(&self) -> gpui::Div {
-        let data = self.selected.and_then(|index| {
-            let font = self.font()?;
-            let entry = &font.glyphs[index];
-            Some((
-                entry.contour_path.clone(),
-                entry.component_path.clone(),
-                entry.points.clone(),
-                entry.advance,
-                font.ascender,
-                font.descender,
-            ))
-        });
-        let body: gpui::AnyElement = match data {
-            None => div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .text_color(t::text_muted())
-                .into_any_element(),
-            Some((outline, components, points, advance, ascender, descender)) => {
-                canvas(
-                    move |bounds, _, _| bounds,
-                    move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                        let w: f32 = bounds.size.width.into();
-                        let h: f32 = bounds.size.height.into();
-                        if w < 40.0 || h < 40.0 {
-                            return;
-                        }
-                        // Fit the em box (with the glyph's actual
-                        // advance) into the panel with padding.
-                        use kurbo::Shape as _;
-                        let ink = {
-                            let mut b = outline.bounding_box();
-                            if !components.elements().is_empty() {
-                                b = b.union(components.bounding_box());
-                            }
-                            b
-                        };
-                        let (ink_w, ink_h, ink_cx, ink_cy) =
-                            if ink.width() > 0.0 && ink.height() > 0.0 {
-                                (ink.width(), ink.height(), ink.center().x, ink.center().y)
-                            } else {
-                                // A blank glyph still needs a box: use
-                                // its advance and the em.
-                                let em_h = (ascender - descender).max(1.0);
-                                let em_w = advance.max(em_h * 0.3);
-                                (em_w, em_h, em_w / 2.0, (ascender + descender) / 2.0)
-                            };
-                        let scale = ((w as f64 * 0.88) / ink_w)
-                            .min((h as f64 * 0.88) / ink_h);
-                        let origin_x = w as f64 / 2.0 - ink_cx * scale;
-                        let baseline = h as f64 / 2.0 + ink_cy * scale;
-                        let view = Affine::translate((origin_x, baseline))
-                            * Affine::scale_non_uniform(scale, -scale);
-                        let to_screen = |x: f64, y: f64| {
-                            let p = view * kurbo::Point::new(x, y);
-                            gpui::point(
-                                bounds.origin.x + px(p.x as f32),
-                                bounds.origin.y + px(p.y as f32),
-                            )
-                        };
-                        // No metric frame here: this tile is a shape
-                        // preview, and the box only ate the space the
-                        // outline could use.
-                        if !components.elements().is_empty()
-                            && let Some(p) = build_fill_path(
-                                &components,
-                                view,
-                                bounds.origin,
-                            )
-                        {
-                            window.paint_path(p, t::component_fill());
-                        }
-                        if let Some(p) = build_path(
-                            &outline,
-                            view,
-                            bounds.origin,
-                            PathBuilder::stroke(px(1.0)),
-                        ) {
-                            window.paint_path(p, t::path_stroke());
-                        }
-                        // Handle lines then points, editor-style but
-                        // small.
-                        let mut handles = PathBuilder::stroke(px(1.0));
-                        let mut any_handles = false;
-                        for p in points.iter() {
-                            if p.on_curve {
-                                continue;
-                            }
-                            let contour_pts: Vec<&GlyphPoint> = points
-                                .iter()
-                                .filter(|q| q.contour == p.contour)
-                                .collect();
-                            let n = contour_pts.len();
-                            let Some(pos) = contour_pts
-                                .iter()
-                                .position(|q| q.index == p.index)
-                            else {
-                                continue;
-                            };
-                            let prev = contour_pts[(pos + n - 1) % n];
-                            let next = contour_pts[(pos + 1) % n];
-                            let anchor = if prev.on_curve {
-                                prev
-                            } else if next.on_curve {
-                                next
-                            } else {
-                                continue;
-                            };
-                            handles.move_to(to_screen(p.x, p.y));
-                            handles.line_to(to_screen(anchor.x, anchor.y));
-                            any_handles = true;
-                        }
-                        if any_handles && let Ok(p) = handles.build() {
-                            window.paint_path(p, t::handle_line());
-                        }
-                        let ring =
-                            |center: Point<gpui::Pixels>,
-                             r: f32,
-                             color: gpui::Rgba,
-                             window: &mut Window| {
-                                let cx_: f32 = center.x.into();
-                                let cy_: f32 = center.y.into();
-                                let shape = kurbo::Circle::new(
-                                    (cx_ as f64, cy_ as f64),
-                                    r as f64,
-                                )
-                                .to_path(0.25);
-                                if let Some(p) = build_fill_path(
-                                    &shape,
-                                    Affine::IDENTITY,
-                                    gpui::point(px(0.0), px(0.0)),
-                                ) {
-                                    window.paint_path(p, t::point_inner());
-                                }
-                                if let Some(p) = build_path(
-                                    &shape,
-                                    Affine::IDENTITY,
-                                    gpui::point(px(0.0), px(0.0)),
-                                    PathBuilder::stroke(px(1.0)),
-                                ) {
-                                    window.paint_path(p, color);
-                                }
-                            };
-                        for p in points.iter() {
-                            let center = to_screen(p.x, p.y);
-                            if !p.on_curve {
-                                ring(
-                                    center,
-                                    2.0,
-                                    t::point_offcurve_outer(),
-                                    window,
-                                );
-                            } else if p.smooth {
-                                ring(
-                                    center,
-                                    3.0,
-                                    t::point_smooth_outer(),
-                                    window,
-                                );
-                            } else if p.hyper {
-                                ring(center, 3.0, t::point_hyper_outer(), window);
-                            } else {
-                                window.paint_quad(gpui::fill(
-                                    Bounds::from_corners(
-                                        gpui::point(
-                                            center.x - px(2.5),
-                                            center.y - px(2.5),
-                                        ),
-                                        gpui::point(
-                                            center.x + px(2.5),
-                                            center.y + px(2.5),
-                                        ),
-                                    ),
-                                    t::point_corner_outer(),
-                                ));
-                            }
-                        }
-                    },
-                )
-                .size_full()
-                .into_any_element()
-            }
-        };
-        div().flex_1().min_h(px(200.0)).p_1().child(body)
-    }
-
-    fn mark_colors_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let current = self
-            .selected
-            .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))
-            .and_then(|e| e.mark.clone());
-        // One row, always: each swatch sits in an equal-width column,
-        // so the spacing between them and the margin at both ends stay
-        // the same at any panel width.
-        const SWATCH: f32 = 14.0;
-        // (bar height - swatch) / 2, so the ring of space around the
-        // row is the same on every side.
-        const INSET: f32 = (BOTTOM_BAR_H - (SWATCH + 6.0)) / 2.0;
-        let slot = |child: gpui::Stateful<gpui::Div>| child;
-        let mut swatches =
-            div().flex().items_center().justify_between().w_full();
-        for (index, (label, color)) in t::mark_palette().into_iter().enumerate() {
-            let is_current = current.as_deref() == Some(label.as_str());
-            // Selected reads as a ring in the swatch's own colour with
-            // a dark gap inside it, rather than a white outline drawn
-            // over the colour: the colour stays the thing you see.
-            swatches = swatches.child(slot(
-                div()
-                    .id(("mark-swatch", index))
-                    .w(px(SWATCH + 6.0))
-                    .h(px(SWATCH + 6.0))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .border(t::stroke())
-                    .border_color(if is_current {
-                        color
-                    } else {
-                        gpui::Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }
-                    })
-                    .cursor_pointer()
-                    .child(
-                        div()
-                            .w(px(SWATCH))
-                            .h(px(SWATCH))
-                            .rounded_full()
-                            .bg(color),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.set_selected_mark(Some(label.clone()));
-                        cx.notify();
-                    })),
-            ));
-        }
-        // "No colour" is a swatch like the others: same ring when it is
-        // the one in force, drawn in the muted grey it stands for.
-        swatches = swatches.child(slot(
-            div()
-                .id("mark-clear")
-                .w(px(SWATCH + 6.0))
-                .h(px(SWATCH + 6.0))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .border(t::stroke())
-                .border_color(if current.is_none() {
-                    t::text_muted()
-                } else {
-                    gpui::Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }
-                })
-                .cursor_pointer()
-                .child(
-                    div()
-                        .w(px(SWATCH))
-                        .h(px(SWATCH))
-                        .rounded_full()
-                        .border(t::stroke())
-                        .border_color(t::text_muted())
-                        .child(glyph_free_icon(t::text_muted(), IconMark::Cross)),
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.set_selected_mark(None);
-                    cx.notify();
-                })),
-        ));
-        // No header, no collapse: it is one row of swatches that is
-        // always up. It carries its own top rule since it is the last
-        // thing in the sidebar.
-        div()
-            .h(px(BOTTOM_BAR_H))
-            .flex()
-            .items_center()
-            .border_t_1()
-            .border_color(t::panel_outline())
-            .px(px(INSET))
-            .child(swatches)
     }
 
     /// Set or clear the mark color on every selected glyph.
@@ -7676,302 +5793,10 @@ impl Workspace {
         for name in names {
             if let Some(&index) = font.name_map.get(&name) {
                 font.edit_glyph(index, |glyph| {
-                    runebender_core::theme_oklch::set_glyph_mark(
-                        glyph,
-                        label.as_deref(),
-                    );
+                    runebender_core::theme_oklch::set_glyph_mark(glyph, label.as_deref());
                 });
             }
         }
-    }
-
-    /// Editor sidebar: search + scrollable mini glyph grid, so glyph
-    /// switching doesn't require leaving the editor.
-    fn editor_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let _query = self.search_query.clone();
-        let fit = self.sidebar_cell_metrics();
-        let mut rows_total = 0usize;
-        let mut shown = 0usize;
-        let matched = self.glyph_order();
-        let mut visible_rows: Vec<Vec<(usize, usize)>> = Vec::new();
-        let cells: Vec<_> = match self.font() {
-            Some(font) => {
-                shown = matched.len();
-                let upm = font.units_per_em;
-                let spans: Vec<(usize, usize)> = matched
-                    .iter()
-                    .map(|&i| {
-                        (
-                            i,
-                            glyph_column_span(
-                                font.glyphs[i].name.as_ref(),
-                                font.glyphs[i].advance,
-                                upm,
-                            ),
-                        )
-                    })
-                    .collect();
-                let packed = pack_spans(&spans, fit.cols);
-                rows_total = packed.len();
-                let start =
-                    self.sidebar_scroll_row.min(rows_total.saturating_sub(1));
-                visible_rows = packed
-                    .iter()
-                    .skip(start)
-                    .take(fit.rows)
-                    .cloned()
-                    .collect();
-                packed
-                    .into_iter()
-                    .skip(start)
-                    .take(fit.rows)
-                    .flatten()
-                    .map(|(i, span)| {
-                        let w = fit.cell_w * span as f32
-                            + GRID_GAP * (span - 1) as f32;
-                        self.glyph_cell_sized(i, w, fit.cell_h, true, cx)
-                            .into_any_element()
-                    })
-                    .collect()
-            }
-            None => Vec::new(),
-        };
-        // The sidebar's own tabs, like the web's editor sidebar: the
-        // glyph list, and the designspace axes.
-        let has_axes = !self.axis_sliders.is_empty();
-        // Icons, not words: four labels overflowed a narrow sidebar
-        // and the last one was clipped. The name comes back on hover.
-        let tab = |id: &'static str,
-                   label: &'static str,
-                   icon: &'static str,
-                   which: u8,
-                   cx: &mut Context<Self>| {
-            let active = self.sidebar_tab == which;
-            // Same treatment as the edit-mode toolbar: a filled tile
-            // when active, no outline either way.
-            div()
-                .id(id)
-                .size(px(26.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .flex_shrink_0()
-                .rounded(t::radius_control())
-                .cursor_pointer()
-                .when(active, |el| el.bg(t::cell_selected_bg()))
-                .child(icon_svg(
-                    icon,
-                    if active { t::accent() } else { t::text_muted() },
-                ))
-                .tooltip(move |_, cx| {
-                    cx.new(|_| TabTooltip { label }).into()
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.sidebar_tab = which;
-                    cx.notify();
-                }))
-        };
-        // An axis-less font has no Axes tab, so a stale selection
-        // falls back to the glyph list.
-        let tab_now = if !has_axes && self.sidebar_tab == 2 {
-            0
-        } else {
-            self.sidebar_tab
-        };
-        let on_glyphs = tab_now == 0;
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .min_h(px(0.0))
-            .child(
-                div()
-                    .px_2()
-                    .pt_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(tab("sidebar-tab-glyphs", "Glyphs", "glyph-grid", 0, cx))
-                    .child(tab("sidebar-tab-shapes", "Shapes", "shapes", 1, cx))
-                    .when(has_axes, |el| {
-                        el.child(tab("sidebar-tab-axes", "Axes", "measure", 2, cx))
-                    })
-                    .child(tab("sidebar-tab-ai", "Local AI", "preview", 3, cx)),
-            )
-            .when(tab_now == 1, |el| {
-                el.child(
-                    div()
-                        .id("sidebar-shapes")
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .overflow_y_scroll()
-                        .child(self.sidebar_shapes(cx)),
-                )
-            })
-            .when(tab_now == 2, |el| {
-                el.child(
-                    div()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .p_2()
-                        .children(self.axes_section(cx)),
-                )
-            })
-            .when(tab_now == 3, |el| {
-                el.child(
-                    div()
-                        .id("sidebar-ai")
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .overflow_y_scroll()
-                        .p_2()
-                        .child(self.local_ai_panel(cx)),
-                )
-            })
-            .when(on_glyphs, |el| el
-            .child(
-                div()
-                    .p_2()
-                    .flex()
-                    .items_stretch()
-                    .gap_1()
-                    .border_b_1()
-                    .border_color(t::panel_outline())
-                    .child(div().flex_1().child(
-                        widgets::input::Input::new(&self.search),
-                    ))
-                    .child(self.search_toggle(
-                        "search-mode",
-                        match self.search_mode {
-                            1 => "N",
-                            2 => "U",
-                            _ => "A",
-                        },
-                        self.search_mode != 0,
-                        |this| this.search_mode = (this.search_mode + 1) % 3,
-                        cx,
-                    ))
-                    .child(self.search_toggle(
-                        "search-regex",
-                        ".*",
-                        self.search_regex,
-                        |this| {
-                            this.search_regex = !this.search_regex;
-                            this.rebuild_search_regex();
-                        },
-                        cx,
-                    ))
-                    .child(self.search_toggle(
-                        "search-case",
-                        "Aa",
-                        self.search_case,
-                        |this| {
-                            this.search_case = !this.search_case;
-                            this.rebuild_search_regex();
-                        },
-                        cx,
-                    )),
-            )
-            .child(
-                // Measured the same way the main grid is, so the mini
-                // cells stretch to fill the pane and a row is never
-                // left half-showing at the bottom.
-                div()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .relative()
-                    .child({
-                        let this = cx.entity().downgrade();
-                        canvas(
-                            move |bounds: Bounds<gpui::Pixels>,
-                                  _,
-                                  app: &mut gpui::App| {
-                                this.update(app, |this, cx| {
-                                    if this.sidebar_viewport != bounds.size {
-                                        this.sidebar_viewport = bounds.size;
-                                        cx.notify();
-                                    }
-                                })
-                                .ok();
-                            },
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                    })
-                    .child(
-                        div()
-                            .id("editor-sidebar-grid")
-                            .size_full()
-                            .min_h(px(0.0))
-                            // The outline overlay is absolute: this is
-                            // the box it pins to.
-                            .relative()
-                            .overflow_hidden()
-                            .child(
-                                div()
-                                    .size_full()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(
-                                        div()
-                                            .w(px(fit.content_w()))
-                                            .flex()
-                                            .flex_wrap()
-                                            .gap(px(GRID_GAP))
-                                            .children(cells),
-                                    ),
-                            )
-                            .children(self.glyph_overlay(visible_rows, fit, cx))
-                            .on_scroll_wheel(cx.listener(
-                                move |this, ev: &gpui::ScrollWheelEvent, _, cx| {
-                                    let dy = match ev.delta {
-                                        gpui::ScrollDelta::Pixels(p) => f32::from(p.y),
-                                        gpui::ScrollDelta::Lines(p) => p.y * 24.0,
-                                    };
-                                    if Self::scroll_grid_rows(
-                                        &mut this.sidebar_scroll_row,
-                                        dy,
-                                        fit.cell_h + GRID_GAP,
-                                        fit.rows,
-                                        rows_total,
-                                    ) {
-                                        cx.notify();
-                                    }
-                                },
-                            )),
-                    ),
-            )
-            .child(
-                // Same bar the main grid has, and the same height, so
-                // the two line up across the divider.
-                div()
-                    .h(px(BOTTOM_BAR_H))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .border_t_1()
-                    .border_color(t::panel_outline())
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child(SharedString::from(format!(
-                                "{} glyphs",
-                                shown
-                            ))),
-                    )
-                    .children(self.sidebar_slider.as_ref().map(|slider| {
-                        div().w(px(96.0)).child(flat_slider(slider, cx))
-                    })),
-            ))
-            // Colours stay put whichever tab is up.
-            .child(self.mark_colors_panel(cx))
     }
 
     /// The Shapes tab: one row per contour and per component in the
@@ -8015,8 +5840,7 @@ impl Workspace {
                 .child(div().text_color(t::text_muted()).child(detail))
         };
 
-        let counts: Vec<usize> =
-            glyph.contours.iter().map(|c| c.points.len()).collect();
+        let counts: Vec<usize> = glyph.contours.iter().map(|c| c.points.len()).collect();
         for (ci, points) in counts.iter().copied().enumerate() {
             let selected = self
                 .editor
@@ -8032,7 +5856,9 @@ impl Workspace {
                     selected,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    let Mode::Editor(index) = this.mode else { return };
+                    let Mode::Editor(index) = this.mode else {
+                        return;
+                    };
                     this.editor.selected_component = None;
                     this.editor.selected = this
                         .font()
@@ -8119,8 +5945,7 @@ impl Workspace {
                                 let w: f32 = bounds.size.width.into();
                                 let h: f32 = bounds.size.height.into();
                                 let (cx_, cy) = (w / 2.0, h / 2.0);
-                                let mut path =
-                                    gpui::PathBuilder::fill();
+                                let mut path = gpui::PathBuilder::fill();
                                 let pt = |dx: f32, dy: f32| {
                                     gpui::point(o.x + px(cx_ + dx), o.y + px(cy + dy))
                                 };
@@ -8180,16 +6005,22 @@ impl Workspace {
                     }),
                 ),
             )
-            .child(Self::icon_tile("tool-pen", "pen", tool == Tool::Pen).on_click(
-                cx.listener(|this, _, _, cx| {
-                    this.editor.tool = Tool::Pen;
-                    cx.notify();
-                }),
-            ))
+            .child(
+                Self::icon_tile("tool-pen", "pen", tool == Tool::Pen).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.editor.tool = Tool::Pen;
+                        cx.notify();
+                    },
+                )),
+            )
             .child(
                 Self::icon_tile(
                     "tool-shapes",
-                    if self.editor.shape_ellipse { "shape-ellipse" } else { "shape-rectangle" },
+                    if self.editor.shape_ellipse {
+                        "shape-ellipse"
+                    } else {
+                        "shape-rectangle"
+                    },
                     tool == Tool::Shapes,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -8211,34 +6042,35 @@ impl Workspace {
                 ),
             )
             .child(
-                Self::icon_tile("tool-text", "text", tool == Tool::Text).on_click(
-                    cx.listener(|this, _, _, cx| {
+                Self::icon_tile("tool-text", "text", tool == Tool::Text).on_click(cx.listener(
+                    |this, _, _, cx| {
                         this.pen_finish();
                         this.editor.tool = Tool::Text;
                         cx.notify();
-                    }),
-                ),
+                    },
+                )),
             )
             .child(
-                Self::icon_tile("tool-knife", "knife", tool == Tool::Knife).on_click(
-                    cx.listener(|this, _, _, cx| {
+                Self::icon_tile("tool-knife", "knife", tool == Tool::Knife).on_click(cx.listener(
+                    |this, _, _, cx| {
                         this.pen_finish();
                         this.editor.tool = Tool::Knife;
                         cx.notify();
+                    },
+                )),
+            )
+            .child(
+                Self::icon_tile("tool-hyperpen", "hyperpen", tool == Tool::HyperPen).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.pen_finish();
+                        this.editor.tool = Tool::HyperPen;
+                        cx.notify();
                     }),
                 ),
             )
             .child(
-                Self::icon_tile("tool-hyperpen", "hyperpen", tool == Tool::HyperPen)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.pen_finish();
-                        this.editor.tool = Tool::HyperPen;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Self::icon_tile("tool-preview", "preview", tool == Tool::Preview)
-                    .on_click(cx.listener(|this, _, _, cx| {
+                Self::icon_tile("tool-preview", "preview", tool == Tool::Preview).on_click(
+                    cx.listener(|this, _, _, cx| {
                         this.pen_finish();
                         if this.editor.tool == Tool::Preview {
                             this.editor.tool = this.editor.previous_tool;
@@ -8247,7 +6079,8 @@ impl Workspace {
                             this.editor.tool = Tool::Preview;
                         }
                         cx.notify();
-                    })),
+                    }),
+                ),
             )
     }
 
@@ -8264,7 +6097,11 @@ impl Workspace {
                 .py_0p5()
                 .rounded(t::radius())
                 .border(t::stroke())
-                .border_color(if active { t::accent() } else { t::cell_border() })
+                .border_color(if active {
+                    t::accent()
+                } else {
+                    t::cell_border()
+                })
                 .text_sm()
                 .text_color(if active { t::accent() } else { t::text_muted() })
                 .cursor_pointer()
@@ -8275,799 +6112,35 @@ impl Workspace {
             .items_center()
             .gap_1()
             .child(
-                button("dir-ltr", "LTR", !auto && dir == TextDirection::LeftToRight)
-                    .on_click(cx.listener(|this, _, _, cx| {
+                button("dir-ltr", "LTR", !auto && dir == TextDirection::LeftToRight).on_click(
+                    cx.listener(|this, _, _, cx| {
                         this.edit_buffer
                             .set_direction(runebender_core::text::TextDirection::LeftToRight);
                         this.edit_buffer.shape_arabic_if_rtl();
                         this.sync_sort_offset();
                         cx.notify();
-                    })),
+                    }),
+                ),
             )
             .child(
-                button("dir-rtl", "RTL", !auto && dir == TextDirection::RightToLeft)
-                    .on_click(cx.listener(|this, _, _, cx| {
+                button("dir-rtl", "RTL", !auto && dir == TextDirection::RightToLeft).on_click(
+                    cx.listener(|this, _, _, cx| {
                         this.edit_buffer
                             .set_direction(runebender_core::text::TextDirection::RightToLeft);
                         this.edit_buffer.shape_arabic_if_rtl();
                         this.sync_sort_offset();
                         cx.notify();
-                    })),
+                    }),
+                ),
             )
-            .child(button("dir-auto", "Auto", auto).on_click(cx.listener(
-                |this, _, _, cx| {
+            .child(
+                button("dir-auto", "Auto", auto).on_click(cx.listener(|this, _, _, cx| {
                     this.edit_buffer.set_auto_direction();
                     this.edit_buffer.shape_arabic_if_rtl();
                     this.sync_sort_offset();
                     cx.notify();
-                },
-            )))
-    }
-
-    /// Related Glyphs section (Fontra's panel): the glyph's base,
-    /// its suffix siblings (name.*), its components, and every
-    /// composite using it — one click away.
-    fn related_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let Some(index) = self.current_glyph_index() else {
-            return self.section(cx, "Related", div());
-        };
-        let Some(font) = self.font() else {
-            return self.section(cx, "Related", div());
-        };
-        let name = font.glyphs[index].name.to_string();
-        let stem = name.split('.').next().unwrap_or(&name).to_string();
-        let mut rows: Vec<(&'static str, Vec<String>)> = Vec::new();
-        // Components of this glyph.
-        let components: Vec<String> = font
-            .font
-            .get_glyph(name.as_str())
-            .map(|g| {
-                g.components
-                    .iter()
-                    .map(|c| c.base.to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !components.is_empty() {
-            rows.push(("Components", components));
-        }
-        // Suffix siblings sharing the stem.
-        let siblings: Vec<String> = font
-            .glyphs
-            .iter()
-            .map(|g| g.name.to_string())
-            .filter(|other| {
-                *other != name
-                    && other.split('.').next() == Some(stem.as_str())
-            })
-            .take(24)
-            .collect();
-        if !siblings.is_empty() {
-            rows.push(("Siblings", siblings));
-        }
-        // Composites that place this glyph.
-        let used_by: Vec<String> = font
-            .glyphs
-            .iter()
-            .filter(|g| {
-                font.font
-                    .get_glyph(g.name.as_ref())
-                    .is_some_and(|norad_glyph| {
-                        norad_glyph
-                            .components
-                            .iter()
-                            .any(|c| c.base.as_str() == name)
-                    })
-            })
-            .map(|g| g.name.to_string())
-            .take(24)
-            .collect();
-        if !used_by.is_empty() {
-            rows.push(("Used by", used_by));
-        }
-        if rows.is_empty() {
-            return self.section(
-                cx,
-                "Related",
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("No related glyphs"),
-            );
-        }
-        let mut body = div().flex().flex_col().gap_1();
-        for (label, names) in rows {
-            let mut chips = div().flex().flex_wrap().gap_1();
-            for related in names {
-                let target = font.name_map.get(related.as_str()).copied();
-                chips = chips.child(
-                    div()
-                        .id(gpui::SharedString::from(format!(
-                            "rel-{label}-{related}"
-                        )))
-                        .px_1()
-                        .rounded(t::radius())
-                        .border(t::stroke())
-                        .border_color(t::cell_border())
-                        .text_xs()
-                        .text_color(t::text())
-                        .cursor_pointer()
-                        .child(related.clone())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(target) = target {
-                                this.open_editor(target);
-                            }
-                            cx.notify();
-                        })),
-                );
-            }
-            body = body
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child(label),
-                )
-                .child(chips);
-        }
-        self.section(cx, "Related", body)
-    }
-
-    /// Shaping section (editor mode): the buffer's characters in
-    /// logical order against the shaped glyphs, cluster-linked —
-    /// Fontra's inspector, on the shared text engine. Click a chip
-    /// to cross-highlight its cluster; double-click a glyph chip to
-    /// open that glyph for editing inside the shaped run.
-    fn shaping_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        use runebender_core::text::{TextDirection, TextSortKind};
-        let count = self.edit_buffer.len();
-        if count < 2 {
-            return self.section(
-                cx,
-                "Shaping",
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Type around the glyph to inspect shaping"),
-            );
-        }
-        // Carrier per sort: an absorbed sort (eaten by a ligature)
-        // belongs to the last unabsorbed sort before it.
-        let mut carrier_of: Vec<usize> = Vec::with_capacity(count);
-        let mut last_carrier = 0usize;
-        for i in 0..count {
-            let absorbed = self
-                .edit_buffer
-                .sort(i)
-                .is_some_and(|s| s.is_absorbed());
-            if !absorbed {
-                last_carrier = i;
-            }
-            carrier_of.push(last_carrier);
-        }
-        let focus = self.shaping_focus;
-        let chip = |id: (&'static str, usize),
-                    label: SharedString,
-                    sub: SharedString,
-                    lit: bool,
-                    dim: bool,
-                    cx: &mut Context<Self>,
-                    carrier: usize,
-                    open_on_double: bool| {
-            div()
-                .id(id)
-                .px_1()
-                .py_0p5()
-                .rounded(t::radius())
-                .border(t::stroke())
-                .border_color(if lit { t::accent() } else { t::cell_border() })
-                .flex()
-                .flex_col()
-                .items_center()
-                .cursor_pointer()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(if dim {
-                            t::text_muted()
-                        } else if lit {
-                            t::accent()
-                        } else {
-                            t::text()
-                        })
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child(sub),
-                )
-                .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
-                    this.shaping_focus = Some(carrier);
-                    if open_on_double && ev.click_count() >= 2 {
-                        this.edit_buffer.activate_sort(carrier);
-                        let name = this
-                            .edit_buffer
-                            .sort(carrier)
-                            .and_then(|s| s.glyph_name())
-                            .map(str::to_string);
-                        if let Some(glyph) = name.and_then(|n| {
-                            this.font()
-                                .and_then(|f| f.name_map.get(&n).copied())
-                        }) {
-                            this.mode = Mode::Editor(glyph);
-                            this.selected = Some(glyph);
-                            this.editor.selected.clear();
-                            this.editor.selected_anchors.clear();
-                        }
-                        this.sync_sort_offset();
-                    }
-                    cx.notify();
-                }))
-        };
-        // Characters, logical order.
-        let mut chars_row = div().flex().flex_wrap().gap_1();
-        for i in 0..count {
-            let Some(sort) = self.edit_buffer.sort(i) else { continue };
-            let TextSortKind::Glyph { codepoint, .. } = &sort.kind else {
-                continue;
-            };
-            let carrier = carrier_of[i];
-            let lit = focus == Some(carrier);
-            let (label, sub): (SharedString, SharedString) = match codepoint {
-                Some(c) => (
-                    c.to_string().into(),
-                    format!("{:04X}", *c as u32).into(),
-                ),
-                None => ("·".into(), "—".into()),
-            };
-            chars_row = chars_row.child(chip(
-                ("shape-char", i),
-                label,
-                sub,
-                lit,
-                sort.is_absorbed(),
-                cx,
-                carrier,
-                false,
-            ));
-        }
-        // Glyphs: the unabsorbed sorts, visually ordered for a
-        // single RTL line (Fontra shows output left-to-right).
-        let mut glyph_indices: Vec<usize> = (0..count)
-            .filter(|&i| {
-                self.edit_buffer
-                    .sort(i)
-                    .is_some_and(|s| !s.is_absorbed() && s.glyph_name().is_some())
-            })
-            .collect();
-        if self.edit_buffer.line_count() == 1
-            && self.edit_buffer.resolved_line_direction(0)
-                == TextDirection::RightToLeft
-        {
-            glyph_indices.reverse();
-        }
-        let mut glyphs_row = div().flex().flex_wrap().gap_1();
-        for &i in &glyph_indices {
-            let Some(sort) = self.edit_buffer.sort(i) else { continue };
-            let TextSortKind::Glyph { name, advance_width, .. } = &sort.kind
-            else {
-                continue;
-            };
-            let lit = focus == Some(i);
-            glyphs_row = glyphs_row.child(chip(
-                ("shape-glyph", i),
-                name.clone().into(),
-                format!("{advance_width:.0}").into(),
-                lit,
-                false,
-                cx,
-                i,
-                true,
-            ));
-        }
-        // Feature toggles: every feature tag in features.fea, each
-        // cycling default → off → on (Fontra's preview switches).
-        let mut tags: Vec<String> = self
-            .font()
-            .map(|f| {
-                let mut found = Vec::new();
-                let fea = &f.font.features;
-                let mut rest = fea.as_str();
-                while let Some(at) = rest.find("feature ") {
-                    let tail = &rest[at + 8..];
-                    let tag: String = tail
-                        .chars()
-                        .take_while(|c| c.is_ascii_alphanumeric())
-                        .take(4)
-                        .collect();
-                    if tag.len() == 4 && !found.contains(&tag) {
-                        found.push(tag);
-                    }
-                    rest = tail;
-                }
-                found
-            })
-            .unwrap_or_default();
-        tags.sort();
-        let mut toggles = div().flex().flex_wrap().gap_1();
-        for tag in &tags {
-            let state = self.feature_overrides.get(tag.as_str()).copied();
-            let tag_owned = tag.clone();
-            toggles = toggles.child(
-                div()
-                    .id(gpui::SharedString::from(format!("fea-{tag}")))
-                    .px_1p5()
-                    .py_0p5()
-                    .rounded(t::radius())
-                    .border(t::stroke())
-                    .text_xs()
-                    .cursor_pointer()
-                    .border_color(match state {
-                        Some(true) => t::accent(),
-                        Some(false) => t::annotation(),
-                        None => t::cell_border(),
-                    })
-                    .text_color(match state {
-                        Some(true) => t::accent(),
-                        Some(false) => t::annotation(),
-                        None => t::text_muted(),
-                    })
-                    .child(match state {
-                        Some(false) => format!("{tag} ×"),
-                        Some(true) => format!("{tag} ✓"),
-                        None => tag.clone(),
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        // default → off → on → default.
-                        let next = match this
-                            .feature_overrides
-                            .get(tag_owned.as_str())
-                        {
-                            None => Some(false),
-                            Some(false) => Some(true),
-                            Some(true) => None,
-                        };
-                        match next {
-                            Some(v) => {
-                                this.feature_overrides
-                                    .insert(tag_owned.clone(), v);
-                            }
-                            None => {
-                                this.feature_overrides
-                                    .remove(tag_owned.as_str());
-                            }
-                        }
-                        let overrides: Vec<(String, bool)> = this
-                            .feature_overrides
-                            .iter()
-                            .map(|(k, v)| (k.clone(), *v))
-                            .collect();
-                        this.edit_buffer.set_feature_overrides(overrides);
-                        this.edit_buffer.shape_arabic_if_rtl();
-                        this.sync_sort_offset();
-                        cx.notify();
-                    })),
-            );
-        }
-        // Language presets: languagesystem-specific rules (Urdu or
-        // Sindhi locl, Turkish i) only fire with a language set.
-        const LOCALES: [(&str, &str, &str); 8] = [
-            ("Urdu", "arab", "ur"),
-            ("Sindhi", "arab", "sd"),
-            ("Farsi", "arab", "fa"),
-            ("Kashmiri", "arab", "ks"),
-            ("Turkish", "latn", "tr"),
-            ("Dutch", "latn", "nl"),
-            ("Romanian", "latn", "ro"),
-            ("Vietnamese", "latn", "vi"),
-        ];
-        let mut locale_chips = div().flex().flex_wrap().gap_1();
-        for (li, (label, script, lang)) in LOCALES.iter().enumerate() {
-            let lit = self
-                .shaping_locale
-                .as_ref()
-                .is_some_and(|(s, l)| s == script && l == lang);
-            locale_chips = locale_chips.child(
-                div()
-                    .id(("shaping-locale", li))
-                    .px_1p5()
-                    .py_0p5()
-                    .rounded(t::radius())
-                    .border(t::stroke())
-                    .text_xs()
-                    .cursor_pointer()
-                    .border_color(if lit {
-                        t::accent()
-                    } else {
-                        t::cell_border()
-                    })
-                    .text_color(if lit { t::accent() } else { t::text_muted() })
-                    .child(*label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let (script, lang) = (
-                            LOCALES[li].1.to_string(),
-                            LOCALES[li].2.to_string(),
-                        );
-                        let already = this
-                            .shaping_locale
-                            .as_ref()
-                            .is_some_and(|(s, l)| *s == script && *l == lang);
-                        this.shaping_locale = (!already)
-                            .then_some((script, lang));
-                        let (script, lang) = match &this.shaping_locale {
-                            Some((s, l)) => {
-                                (Some(s.clone()), Some(l.clone()))
-                            }
-                            None => (None, None),
-                        };
-                        this.edit_buffer.set_shaping_locale(script, lang);
-                        this.edit_buffer.shape_arabic_if_rtl();
-                        this.sync_sort_offset();
-                        cx.notify();
-                    })),
-            );
-        }
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .when(!tags.is_empty(), |el| {
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child("Features (click: default → off → on)"),
-                )
-                .child(toggles)
-            })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Language"),
+                })),
             )
-            .child(locale_chips)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Characters (logical)"),
-            )
-            .child(chars_row)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Glyphs (visual)"),
-            )
-            .child(glyphs_row);
-        self.section(cx, "Shaping", body)
-    }
-
-    /// Transformations section for the right sidebar (editor mode).
-    fn transform_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let text_op = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .px_2()
-                .py_0p5()
-                .rounded(t::radius())
-                .text_sm()
-                .text_color(t::text())
-                .cursor_pointer()
-                .border(t::stroke())
-                .border_color(t::cell_border())
-                .child(label)
-        };
-        self.section(
-            cx,
-            "Transformations",
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .child(Self::icon_tile("op-flip-h", "flip-h", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.apply_transform(Affine::scale_non_uniform(-1.0, 1.0));
-                                cx.notify();
-                            }),
-                        ))
-                        .child(Self::icon_tile("op-flip-v", "flip-v", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.apply_transform(Affine::scale_non_uniform(1.0, -1.0));
-                                cx.notify();
-                            }),
-                        ))
-                        .child(Self::icon_tile("op-rot-ccw", "rot-ccw", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.apply_transform(Affine::rotate(
-                                    std::f64::consts::FRAC_PI_2,
-                                ));
-                                cx.notify();
-                            }),
-                        ))
-                        .child(Self::icon_tile("op-rot-cw", "rot-cw", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.apply_transform(Affine::rotate(
-                                    -std::f64::consts::FRAC_PI_2,
-                                ));
-                                cx.notify();
-                            }),
-                        ))
-                        .child(
-                            Self::icon_tile("op-duplicate", "duplicate", false)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.command_duplicate();
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Self::icon_tile(
-                                "op-duplicate-repeat",
-                                "duplicate-repeat",
-                                false,
-                            )
-                            .on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.command_duplicate_repeat();
-                                    cx.notify();
-                                },
-                            )),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .child(Self::icon_tile("op-union", "union", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.command_boolean(linesweeper::BinaryOp::Union);
-                                cx.notify();
-                            }),
-                        ))
-                        .child(Self::icon_tile("op-subtract", "subtract", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.command_boolean(linesweeper::BinaryOp::Difference);
-                                cx.notify();
-                            }),
-                        ))
-                        .child(Self::icon_tile("op-intersect", "intersect", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.command_boolean(
-                                    linesweeper::BinaryOp::Intersection,
-                                );
-                                cx.notify();
-                            }),
-                        ))
-                        .child(Self::icon_tile("op-exclude", "exclude", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.command_boolean(linesweeper::BinaryOp::Xor);
-                                cx.notify();
-                            }),
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .child(text_op("op-harmonize", "Harmonize").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.apply_curve_op(CurveOp::Harmonize);
-                                cx.notify();
-                            },
-                        )))
-                        .child(text_op("op-balance", "Balance").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.apply_curve_op(CurveOp::Balance);
-                                cx.notify();
-                            },
-                        )))
-                        .child(text_op("op-optimize", "Optimize").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.apply_curve_op(CurveOp::Optimize(0.12));
-                                cx.notify();
-                            },
-                        )))
-                        .child(text_op("op-extremes", "Extremes").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.command_add_extremes();
-                                cx.notify();
-                            }),
-                        ))
-                        .child(text_op("op-round", "Round").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.command_round_corners();
-                                cx.notify();
-                            },
-                        )))
-                        .child(text_op("op-reverse", "Reverse").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                if let Mode::Editor(index) = this.mode {
-                                    this.push_undo_snapshot(index);
-                                    let selected = this.editor.selected.clone();
-                                    let changed = this
-                                        .font_mut()
-                                        .and_then(|f| {
-                                            f.edit_glyph(index, |g| {
-                                                runebender_core::glyph_ops::reverse_contours(
-                                                    g, &selected,
-                                                )
-                                            })
-                                        })
-                                        .unwrap_or(false);
-                                    if !changed {
-                                        this.editor.undo.pop();
-                                    } else {
-                                        this.editor.selected.clear();
-                                    }
-                                }
-                                cx.notify();
-                            },
-                        ))),
-                )
-                // Slanter: shear the selection (or the whole glyph)
-                // by an angle typed in degrees. Enter applies;
-                // positive leans right, the italic convention.
-                // Stroke: expand the selected contours (or all) into
-                // stroked outlines of the typed width.
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(t::text_muted())
-                                .child("Slant"),
-                        )
-                        .child(div().w(px(64.0)).child(
-                            widgets::input::Input::new(&self.slant_input),
-                        ))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(t::text_muted())
-                                .child("Stroke"),
-                        )
-                        .child(div().w(px(64.0)).child(
-                            widgets::input::Input::new(&self.stroke_input),
-                        )),
-                )
-                // Offset: the whole glyph bolder (+) or lighter (−).
-                // Extrude sweeps a shadow ("offset,angle"); Roughen
-                // flattens and jitters ("segment,h,v").
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(t::text_muted())
-                                .child("Offset"),
-                        )
-                        .child(div().w(px(64.0)).child(
-                            widgets::input::Input::new(&self.offset_input),
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(t::text_muted())
-                                .child("Extrude"),
-                        )
-                        .child(div().w(px(64.0)).child(
-                            widgets::input::Input::new(
-                                &self.extrude_input,
-                            ),
-                        ))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(t::text_muted())
-                                .child("Roughen"),
-                        )
-                        .child(div().w(px(64.0)).child(
-                            widgets::input::Input::new(
-                                &self.roughen_input,
-                            ),
-                        )),
-                ),
-        )
-    }
-
-    /// Copy the open glyph's outline into the UFO background layer
-    /// (public.background), creating the layer on first use.
-    fn command_send_to_background(&mut self) {
-        let Mode::Editor(index) = self.mode else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        if let Some(font) = self.font_mut() {
-            let source = font.font.get_glyph(name.as_str()).cloned();
-            if let (Some(source), Ok(layer)) = (
-                source,
-                font.font.layers.get_or_create_layer("public.background"),
-            ) {
-                let mut background = norad::Glyph::new(name.as_str());
-                background.width = source.width;
-                background.contours = source.contours.clone();
-                layer.insert_glyph(background);
-                font.dirty = true;
-            }
-        }
-        self.status_note = Some("Sent to background".into());
-    }
-
-    /// Exchange the outline with the background layer's copy.
-    fn command_swap_background(&mut self) {
-        let Mode::Editor(index) = self.mode else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        self.push_undo_snapshot(index);
-        let mut swapped = false;
-        if let Some(font) = self.font_mut() {
-            let background = Self::background_layer_name(&font.font);
-            if let Some(background) = background {
-                let fg = font.font.get_glyph(name.as_str()).map(|g| g.contours.clone());
-                let bg = font
-                    .font
-                    .layers
-                    .get(&background)
-                    .and_then(|l| l.get_glyph(name.as_str()))
-                    .map(|g| g.contours.clone());
-                if let (Some(fg), Some(bg)) = (fg, bg) {
-                    if let Some(layer) = font.font.layers.get_mut(&background) {
-                        if let Some(g) = layer.get_glyph_mut(name.as_str()) {
-                            g.contours = fg;
-                        }
-                    }
-                    font.edit_glyph(index, |g| {
-                        g.contours = bg;
-                    });
-                    swapped = true;
-                }
-            }
-        }
-        if !swapped {
-            self.editor.undo.pop();
-            self.status_note = Some("No background to swap".into());
-        }
-    }
-
-    /// Drop the background layer's copy of the open glyph.
-    fn command_clear_background(&mut self) {
-        let Mode::Editor(index) = self.mode else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        if let Some(font) = self.font_mut() {
-            let background = Self::background_layer_name(&font.font);
-            if let Some(background) = background
-                && let Some(layer) = font.font.layers.get_mut(&background)
-            {
-                layer.remove_glyph(name.as_str());
-                font.dirty = true;
-            }
-        }
     }
 
     /// The open glyph in the editor, or the grid selection.
@@ -9093,352 +6166,19 @@ impl Workspace {
             .collect()
     }
 
-    /// Copy the current drawing into a fresh backup layer
-    /// (backup-1, backup-2, …): the Glyphs copy-layer gesture.
-    fn command_backup_layer(&mut self) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        let mut created = None;
-        if let Some(font) = self.font_mut() {
-            let Some(source) = font.font.get_glyph(name.as_str()).cloned()
-            else {
-                return;
-            };
-            // Date-named like Glyphs' backup layers; a counter
-            // steps in when the same minute already has one.
-            let stamp = chrono::Local::now().format("%b %-d, %H.%M").to_string();
-            let mut n = 0usize;
-            let layer_name = loop {
-                let candidate = if n == 0 {
-                    stamp.clone()
-                } else {
-                    format!("{stamp} ({n})")
-                };
-                let taken = font
-                    .font
-                    .layers
-                    .get(&candidate)
-                    .is_some_and(|l| l.contains_glyph(name.as_str()));
-                if !taken {
-                    break candidate;
-                }
-                n += 1;
-            };
-            if let Ok(layer) = font.font.layers.get_or_create_layer(&layer_name)
-            {
-                let mut copy = norad::Glyph::new(name.as_str());
-                copy.width = source.width;
-                copy.contours = source.contours.clone();
-                copy.components = source.components.clone();
-                copy.anchors = source.anchors.clone();
-                layer.insert_glyph(copy);
-                font.dirty = true;
-                created = Some(layer_name);
-            }
-        }
-        if let Some(layer) = created {
-            self.visible_glyph_layers.insert(layer.clone());
-            self.status_note = Some(format!("Copied to {layer}").into());
-        }
-    }
-
-    /// "+ Intermediate" in the layers block: freeze the current
-    /// interpolation of the open glyph into a brace layer at the
-    /// preview location — a named UFO layer plus a sparse designspace
-    /// source, Glyphs' intermediate layer. Edit it via the swap
-    /// arrows; the interpolation ghost and strip pick it up live.
-    fn command_brace_layer(&mut self) {
-        self.command_brace_layer_with(None);
-    }
-
-    /// The brace-layer write path, optionally freezing a supplied
-    /// glyph instead of the plain interpolation (interpolation
-    /// timing bakes eased positions through here).
-    fn command_brace_layer_with(&mut self, frozen_override: Option<norad::Glyph>) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(project) = self.project.as_ref() else { return };
-        if project.ds_doc.is_none() {
-            self.status_note =
-                Some("Intermediate layers need a designspace project".into());
-            return;
-        }
-        if project.master_at_location().is_some() {
-            self.status_note = Some(
-                "Move the axes off a master first: the intermediate freezes that location"
-                    .into(),
-            );
-            return;
-        }
-        let name = project.active_font().glyphs[index].name.to_string();
-        // Design coordinates and the "{500}" layer name.
-        let coords: Vec<(String, f64)> = project
-            .axes
-            .iter()
-            .map(|axis| {
-                let normalized =
-                    project.location.get(&axis.name).copied().unwrap_or(0.0);
-                (
-                    axis.name.clone(),
-                    runebender_core::var_model::denormalize_value(
-                        normalized, axis.min, axis.default, axis.max,
-                    )
-                    .round(),
-                )
-            })
-            .collect();
-        let layer_name = format!(
-            "{{{}}}",
-            coords
-                .iter()
-                .map(|(_, v)| format!("{v:.0}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        let normalized_location = project.location.clone();
-        let active = project.active;
-        let frozen = frozen_override
-            .or_else(|| project.interpolated_norad_glyph(&name))
-            .or_else(|| project.active_font().font.get_glyph(&name).cloned());
-        let Some(frozen) = frozen else { return };
-        let filename = project.active_font().source_path.file_name()
-            .map(|f| f.to_string_lossy().to_string());
-        let Some(filename) = filename else { return };
-        if let Some(font) = self.font_mut() {
-            if let Ok(layer) = font.font.layers.get_or_create_layer(&layer_name)
-            {
-                let mut copy = norad::Glyph::new(name.as_str());
-                copy.width = frozen.width;
-                copy.contours = frozen.contours.clone();
-                copy.components = frozen.components.clone();
-                copy.anchors = frozen.anchors.clone();
-                layer.insert_glyph(copy);
-                font.dirty = true;
-                font.modified_glyphs.insert(name.clone());
-            }
-        }
-        let Some(project) = self.project.as_mut() else { return };
-        let Some(doc) = project.ds_doc.as_mut() else { return };
-        let already = doc.sources.iter().any(|src| {
-            src.layer.as_deref() == Some(layer_name.as_str())
-                && src.filename == filename
-        });
-        if !already {
-            doc.sources.push(norad::designspace::Source {
-                name: Some(format!("brace {layer_name}")),
-                filename: filename.clone(),
-                layer: Some(layer_name.clone()),
-                location: coords
-                    .iter()
-                    .map(|(axis, value)| norad::designspace::Dimension {
-                        name: axis.clone(),
-                        xvalue: Some(*value as f32),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            });
-            project.brace.push(BraceSource {
-                master: active,
-                layer: layer_name.clone(),
-                location: normalized_location,
-            });
-            project.ds_dirty = true;
-        }
-        self.visible_glyph_layers.insert(layer_name.clone());
-        self.status_note =
-            Some(format!("Intermediate {layer_name} added for {name}").into());
-    }
-
-    /// Glyph > Check Joining: for every positional form, measure
-    /// the connecting stroke's band at its joining edges (init and
-    /// medi join at x = 0, medi and fina at x = advance), find the
-    /// font's common band, and select every form that misses it —
-    /// the Arabic joining-line rule, measured instead of eyeballed.
-    fn command_check_joining(&mut self) {
-        let Some(font) = self.font() else { return };
-        let tolerance_edge = 2.0;
-        let tolerance_band = 4.0;
-        // (glyph index, name, band) per joining edge, plus the forms
-        // that should join but never touch their edge.
-        let mut bands: Vec<(usize, f64, f64)> = Vec::new();
-        let mut broken: Vec<String> = Vec::new();
-        for (i, entry) in font.glyphs.iter().enumerate() {
-            let name = entry.name.as_ref();
-            let (joins_left, joins_right) = if name.ends_with(".init") {
-                (true, false)
-            } else if name.ends_with(".medi") {
-                (true, true)
-            } else if name.ends_with(".fina") {
-                (false, true)
-            } else {
-                continue;
-            };
-            let Some(glyph) = font.font.get_glyph(name) else { continue };
-            let outline = runebender_core::glyph_paths::glyph_to_bezpath(
-                glyph, &font.font,
-            );
-            for left in [true, false] {
-                let should = if left { joins_left } else { joins_right };
-                if !should {
-                    continue;
-                }
-                match joining_band(&outline, entry.advance, left, tolerance_edge)
-                {
-                    Some((lo, hi)) => bands.push((i, lo, hi)),
-                    None => broken.push(name.to_string()),
-                }
-            }
-        }
-        if bands.is_empty() && broken.is_empty() {
-            self.status_note =
-                Some("Joining: no positional forms to check".into());
-            return;
-        }
-        // The common band: median of the lows and highs.
-        let median = |mut values: Vec<f64>| {
-            values.sort_by(|a, b| a.total_cmp(b));
-            values[values.len() / 2]
-        };
-        let med_lo = median(bands.iter().map(|(_, lo, _)| *lo).collect());
-        let med_hi = median(bands.iter().map(|(_, _, hi)| *hi).collect());
-        let mut off: Vec<String> = bands
-            .iter()
-            .filter(|(_, lo, hi)| {
-                (lo - med_lo).abs() > tolerance_band
-                    || (hi - med_hi).abs() > tolerance_band
-            })
-            .map(|(i, _, _)| font.glyphs[*i].name.to_string())
-            .collect();
-        off.extend(broken.iter().cloned());
-        off.sort();
-        off.dedup();
-        let count = off.len();
-        self.multi_selected = off.into_iter().collect();
-        self.selected = None;
-        self.status_note = Some(
-            if count == 0 {
-                format!(
-                    "Joining: all forms share the {med_lo:.0}–{med_hi:.0} band"
-                )
-            } else {
-                format!(
-                    "Joining: {count} form(s) off the {med_lo:.0}–{med_hi:.0} band (selected)"
-                )
-            }
-            .into(),
-        );
-    }
-
-    /// Glyph menu: convert the open glyph's curves between cubic
-    /// and quadratic, in every master (structure must stay shared).
-    /// Quads to cubics is exact; the other way approximates within
-    /// upm/1000 units, the tolerance the TrueType compilers use.
-    fn command_convert_curves(&mut self, to_cubic: bool) {
-        let Some(index) = self.current_glyph_index() else { return };
-        if let Mode::Editor(i) = self.mode {
-            self.push_undo_snapshot(i);
-        }
-        let Some(project) = self.project.as_mut() else { return };
-        let name = project.active_font().glyphs[index].name.to_string();
-        let tolerance =
-            (project.active_font().units_per_em / 1000.0).max(0.5);
-        let mut converted = 0usize;
-        for master in project.masters.iter_mut() {
-            let Some(gi) = master.name_map.get(name.as_str()).copied() else {
-                continue;
-            };
-            let ok = master
-                .edit_glyph(gi, |g| {
-                    if to_cubic {
-                        quads_to_cubics(g)
-                    } else {
-                        cubics_to_quads(g, tolerance)
-                    }
-                })
-                .unwrap_or(false);
-            if ok {
-                converted += 1;
-            }
-        }
-        project.compute_compat();
-        self.editor.selected.clear();
-        self.status_note = Some(
-            if converted == 0 {
-                format!(
-                    "Nothing to convert to {}",
-                    if to_cubic { "cubic" } else { "quadratic" }
-                )
-            } else {
-                format!(
-                    "Converted to {} in {converted} master(s)",
-                    if to_cubic { "cubic" } else { "quadratic" }
-                )
-            }
-            .into(),
-        );
-    }
-
-    /// Apply a corner glyph at the context-menu node, in every
-    /// master (all masters must keep the same structure). The name
-    /// accepts "chamfer" or "_corner.chamfer".
-    fn command_apply_corner(&mut self, node: (usize, usize), name: &str) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(project) = self.project.as_mut() else { return };
-        let glyph_name = project.active_font().glyphs[index].name.to_string();
-        let corner_name = if name.starts_with("_corner.") {
-            name.to_string()
-        } else {
-            format!("_corner.{name}")
-        };
-        let mut applied = 0usize;
-        for master in project.masters.iter_mut() {
-            let Some(corner) =
-                master.font.get_glyph(corner_name.as_str()).cloned()
-            else {
-                continue;
-            };
-            let Some(gi) = master.name_map.get(glyph_name.as_str()).copied()
-            else {
-                continue;
-            };
-            let ok = master
-                .edit_glyph(gi, |g| {
-                    apply_corner_at(g, &corner, node.0, node.1)
-                })
-                .unwrap_or(false);
-            if ok {
-                applied += 1;
-            }
-        }
-        if applied == 0 {
-            self.status_note = Some(
-                format!(
-                    "No corner applied · needs a {corner_name} glyph and a line corner"
-                )
-                .into(),
-            );
-            return;
-        }
-        project.compute_compat();
-        self.editor.selected.clear();
-        self.status_note = Some(
-            format!("{corner_name} applied in {applied} master(s)").into(),
-        );
-    }
-
     /// Set a metrics key on the selected glyph (every master keeps
     /// the same key; the values differ per master when synced).
     fn apply_metrics_key(&mut self, left: bool, text: &str) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(project) = self.project.as_mut() else { return };
+        let Some(index) = self.current_glyph_index() else {
+            return;
+        };
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
         let name = project.active_font().glyphs[index].name.to_string();
         let text = text.trim().to_string();
         if !text.is_empty() && parse_metrics_key(&text).is_none() {
-            self.status_note =
-                Some("Metrics key: =glyph, =|glyph, =glyph+10, or =50".into());
+            self.status_note = Some("Metrics key: =glyph, =|glyph, =glyph+10, or =50".into());
             return;
         }
         for master in project.masters.iter_mut() {
@@ -9451,319 +6191,19 @@ impl Workspace {
         self.command_sync_metrics();
     }
 
-    /// Glyph > Reinterpolate: rebuild the current glyph's outline
-    /// in the active master from the other masters, evaluated at
-    /// this master's location.
-    fn command_reinterpolate(&mut self) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        let rebuilt = match self
-            .project
-            .as_ref()
-            .map(|p| p.reinterpolated_from_others(&name))
-        {
-            Some(Ok(glyph)) => glyph,
-            Some(Err(why)) => {
-                self.status_note = Some(why.into());
-                return;
-            }
-            None => return,
-        };
-        self.push_undo_snapshot(index);
-        if let Some(font) = self.font_mut() {
-            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
-                glyph.contours = rebuilt.contours;
-                glyph.width = rebuilt.width;
-                font.dirty = true;
-                font.modified_glyphs.insert(name.clone());
-            }
-            font.refresh_from_font();
-        }
-        self.status_note =
-            Some(format!("{name}: reinterpolated from the other masters").into());
-    }
-
-    /// Path > Tidy up Paths on the current glyph (active master).
-    fn command_tidy_paths(&mut self) {
-        let Some(index) = self.current_glyph_index() else { return };
-        self.push_undo_snapshot(index);
-        let removed = self
-            .font_mut()
-            .and_then(|f| f.edit_glyph(index, |g| tidy_contours(g)))
-            .unwrap_or(0);
-        if removed == 0 {
-            self.editor.undo.pop();
-        }
-        self.status_note = Some(
-            format!("Tidy up Paths: {removed} point(s) removed").into(),
-        );
-    }
-
-    /// Path > Correct Path Direction on the current glyph.
-    fn command_correct_path_direction(&mut self) {
-        let Some(index) = self.current_glyph_index() else { return };
-        self.push_undo_snapshot(index);
-        let flipped = self
-            .font_mut()
-            .and_then(|f| f.edit_glyph(index, |g| correct_path_directions(g)))
-            .unwrap_or(0);
-        if flipped == 0 {
-            self.editor.undo.pop();
-        }
-        self.status_note = Some(
-            format!("Correct Path Direction: {flipped} contour(s) reversed")
-                .into(),
-        );
-    }
-
-    /// Path > Round Coordinates on the current glyph.
-    fn command_round_coordinates(&mut self) {
-        let Some(index) = self.current_glyph_index() else { return };
-        self.push_undo_snapshot(index);
-        let moved = self
-            .font_mut()
-            .and_then(|f| f.edit_glyph(index, |g| round_glyph_coordinates(g)))
-            .unwrap_or(0);
-        if moved == 0 {
-            self.editor.undo.pop();
-        }
-        self.status_note = Some(
-            format!("Round Coordinates: {moved} point(s) moved").into(),
-        );
-    }
-
-    /// Edit > Select All / Deselect All / Invert Selection on the
-    /// open glyph's points.
-    fn command_select_points(&mut self, mode: u8) {
-        let Mode::Editor(index) = self.mode else { return };
-        let all: Vec<(usize, usize)> = self
-            .font()
-            .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
-            .map(|g| {
-                g.contours
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(ci, c)| {
-                        (0..c.points.len()).map(move |pi| (ci, pi))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        match mode {
-            0 => {
-                self.editor.selected = all
-                    .into_iter()
-                    .filter(|id| !self.editor.locked_points.contains(id))
-                    .collect();
-            }
-            1 => self.editor.selected.clear(),
-            _ => {
-                let current = std::mem::take(&mut self.editor.selected);
-                self.editor.selected = all
-                    .into_iter()
-                    .filter(|id| {
-                        !current.contains(id)
-                            && !self.editor.locked_points.contains(id)
-                    })
-                    .collect();
-            }
-        }
-    }
-
-    /// Glyph > Duplicate Glyph: copy the current glyph (outline,
-    /// components, anchors, width) to the next free name.NNN in
-    /// every master, unencoded.
-    fn command_duplicate_glyph(&mut self) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(base) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        let Some(project) = self.project.as_mut() else { return };
-        let taken: std::collections::HashSet<String> = project
-            .masters
-            .iter()
-            .flat_map(|m| m.name_map.keys().cloned())
-            .collect();
-        let stem = base.split('.').next().unwrap_or(&base).to_string();
-        let mut counter = 1;
-        let mut name = format!("{stem}.{counter:03}");
-        while taken.contains(&name) {
-            counter += 1;
-            name = format!("{stem}.{counter:03}");
-        }
-        for master in project.masters.iter_mut() {
-            let Some(src) = master.font.get_glyph(base.as_str()).cloned()
-            else {
-                continue;
-            };
-            master.add_glyph(&name, src.width);
-            if let Some(copy) = master.font.get_glyph_mut(name.as_str()) {
-                copy.contours = src.contours.clone();
-                copy.components = src.components.clone();
-                copy.anchors = src.anchors.clone();
-                copy.width = src.width;
-                copy.lib = src.lib.clone();
-            }
-            master.dirty = true;
-            master.modified_glyphs.insert(name.clone());
-            master.refresh_from_font();
-        }
-        project.recheck_compat(&name);
-        self.selected = self
-            .font()
-            .and_then(|f| f.name_map.get(&name).copied());
-        self.sidebar_counts = None;
-        self.status_note = Some(format!("Duplicated {base} as {name}").into());
-    }
-
-    /// Glyph > Export Glyph as SVG: writes <name>.svg beside the
-    /// project source (or the home directory before Save As).
-    fn command_export_glyph_svg(&mut self) {
-        #[cfg(target_family = "wasm")]
-        {
-            self.status_note = Some("SVG export: desktop only".into());
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let Some(index) = self.current_glyph_index() else { return };
-            let Some(font) = self.font() else { return };
-            let name = font.glyphs[index].name.to_string();
-            let Some(glyph) = font.font.get_glyph(name.as_str()) else {
-                return;
-            };
-            let path = runebender_core::glyph_paths::glyph_to_bezpath(
-                glyph, &font.font,
-            );
-            let ascender = font.font.font_info.ascender.unwrap_or(800.0);
-            let descender = font.font.font_info.descender.unwrap_or(-200.0);
-            let svg = glyph_svg(&path, glyph.width, ascender, descender);
-            let dir = self
-                .project
-                .as_ref()
-                .and_then(|p| p.export_source.as_ref())
-                .and_then(|p| p.parent().map(PathBuf::from))
-                .unwrap_or_else(|| {
-                    std::env::var("HOME")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|_| PathBuf::from("."))
-                });
-            let file = dir.join(format!("{name}.svg"));
-            self.status_note = Some(match std::fs::write(&file, svg) {
-                Ok(()) => format!("Wrote {}", file.display()).into(),
-                Err(e) => format!("SVG export failed: {e}").into(),
-            });
-        }
-    }
-
-    /// Glyph > Sync Metrics: apply every metrics key in every
-    /// master. Chained keys (=n where n itself has a key) settle by
-    /// repeating passes until nothing moves.
-    fn command_sync_metrics(&mut self) {
-        let Some(project) = self.project.as_mut() else { return };
-        let mut adjusted = 0usize;
-        for _pass in 0..5 {
-            let mut moved = false;
-            for master in project.masters.iter_mut() {
-                let keyed: Vec<(usize, Option<String>, Option<String>)> =
-                    (0..master.glyphs.len())
-                        .filter_map(|i| {
-                            let glyph = master
-                                .font
-                                .get_glyph(master.glyphs[i].name.as_ref())?;
-                            let l = read_metrics_key(glyph, true);
-                            let r = read_metrics_key(glyph, false);
-                            (l.is_some() || r.is_some()).then_some((i, l, r))
-                        })
-                        .collect();
-                for (index, left, right) in keyed {
-                    // Targets from the same master's referenced glyphs.
-                    let resolve = |master: &FontModel,
-                                   formula: &MetricsFormula,
-                                   want_left: bool|
-                     -> Option<f64> {
-                        match formula {
-                            MetricsFormula::Constant(v) => Some(*v),
-                            MetricsFormula::Reference { glyph, mirror, op } => {
-                                let ref_index =
-                                    master.name_map.get(glyph.as_str()).copied()?;
-                                let ink = master.ink_bounds(ref_index)?;
-                                let advance = master.glyphs[ref_index].advance;
-                                let read_left = want_left != *mirror;
-                                let mut value = if read_left {
-                                    ink.x0
-                                } else {
-                                    advance - ink.x1
-                                };
-                                if let Some((sign, amount)) = op {
-                                    value = match sign {
-                                        '+' => value + amount,
-                                        '-' => value - amount,
-                                        _ => value * amount,
-                                    };
-                                }
-                                Some(value)
-                            }
-                        }
-                    };
-                    if let Some(formula) =
-                        left.as_deref().and_then(parse_metrics_key)
-                    {
-                        if let (Some(target), Some(ink)) = (
-                            resolve(master, &formula, true),
-                            master.ink_bounds(index),
-                        ) {
-                            let delta = (target - ink.x0).round();
-                            if delta != 0.0 {
-                                master.shift_ink(index, delta);
-                                moved = true;
-                                adjusted += 1;
-                            }
-                        }
-                    }
-                    if let Some(formula) =
-                        right.as_deref().and_then(parse_metrics_key)
-                    {
-                        if let (Some(target), Some(ink)) = (
-                            resolve(master, &formula, false),
-                            master.ink_bounds(index),
-                        ) {
-                            let advance = master.glyphs[index].advance;
-                            let want = (ink.x1 + target).round();
-                            if (advance - want).abs() >= 1.0 {
-                                master.set_advance(index, want);
-                                moved = true;
-                                adjusted += 1;
-                            }
-                        }
-                    }
-                }
-            }
-            if !moved {
-                break;
-            }
-        }
-        self.rebuild_text_models();
-        self.status_note = Some(
-            if adjusted == 0 {
-                "Metrics keys: everything in sync".to_string()
-            } else {
-                format!("Metrics keys: {adjusted} sidebearings adjusted")
-            }
-            .into(),
-        );
-    }
-
     /// Commit a dragged intermediate point: store it in the glyph's
     /// HOI lib key (dragging back onto the linear middle clears it),
     /// then rebake the brace layers so every consumer follows.
     fn commit_hoi_intermediate(&mut self, id: (usize, usize), q: (f64, f64)) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(project) = self.project.as_mut() else { return };
-        let Some((lo, hi)) = project.axis_end_masters() else { return };
+        let Some(index) = self.current_glyph_index() else {
+            return;
+        };
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        let Some((lo, hi)) = project.axis_end_masters() else {
+            return;
+        };
         let name = project.active_font().glyphs[index].name.to_string();
         let linear_mid = {
             let a = project.masters[lo]
@@ -9789,10 +6229,8 @@ impl Workspace {
                 return;
             };
             let mut map = read_hoi_intermediates(glyph);
-            let back_to_linear = ((q.0 - linear_mid.0).powi(2)
-                + (q.1 - linear_mid.1).powi(2))
-            .sqrt()
-                < 3.0;
+            let back_to_linear =
+                ((q.0 - linear_mid.0).powi(2) + (q.1 - linear_mid.1).powi(2)).sqrt() < 3.0;
             if back_to_linear {
                 map.remove(&id);
             } else {
@@ -9810,10 +6248,18 @@ impl Workspace {
     /// their quadratic, the rest linear — standard sparse sources
     /// out, so fontc and fontmake follow the curves exactly enough.
     fn bake_hoi(&mut self) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(project) = self.project.as_mut() else { return };
-        let Some((lo, hi)) = project.axis_end_masters() else { return };
-        let Some(axis) = project.axes.first().cloned() else { return };
+        let Some(index) = self.current_glyph_index() else {
+            return;
+        };
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        let Some((lo, hi)) = project.axis_end_masters() else {
+            return;
+        };
+        let Some(axis) = project.axes.first().cloned() else {
+            return;
+        };
         let name = project.active_font().glyphs[index].name.to_string();
         let (lo_glyph, hi_glyph, curves) = {
             let a = project.masters[lo].font.get_glyph(name.as_str()).cloned();
@@ -9832,56 +6278,41 @@ impl Workspace {
             let layer_name = format!("{{{design:.0}}}");
             if curves.is_empty() {
                 // Cleared: drop our baked copies.
-                if let Some(layer) =
-                    project.masters[lo].font.layers.get_mut(&layer_name)
-                {
+                if let Some(layer) = project.masters[lo].font.layers.get_mut(&layer_name) {
                     layer.remove_glyph(name.as_str());
                 }
                 project.masters[lo].dirty = true;
                 continue;
             }
             let mut baked = lo_glyph.clone();
-            baked.width =
-                lo_glyph.width + (hi_glyph.width - lo_glyph.width) * t;
+            baked.width = lo_glyph.width + (hi_glyph.width - lo_glyph.width) * t;
             for (ci, contour) in baked.contours.iter_mut().enumerate() {
                 for (pi, point) in contour.points.iter_mut().enumerate() {
-                    let Some(pb) = hi_glyph
-                        .contours
-                        .get(ci)
-                        .and_then(|c| c.points.get(pi))
-                    else {
+                    let Some(pb) = hi_glyph.contours.get(ci).and_then(|c| c.points.get(pi)) else {
                         continue;
                     };
                     let a = (point.x, point.y);
                     let b = (pb.x, pb.y);
                     let pos = match curves.get(&(ci, pi)) {
                         Some(&q) => hoi_quad_at(a, b, q, t),
-                        None => (
-                            a.0 + (b.0 - a.0) * t,
-                            a.1 + (b.1 - a.1) * t,
-                        ),
+                        None => (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t),
                     };
                     point.x = pos.0.round();
                     point.y = pos.1.round();
                 }
             }
             let master = &mut project.masters[lo];
-            if let Ok(layer) = master.font.layers.get_or_create_layer(&layer_name)
-            {
+            if let Ok(layer) = master.font.layers.get_or_create_layer(&layer_name) {
                 layer.insert_glyph(baked);
                 master.dirty = true;
                 master.modified_glyphs.insert(name.clone());
             }
             // Register the sparse source once.
-            let registered = project
-                .ds_doc
-                .as_ref()
-                .is_some_and(|doc| {
-                    doc.sources.iter().any(|src| {
-                        src.layer.as_deref() == Some(layer_name.as_str())
-                            && src.filename == filename
-                    })
-                });
+            let registered = project.ds_doc.as_ref().is_some_and(|doc| {
+                doc.sources.iter().any(|src| {
+                    src.layer.as_deref() == Some(layer_name.as_str()) && src.filename == filename
+                })
+            });
             if !registered {
                 if let Some(doc) = project.ds_doc.as_mut() {
                     doc.sources.push(norad::designspace::Source {
@@ -9901,7 +6332,10 @@ impl Workspace {
                 location.insert(
                     axis.name.clone(),
                     runebender_core::var_model::normalize_value(
-                        design, axis.min, axis.default, axis.max,
+                        design,
+                        axis.min,
+                        axis.default,
+                        axis.max,
                     ),
                 );
                 project.brace.push(BraceSource {
@@ -9925,244 +6359,6 @@ impl Workspace {
         );
     }
 
-    /// Interpolation timing: bake an ease into a brace layer at the
-    /// preview location. Positive ease means the change comes late
-    /// (the light shape holds on), negative means early. Selected
-    /// points ease; the rest stay on the straight interpolation, so
-    /// the layer stays point-compatible. Standard designspace out —
-    /// every compiler understands the result.
-    fn command_ease_interpolation(&mut self, ease: f64) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(project) = self.project.as_ref() else { return };
-        let Some(axis) = project.axes.first().cloned() else { return };
-        if project.master_at_location().is_some() {
-            self.status_note = Some(
-                "Move the axes off a master first: the ease bakes at that location"
-                    .into(),
-            );
-            return;
-        }
-        let name = project.active_font().glyphs[index].name.to_string();
-        // Where the preview sits along the axis, 0..1.
-        let normalized =
-            project.location.get(&axis.name).copied().unwrap_or(0.0);
-        let design = runebender_core::var_model::denormalize_value(
-            normalized, axis.min, axis.default, axis.max,
-        );
-        let t01 = ((design - axis.min) / (axis.max - axis.min)).clamp(0.0, 1.0);
-        let gamma = (ease / 50.0).exp();
-        let eased_t01 = t01.powf(gamma);
-        let eased_design = axis.min + (axis.max - axis.min) * eased_t01;
-        let mut eased_location = project.location.clone();
-        eased_location.insert(
-            axis.name.clone(),
-            runebender_core::var_model::normalize_value(
-                eased_design, axis.min, axis.default, axis.max,
-            ),
-        );
-        let here = project.interpolated_norad_glyph(&name);
-        let eased = project.interpolated_at(&name, &eased_location);
-        let (Some(mut merged), Some(eased)) = (here, eased) else {
-            self.status_note =
-                Some("Ease needs compatible masters".into());
-            return;
-        };
-        // Merge: selected points take the eased position.
-        let selected = self.editor.selected.clone();
-        let all = selected.is_empty();
-        for (ci, contour) in merged.contours.iter_mut().enumerate() {
-            for (pi, point) in contour.points.iter_mut().enumerate() {
-                if !all && !selected.contains(&(ci, pi)) {
-                    continue;
-                }
-                let Some(src) = eased
-                    .contours
-                    .get(ci)
-                    .and_then(|c| c.points.get(pi))
-                else {
-                    continue;
-                };
-                point.x = src.x;
-                point.y = src.y;
-            }
-        }
-        self.command_brace_layer_with(Some(merged));
-        self.status_note = Some(
-            format!(
-                "Ease {ease:+.0} baked at {} {design:.0} (t {:.2} → {:.2})",
-                axis.tag, t01, eased_t01
-            )
-            .into(),
-        );
-    }
-
-    /// Add a shape switch (bracket layer): an unencoded `.bold`
-    /// alternate copied into every master, plus a designspace rule
-    /// substituting it from `at` up to the end of the first axis.
-    /// The repo convention (DESIGN.md): design the alternate in the
-    /// Regular master; the copies start red.
-    fn command_add_shape_switch(&mut self, at: f64) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(project) = self.project.as_mut() else { return };
-        if project.ds_doc.is_none() {
-            self.status_note =
-                Some("Shape switches need a designspace project".into());
-            return;
-        }
-        let Some(axis) = project.axes.first().cloned() else { return };
-        if !(axis.min..=axis.max).contains(&at) {
-            self.status_note = Some(
-                format!("Switch point outside {} {}–{}", axis.tag, axis.min, axis.max)
-                    .into(),
-            );
-            return;
-        }
-        let name = project.active_font().glyphs[index].name.to_string();
-        let alt = format!("{name}.bold");
-        let (Ok(sub_name), Ok(sub_with)) =
-            (norad::Name::new(&name), norad::Name::new(&alt))
-        else {
-            return;
-        };
-        for master in project.masters.iter_mut() {
-            if master.name_map.contains_key(&alt) {
-                continue;
-            }
-            let Some(source) = master.font.get_glyph(name.as_str()).cloned()
-            else {
-                continue;
-            };
-            let mut copy = norad::Glyph::new(alt.as_str());
-            copy.width = source.width;
-            copy.contours = source.contours.clone();
-            copy.components = source.components.clone();
-            copy.anchors = source.anchors.clone();
-            // Unencoded, and red: a placeholder awaiting its design
-            // (the repo's lane-2 convention).
-            runebender_core::theme_oklch::set_glyph_mark(&mut copy, Some("red"));
-            master.font.default_layer_mut().insert_glyph(copy);
-            master.dirty = true;
-            master.modified_glyphs.insert(alt.clone());
-            master.refresh_from_font();
-        }
-        let doc = project.ds_doc.as_mut().expect("checked above");
-        doc.rules.processing = norad::designspace::RuleProcessing::Last;
-        let exists = doc.rules.rules.iter().any(|rule| {
-            rule.substitutions
-                .iter()
-                .any(|sub| sub.name.as_str() == name)
-        });
-        if !exists {
-            doc.rules.rules.push(norad::designspace::Rule {
-                name: Some(format!("{name} bold")),
-                condition_sets: vec![norad::designspace::ConditionSet {
-                    conditions: vec![norad::designspace::Condition {
-                        name: axis.name.clone(),
-                        minimum: Some(at as f32),
-                        maximum: Some(axis.max as f32),
-                    }],
-                }],
-                substitutions: vec![norad::designspace::Substitution {
-                    name: sub_name,
-                    with: sub_with,
-                }],
-            });
-        }
-        project.ds_dirty = true;
-        project.compute_compat();
-        self.sidebar_counts = None;
-        self.status_note = Some(
-            format!("{name} switches to {alt} at {} ≥ {at:.0}", axis.tag).into(),
-        );
-    }
-
-    /// Drop the rule that substitutes this glyph (the alternates
-    /// stay; delete them like any glyph).
-    fn command_remove_shape_switch(&mut self) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(project) = self.project.as_mut() else { return };
-        let Some(name) = project
-            .active_font()
-            .glyphs
-            .get(index)
-            .map(|g| g.name.to_string())
-        else {
-            return;
-        };
-        let Some(doc) = project.ds_doc.as_mut() else { return };
-        let before = doc.rules.rules.len();
-        doc.rules.rules.retain(|rule| {
-            !rule
-                .substitutions
-                .iter()
-                .any(|sub| sub.name.as_str() == name)
-        });
-        if doc.rules.rules.len() != before {
-            project.ds_dirty = true;
-            self.status_note = Some(format!("Shape switch removed for {name}").into());
-        }
-    }
-
-    /// Exchange the drawing with a named layer's copy (editor only,
-    /// so the swap is undoable like the background swap).
-    fn command_swap_layer(&mut self, layer_name: &str) {
-        let Mode::Editor(index) = self.mode else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        self.push_undo_snapshot(index);
-        let mut swapped = false;
-        if let Some(font) = self.font_mut() {
-            let fg = font
-                .font
-                .get_glyph(name.as_str())
-                .map(|g| g.contours.clone());
-            let other = font
-                .font
-                .layers
-                .get(layer_name)
-                .and_then(|l| l.get_glyph(name.as_str()))
-                .map(|g| g.contours.clone());
-            if let (Some(fg), Some(other)) = (fg, other) {
-                if let Some(layer) = font.font.layers.get_mut(layer_name) {
-                    if let Some(g) = layer.get_glyph_mut(name.as_str()) {
-                        g.contours = fg;
-                    }
-                }
-                font.edit_glyph(index, |g| {
-                    g.contours = other;
-                });
-                swapped = true;
-            }
-        }
-        if !swapped {
-            self.editor.undo.pop();
-        }
-    }
-
-    /// Drop a layer's copy of the current glyph; an emptied layer
-    /// goes with it.
-    fn command_delete_layer_glyph(&mut self, layer_name: &str) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        if let Some(font) = self.font_mut() {
-            let mut emptied = false;
-            if let Some(layer) = font.font.layers.get_mut(layer_name) {
-                layer.remove_glyph(name.as_str());
-                emptied = layer.is_empty();
-            }
-            if emptied {
-                font.font.layers.remove(layer_name);
-            }
-            font.dirty = true;
-        }
-        self.visible_glyph_layers.remove(layer_name);
-    }
-
     /// The background layer we read: public.background first, then
     /// RoboFont's conventional plain "background".
     fn background_layer_name(font: &norad::Font) -> Option<String> {
@@ -10174,3627 +6370,8 @@ impl Workspace {
         None
     }
 
-    /// Curves section: comb + continuity toggles (web CurvePanel).
-    fn curves_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let toggle = |id: &'static str,
-                      label: &'static str,
-                      active: bool,
-                      cx: &mut Context<Self>,
-                      on: fn(&mut Self)| {
-            div()
-                .id(id)
-                .px_2()
-                .py_0p5()
-                .rounded(t::radius())
-                .text_sm()
-                .cursor_pointer()
-                .border(t::stroke())
-                .when(active, |el| {
-                    el.border_color(t::accent()).text_color(t::accent())
-                })
-                .when(!active, |el| {
-                    el.border_color(t::cell_border()).text_color(t::text())
-                })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    on(this);
-                    cx.notify();
-                }))
-        };
-        let body = div()
-            .flex()
-            .gap_1()
-            .child(toggle(
-                "curve-comb",
-                "Curvature comb",
-                self.curve_comb,
-                cx,
-                |this| this.curve_comb = !this.curve_comb,
-            ))
-            .child(toggle(
-                "curve-continuity",
-                "Continuity G0–G3",
-                self.curve_continuity,
-                cx,
-                |this| this.curve_continuity = !this.curve_continuity,
-            ));
-        // Fit Curve: type a percentage, Enter sets the selected
-        // segments' handles to that fraction of their maximum (100 =
-        // handles at the tangent intersection), Glyphs' scale.
-        let body = div().flex().flex_col().gap_2().child(body).child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child("Fit Curve"),
-                )
-                .child(div().w(px(64.0)).child(
-                    widgets::input::Input::new(&self.fit_input),
-                )),
-        );
-        self.section(cx, "Curves", body)
-    }
-
     /// Measure-tool HUD layer toggles (web SelectPanel): only shown
     /// while the Measure tool is active.
-
-    /// Background section: show/send/swap/clear plus the reference
-    /// glyph (web's Background block).
-    fn background_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let button = |id: &'static str,
-                      label: &'static str,
-                      active: bool,
-                      cx: &mut Context<Self>,
-                      on: fn(&mut Self)| {
-            div()
-                .id(id)
-                .px_2()
-                .py_0p5()
-                .rounded(t::radius())
-                .text_sm()
-                .cursor_pointer()
-                .border(t::stroke())
-                .when(active, |el| {
-                    el.border_color(t::accent()).text_color(t::accent())
-                })
-                .when(!active, |el| {
-                    el.border_color(t::cell_border()).text_color(t::text())
-                })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    on(this);
-                    cx.notify();
-                }))
-        };
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_1()
-                    .child(button(
-                        "bg-show",
-                        "Show background",
-                        self.show_background,
-                        cx,
-                        |this| this.show_background = !this.show_background,
-                    ))
-                    .child(button(
-                        "mark-cloud",
-                        "Mark cloud",
-                        self.show_mark_cloud,
-                        cx,
-                        |this| this.show_mark_cloud = !this.show_mark_cloud,
-                    ))
-                    .child(button(
-                        "bg-send",
-                        "Send to background",
-                        false,
-                        cx,
-                        |this| this.command_send_to_background(),
-                    ))
-                    .child(button("bg-swap", "Swap", false, cx, |this| {
-                        this.command_swap_background()
-                    }))
-                    .child(button("bg-clear", "Clear", false, cx, |this| {
-                        this.command_clear_background()
-                    })),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(t::text_muted())
-                            .child("Reference"),
-                    )
-                    .child(div().flex_1().child(
-                        widgets::input::Input::new(
-                            &self.reference_glyph_input,
-                        ),
-                    )),
-            );
-        self.section(cx, "Background", body)
-    }
-
-    /// Layers section: one row per master, the active one highlighted.
-    fn layers_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let (names, active): (Vec<SharedString>, usize) = match &self.project {
-            Some(p) => (p.master_names.clone(), p.active),
-            None => (Vec::new(), 0),
-        };
-        let reference = self.reference_layers.clone();
-        // A thumbnail of the current glyph in each master, the web
-        // MasterToolbar's glyph buttons relocated into this section.
-        let glyph_name: Option<String> = self
-            .selected
-            .and_then(|i| self.font().map(|f| f.glyphs[i].name.to_string()));
-        let thumbs: Vec<Option<(Arc<BezPath>, f64, f64, f64)>> = match (
-            &self.project,
-            &glyph_name,
-        ) {
-            (Some(p), Some(name)) => p
-                .masters
-                .iter()
-                .map(|m| {
-                    m.name_map.get(name).map(|&g| {
-                        (
-                            m.glyphs[g].path.clone(),
-                            m.glyphs[g].advance,
-                            m.ascender,
-                            m.descender,
-                        )
-                    })
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        let rows: Vec<_> = names
-            .into_iter()
-            .enumerate()
-            .map(|(i, name)| {
-                let is_active = i == active;
-                let eye_on = reference.contains(&i);
-                let thumb = thumbs.get(i).cloned().flatten();
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .children(thumb.map(|(path, advance, asc, desc)| {
-                        div()
-                            .id(("layer-thumb", i))
-                            .w(px(22.0))
-                            .h(px(22.0))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.reference_layers.remove(&i) {
-                                    this.reference_layers.insert(i);
-                                }
-                                cx.notify();
-                            }))
-                            .child(
-                            canvas(
-                                move |bounds, _, _| bounds,
-                                move |_,
-                                      bounds: Bounds<gpui::Pixels>,
-                                      window,
-                                      _| {
-                                    let h: f32 = bounds.size.height.into();
-                                    let w: f32 = bounds.size.width.into();
-                                    let em = (asc - desc).max(1.0);
-                                    let scale = (h as f64 / em)
-                                        .min(w as f64 / advance.max(1.0));
-                                    let ox = (w as f64
-                                        - advance * scale)
-                                        / 2.0;
-                                    let baseline =
-                                        h as f64 + desc * scale;
-                                    let view = Affine::translate((
-                                        ox, baseline,
-                                    ))
-                                        * Affine::scale_non_uniform(
-                                            scale, -scale,
-                                        );
-                                    if let Some(p) = build_fill_path(
-                                        &path,
-                                        view,
-                                        bounds.origin,
-                                    ) {
-                                        window.paint_path(
-                                            p,
-                                            t::glyph_fill(),
-                                        );
-                                    }
-                                },
-                            )
-                            .size_full(),
-                        )
-                    }))
-                    .child(
-                        // The active master reads in the accent, like a
-                        // picked category or tab. Clicking the
-                        // thumbnail beside it toggles that master as a
-                        // dim reference underlay — the dot that used to
-                        // carry that is gone.
-                        div()
-                            .id(("layer", i))
-                            .h(px(20.0))
-                            .flex_1()
-                            .px_1()
-                            .flex()
-                            .items_center()
-                            .rounded(t::radius())
-                            .text_sm()
-                            .cursor_pointer()
-                            .when(is_active, |el| {
-                                el.border(t::stroke())
-                                    .border_color(t::accent())
-                                    .text_color(t::accent())
-                            })
-                            .when(!is_active && eye_on, |el| {
-                                el.text_color(t::text())
-                            })
-                            .when(!is_active && !eye_on, |el| {
-                                el.text_color(t::text_muted())
-                            })
-                            .child(name)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.switch_master(i);
-                                cx.notify();
-                            })),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-        let mut body = div().flex().flex_col().children(rows);
-        // Per-glyph layers: any other UFO layer holding this glyph.
-        // Eye = underlay, arrows = swap with the drawing, × = drop.
-        if let (Some(font), Some(name)) = (
-            self.font(),
-            self.current_glyph_index()
-                .and_then(|i| self.font().map(|f| f.glyphs[i].name.to_string())),
-        ) {
-            let layers = Self::glyph_layer_names(&font.font, &name);
-            if !layers.is_empty() {
-                body = body.child(
-                    div()
-                        .mt_1()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child("Glyph Layers"),
-                );
-            }
-            for (i, layer) in layers.into_iter().enumerate() {
-                let eye_on = self.visible_glyph_layers.contains(&layer);
-                let (l_eye, l_swap, l_del) =
-                    (layer.clone(), layer.clone(), layer.clone());
-                body = body.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            div()
-                                .id(("glyph-layer-eye", i))
-                                .w(px(20.0))
-                                .text_sm()
-                                .cursor_pointer()
-                                .text_color(if eye_on {
-                                    t::accent()
-                                } else {
-                                    t::text_muted()
-                                })
-                                .child("◉")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if !this.visible_glyph_layers.remove(&l_eye)
-                                    {
-                                        this.visible_glyph_layers
-                                            .insert(l_eye.clone());
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .truncate()
-                                .text_sm()
-                                .text_color(t::text())
-                                .child(layer.clone()),
-                        )
-                        .child(
-                            div()
-                                .id(("glyph-layer-swap", i))
-                                .px_1()
-                                .text_sm()
-                                .cursor_pointer()
-                                .text_color(t::text_muted())
-                                .hover(|el| el.text_color(t::text()))
-                                .child("⇅")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.command_swap_layer(&l_swap);
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id(("glyph-layer-del", i))
-                                .px_1()
-                                .text_sm()
-                                .cursor_pointer()
-                                .text_color(t::text_muted())
-                                .hover(|el| el.text_color(t::text()))
-                                .child("×")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.command_delete_layer_glyph(&l_del);
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            }
-            body = body.child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .id("glyph-layer-backup")
-                            .mt_1()
-                            .px_2()
-                            .py_0p5()
-                            .rounded(t::radius())
-                            .text_sm()
-                            .cursor_pointer()
-                            .border(t::stroke())
-                            .border_color(t::cell_border())
-                            .text_color(t::text())
-                            .child("+ Backup")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.command_backup_layer();
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        // A brace layer: freeze the interpolation at
-                        // the preview location as a sparse master.
-                        div()
-                            .id("glyph-layer-brace")
-                            .mt_1()
-                            .px_2()
-                            .py_0p5()
-                            .rounded(t::radius())
-                            .text_sm()
-                            .cursor_pointer()
-                            .border(t::stroke())
-                            .border_color(t::cell_border())
-                            .text_color(t::text())
-                            .child("+ Intermediate")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.command_brace_layer();
-                                cx.notify();
-                            })),
-                    ),
-            );
-        }
-        self.section(cx, "Masters", body)
-    }
-
-
-    /// The context-menu overlay, absolutely positioned inside the
-    /// editor container.
-    fn context_menu_overlay(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::Stateful<gpui::Div>> {
-        let menu = self.context_menu.as_ref()?;
-        let item = |id: (&'static str, usize),
-                    label: SharedString,
-                    action: &'static str,
-                    cx: &mut Context<Self>| {
-            div()
-                .id(id)
-                .px_3()
-                .py_1()
-                .text_sm()
-                .text_color(t::text())
-                .cursor_pointer()
-                .hover(|el| el.bg(t::cell_selected_bg()))
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.context_menu_action(action);
-                    cx.notify();
-                }))
-        };
-        let mut list = div().flex().flex_col().py_1();
-        // Component items first: when you right-click a component,
-        // that is what you meant, and the lock is the thing you reach
-        // for most while placing marks.
-        match menu.component {
-            Some((_, true)) => {
-                list = list.child(item(
-                    ("cm", 0),
-                    "Unlock from Anchor".into(),
-                    "unlock-component",
-                    cx,
-                ));
-            }
-            Some((_, false)) => {
-                list = list.child(item(
-                    ("cm", 0),
-                    "Lock to Anchor".into(),
-                    "lock-component",
-                    cx,
-                ));
-            }
-            None => {}
-        }
-        if menu.component.is_some() {
-            list = list.child(item(
-                ("cm", 1),
-                "Decompose Component".into(),
-                "decompose-component",
-                cx,
-            ));
-        } else if menu.has_components {
-            list = list.child(item(
-                ("cm", 1),
-                "Decompose Components".into(),
-                "decompose-all",
-                cx,
-            ));
-        }
-        if menu.adding_component {
-            list = list.child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .w(px(180.0))
-                    .child(widgets::input::Input::new(
-                        &self.component_name_input,
-                    )),
-            );
-        } else {
-            list = list.child(item(
-                ("cm", 2),
-                "Add Component…".into(),
-                "add-component",
-                cx,
-            ));
-        }
-        if menu.applying_corner {
-            list = list.child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .w(px(180.0))
-                    .child(widgets::input::Input::new(
-                        &self.corner_name_input,
-                    )),
-            );
-        } else if menu.start_point.is_some() {
-            list = list.child(item(
-                ("cm", 14),
-                "Apply Corner…".into(),
-                "apply-corner",
-                cx,
-            ));
-        }
-        if menu.contour.is_some() {
-            list = list.child(item(
-                ("cm", 21),
-                "Insert Node Here".into(),
-                "node-insert",
-                cx,
-            ));
-        }
-        if let Some((ci, _)) = menu.start_point {
-            let open_contour = self
-                .current_glyph_index()
-                .and_then(|i| self.font().map(|f| (i, f)))
-                .and_then(|(i, f)| {
-                    f.font
-                        .get_glyph(f.glyphs[i].name.as_ref())?
-                        .contours
-                        .get(ci)
-                        .map(|c| {
-                            c.points
-                                .first()
-                                .is_some_and(|p| p.typ == norad::PointType::Move)
-                        })
-                })
-                .unwrap_or(false);
-            list = list.child(item(
-                ("cm", 22),
-                if open_contour {
-                    "Close Contour"
-                } else {
-                    "Open Contour Here"
-                }
-                .into(),
-                "contour-open-close",
-                cx,
-            ));
-        }
-        if let Some(node) = menu.start_point {
-            let locked = self.editor.locked_points.contains(&node);
-            list = list.child(item(
-                ("cm", 19),
-                if locked { "Unlock Node" } else { "Lock Node" }.into(),
-                "node-lock",
-                cx,
-            ));
-        }
-        if !self.editor.locked_points.is_empty() {
-            list = list.child(item(
-                ("cm", 20),
-                "Unlock All Nodes".into(),
-                "node-unlock-all",
-                cx,
-            ));
-        }
-        if menu.contour.is_some() {
-            let is_mask = menu
-                .contour
-                .zip(self.font())
-                .and_then(|(ci, f)| {
-                    let g = f.font.get_glyph(
-                        f.glyphs[self.current_glyph_index()?].name.as_ref(),
-                    )?;
-                    Some(read_masks(g).contains(&ci))
-                })
-                .unwrap_or(false);
-            list = list.child(item(
-                ("cm", 18),
-                if is_mask { "Remove Mask" } else { "Make Mask" }.into(),
-                "mask-toggle",
-                cx,
-            ));
-        }
-        if menu.start_point.is_some() {
-            list = list.child(item(
-                ("cm", 3),
-                "Set Start Point".into(),
-                "set-start",
-                cx,
-            ));
-        }
-        if menu.contour.is_some() {
-            list = list.child(item(
-                ("cm", 4),
-                "Reverse Contour".into(),
-                "reverse",
-                cx,
-            ));
-        }
-        if !self.editor.selected.is_empty() {
-            list = list.child(item(
-                ("cm", 5),
-                "Round Corners".into(),
-                "round-corners",
-                cx,
-            ));
-        }
-        if let Some(ci) = menu.contour {
-            if ci > 0 {
-                list = list.child(item(
-                    ("cm", 6),
-                    format!("Move Contour Up ({ci} → {})", ci - 1).into(),
-                    "move-up",
-                    cx,
-                ));
-            }
-            if ci + 1 < menu.contour_count {
-                list = list.child(item(
-                    ("cm", 7),
-                    format!("Move Contour Down ({ci} → {})", ci + 1).into(),
-                    "move-down",
-                    cx,
-                ));
-            }
-        }
-        list = list.child(item(
-            ("cm", 8),
-            "Add Anchor Here".into(),
-            "add-anchor",
-            cx,
-        ));
-        if menu.anchor.is_some() {
-            list = list.child(item(
-                ("cm", 9),
-                "Delete Anchor".into(),
-                "delete-anchor",
-                cx,
-            ));
-        }
-        if menu.adding_note {
-            list = list.child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .w(px(200.0))
-                    .child(widgets::input::Input::new(
-                        &self.annotation_input,
-                    )),
-            );
-        } else if menu.annotation.is_some() {
-            list = list.child(item(
-                ("cm", 15),
-                "Delete Annotation".into(),
-                "annotation-delete",
-                cx,
-            ));
-        } else {
-            list = list.child(item(
-                ("cm", 15),
-                "Annotate: Arrow".into(),
-                "annotation-arrow",
-                cx,
-            ));
-            list = list.child(item(
-                ("cm", 16),
-                "Annotate: Circle".into(),
-                "annotation-circle",
-                cx,
-            ));
-            list = list.child(item(
-                ("cm", 17),
-                "Annotate: Note…".into(),
-                "annotation-note",
-                cx,
-            ));
-        }
-        match menu.guide {
-            Some((true, _)) => {
-                list = list.child(item(
-                    ("cm", 10),
-                    "Delete Local Guide".into(),
-                    "guide-delete",
-                    cx,
-                ));
-            }
-            Some((false, _)) => {
-                list = list.child(item(
-                    ("cm", 10),
-                    "Delete Guide".into(),
-                    "guide-delete",
-                    cx,
-                ));
-            }
-            None => {
-                list = list.child(item(
-                    ("cm", 10),
-                    "Add Guide Here".into(),
-                    "guide-add-h",
-                    cx,
-                ));
-                list = list.child(item(
-                    ("cm", 11),
-                    "Add Vertical Guide Here".into(),
-                    "guide-add-v",
-                    cx,
-                ));
-                list = list.child(item(
-                    ("cm", 12),
-                    "Add Local Guide Here".into(),
-                    "guide-add-local-h",
-                    cx,
-                ));
-                list = list.child(item(
-                    ("cm", 13),
-                    "Add Local Vertical Guide Here".into(),
-                    "guide-add-local-v",
-                    cx,
-                ));
-            }
-        }
-        Some(
-            div()
-                .id("context-menu")
-                .absolute()
-                .left(menu.at.x)
-                .top(menu.at.y)
-                // Clicks inside the menu must not reach the canvas:
-                // its mouse-down would dismiss the menu before the
-                // item's click fires (and start a marquee besides).
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|_, _, _, cx| {
-                        cx.stop_propagation();
-                    }),
-                )
-                .bg(t::panel_bg())
-                .border(t::stroke())
-                .border_color(t::panel_outline())
-                .rounded(t::radius_control())
-                .shadow_md()
-                .min_w(px(180.0))
-                .child(list),
-        )
-    }
-
-    fn editor_view(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        // The glyph's background image (tracing template), with its
-        // placement rect in design space. Shear in the stored
-        // transform is not drawn; scale and offset are.
-        let glyph_image: Option<(Arc<gpui::RenderImage>, kurbo::Rect)> =
-            (self.show_background)
-                .then(|| {
-                    let img = self
-                        .font()?
-                        .font
-                        .get_glyph(self.font()?.glyphs.get(index)?.name.as_ref())?
-                        .image
-                        .clone()?;
-                    let file = img.file_name().to_string_lossy().to_string();
-                    let image = self.glyph_image(&file)?;
-                    let size = image.size(0);
-                    let (w, h) =
-                        (i32::from(size.width) as f64, i32::from(size.height) as f64);
-                    let t = &img.transform;
-                    let rect = kurbo::Rect::new(
-                        t.x_offset,
-                        t.y_offset,
-                        t.x_offset + w * t.x_scale,
-                        t.y_offset + h * t.y_scale,
-                    );
-                    Some((image, rect))
-                })
-                .flatten();
-        let font = self.font().unwrap();
-        let entry = &font.glyphs[index];
-        let outline = entry.contour_path.clone();
-        let component_path = entry.component_path.clone();
-        let component_names = entry.component_names.clone();
-        // The text buffer, web-style: every sort's fill (the active
-        // one too while the text tool is up), its quiet metric box,
-        // corner marks (kern-colored during a kern drag), and the
-        // caret. Coordinates are relative to the active sort.
-        struct SortPaint {
-            path: Option<Arc<BezPath>>,
-            x: f64,
-            y: f64,
-            advance: f64,
-            active: bool,
-            /// 0 = normal, 1 = kern-active, 2 = kern-previous.
-            kern: u8,
-        }
-        let text_mode = self.editor.tool == Tool::Text;
-        let (sort_paints, text_caret): (Vec<SortPaint>, Option<(f64, f64)>) = {
-            let line_height = self.text_line_height();
-            let layout = self.edit_buffer.layout(line_height);
-            let active = self.edit_buffer.active_sort();
-            let kern_sort = self.edit_buffer.manual_kerning_sort();
-            let off = self.editor.sort_offset;
-            let paints = layout
-                .items
-                .iter()
-                .filter_map(|item| {
-                    let sort = self.edit_buffer.sort(item.index)?;
-                    if sort.is_absorbed() {
-                        return None;
-                    }
-                    let is_active = Some(item.index) == active;
-                    let path = sort
-                        .glyph_name()
-                        .and_then(|n| font.name_map.get(n))
-                        .map(|&g| font.glyphs[g].path.clone());
-                    Some(SortPaint {
-                        path,
-                        x: item.x - off.0,
-                        y: item.y - off.1,
-                        advance: item.advance_width,
-                        active: is_active,
-                        kern: match kern_sort {
-                            Some(k) if k == item.index => 1,
-                            Some(k) if k == item.index + 1 => 2,
-                            _ => 0,
-                        },
-                    })
-                })
-                .collect();
-            let caret = text_mode
-                .then(|| (layout.cursor_x - off.0, layout.cursor_y - off.1));
-            (paints, caret)
-        };
-        let (sort_top, sort_bottom) = self.text_sort_bounds();
-
-        // Masters toggled visible in the Layers section, drawn as dim
-        // reference underlays.
-        let reference_paths: Vec<Arc<BezPath>> = self
-            .project
-            .as_ref()
-            .map(|p| {
-                let shown: Vec<usize> = if self.show_all_masters {
-                    (0..p.masters.len()).collect()
-                } else {
-                    self.reference_layers.iter().copied().collect()
-                };
-                shown
-                    .iter()
-                    .filter(|&&i| i != p.active && i < p.masters.len())
-                    .filter_map(|&i| {
-                        p.masters[i]
-                            .glyphs
-                            .iter()
-                            .find(|g| g.name == entry.name)
-                            .map(|g| g.path.clone())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        // Between masters the sliders describe an instance: the web
-        // swaps the outline for the interpolated one and marks the
-        // view read-only, rather than ghosting it behind an editable
-        // master, which leaves you editing something you cannot see.
-        let showing_instance = self
-            .project
-            .as_ref()
-            .is_some_and(|p| p.showing_instance());
-        let instance: Option<Arc<BezPath>> = showing_instance
-            .then(|| {
-                self.project
-                    .as_ref()
-                    .and_then(|p| p.interpolated_glyph(entry.name.as_ref()))
-                    .map(|(path, _)| Arc::new(path))
-            })
-            .flatten();
-        let ghost: Option<Arc<BezPath>> = None;
-        let outline = instance.clone().unwrap_or(outline);
-        let points = entry.points.clone();
-        // Where each closed contour starts and which way it runs, for
-        // the start arrow. Open contours (pen paths in progress) get
-        // none, like the web.
-        let start_markers: Vec<((f64, f64), (f64, f64), bool)> = font
-            .font
-            .get_glyph(entry.name.as_ref())
-            .map(|g| {
-                g.contours
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| {
-                        c.points
-                            .first()
-                            .is_none_or(|p| p.typ != norad::PointType::Move)
-                    })
-                    .filter_map(|(ci, _)| {
-                        let mut here = entry
-                            .points
-                            .iter()
-                            .filter(|p| p.contour == ci)
-                            .peekable();
-                        let all: Vec<&GlyphPoint> = here.by_ref().collect();
-                        let first = all.iter().position(|p| p.on_curve)?;
-                        let start = all[first];
-                        let next = all[(first + 1) % all.len()];
-                        Some((
-                            (start.x, start.y),
-                            (next.x, next.y),
-                            self.editor
-                                .selected
-                                .contains(&(start.contour, start.index)),
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let anchors = entry.anchors.clone();
-        let selected_anchors = self.editor.selected_anchors.clone();
-        let advance = entry.advance;
-        let ascender = font.ascender;
-        let descender = font.descender;
-        let upm = font.units_per_em;
-        let x_height = font.x_height;
-        let cap_height = font.cap_height;
-        // Alignment zones (postscript blues, position pairs), drawn
-        // as quiet bands like Glyphs' beige zones.
-        let zones: Vec<(f64, f64)> = {
-            let info = &font.font.font_info;
-            info.postscript_blue_values
-                .iter()
-                .flatten()
-                .chain(info.postscript_other_blues.iter().flatten())
-                .copied()
-                .collect::<Vec<f64>>()
-                .chunks_exact(2)
-                .map(|pair| (pair[0].min(pair[1]), pair[0].max(pair[1])))
-                .collect()
-        };
-        // Node trajectories across the axis (HOI view): sampled at
-        // equal axis stops, so dot spacing reads as velocity, and
-        // brace layers visibly bend the paths.
-        let trajectories: Option<Vec<Vec<kurbo::Point>>> = self
-            .show_trajectories
-            .then(|| {
-                self.project.as_ref().and_then(|p| {
-                    p.trajectory_samples(entry.name.as_ref(), 10)
-                })
-            })
-            .flatten();
-        // The mark cloud: every mark whose _anchor matches one of
-        // this glyph's anchors, ghosted in place — the crowding
-        // check while positioning anchors.
-        let mark_cloud: Vec<Arc<BezPath>> = if self.show_mark_cloud {
-            let mut placed = Vec::new();
-            'outer: for candidate in font.glyphs.iter() {
-                for (mark_anchor, mx, my) in candidate.anchors.iter() {
-                    let Some(base_name) = mark_anchor.strip_prefix('_') else {
-                        continue;
-                    };
-                    let Some((_, ax, ay)) = entry
-                        .anchors
-                        .iter()
-                        .find(|(name, _, _)| name.as_ref() == base_name)
-                    else {
-                        continue;
-                    };
-                    if candidate.path.elements().is_empty() {
-                        continue;
-                    }
-                    placed.push(Arc::new(
-                        Affine::translate((ax - mx, ay - my))
-                            * candidate.path.as_ref().clone(),
-                    ));
-                    if placed.len() >= 60 {
-                        break 'outer;
-                    }
-                    continue 'outer;
-                }
-            }
-            placed
-        } else {
-            Vec::new()
-        };
-        // Mask contours: drawn in the accent as a warning, and cut
-        // out of the space-hold preview fill.
-        let mask_paths: Vec<Arc<BezPath>> = font
-            .font
-            .get_glyph(entry.name.as_ref())
-            .map(|g| {
-                read_masks(g)
-                    .into_iter()
-                    .filter_map(|ci| {
-                        g.contours.get(ci).map(|c| {
-                            Arc::new(
-                                runebender_core::glyph_paths::contour_to_bezpath(c),
-                            )
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        // Annotations: working marks pinned to design-space points.
-        let annotations: Vec<Annotation> = font
-            .font
-            .get_glyph(entry.name.as_ref())
-            .map(read_annotations)
-            .unwrap_or_default();
-        // HOI knobs (one per node, at its intermediate point or the
-        // linear middle) and the live curve while one is dragged.
-        let hoi_knobs: Vec<((usize, usize), (f64, f64))> = (self
-            .show_trajectories)
-            .then(|| {
-                self.project.as_ref().and_then(|p| {
-                    let (lo, hi) = p.axis_end_masters()?;
-                    let name = entry.name.as_ref();
-                    let a = p.masters[lo].font.get_glyph(name)?;
-                    let b = p.masters[hi].font.get_glyph(name)?;
-                    let curves = read_hoi_intermediates(a);
-                    let mut knobs = Vec::new();
-                    for (ci, (ca, cb)) in
-                        a.contours.iter().zip(b.contours.iter()).enumerate()
-                    {
-                        for (pi, (pa, pb)) in
-                            ca.points.iter().zip(cb.points.iter()).enumerate()
-                        {
-                            let q = curves.get(&(ci, pi)).copied().unwrap_or((
-                                (pa.x + pb.x) / 2.0,
-                                (pa.y + pb.y) / 2.0,
-                            ));
-                            knobs.push(((ci, pi), q));
-                        }
-                    }
-                    Some(knobs)
-                })
-            })
-            .flatten()
-            .unwrap_or_default();
-        let hoi_live = self.hoi_live;
-        let hoi_drag_ends: Option<((f64, f64), (f64, f64))> =
-            match &self.editor.drag {
-                Some(Drag::HoiKnob { a, b, .. }) => Some((*a, *b)),
-                _ => None,
-            };
-        // Guides, drawn across the whole canvas under the outline:
-        // the master's global fontinfo guidelines plus the open
-        // glyph's own. The hot one (hovered or mid-drag) draws
-        // brighter, with its knob grown.
-        let guide_hot: Option<(bool, usize)> = match &self.editor.drag {
-            Some(Drag::Guide { local, index }) => Some((*local, *index)),
-            _ => self.editor.guide_hover,
-        };
-        let guides: Vec<(bool, norad::Line)> = font
-            .font
-            .font_info
-            .guidelines
-            .iter()
-            .flatten()
-            .map(|g| (false, g.line))
-            .chain(
-                font.font
-                    .get_glyph(entry.name.as_ref())
-                    .into_iter()
-                    .flat_map(|g| g.guidelines.iter())
-                    .map(|g| (true, g.line)),
-            )
-            .collect();
-        // The metric box runs to the upm when that is higher than the
-        // ascender, so an icon font's full em still reads as its space
-        // (web `glyph_metric_bounds`).
-        let box_top = upm.max(ascender);
-        let box_bottom = descender;
-
-        let transform = self.editor.transform();
-        let zoom = self.editor.zoom();
-        let selected_points = self.editor.selected.clone();
-        let locked_points = self.editor.locked_points.clone();
-        let marquee = match &self.editor.drag {
-            Some(Drag::Marquee { start, current, .. }) => Some((*start, *current)),
-            _ => None,
-        };
-        // Free-transform box: shown for a multi-point selection with
-        // the select tool up, and kept up during its own drag.
-        let transform_box: Option<kurbo::Rect> = (self.editor.tool
-            == Tool::Select
-            && !matches!(self.editor.drag, Some(Drag::Marquee { .. })))
-        .then(|| self.selection_bbox(index))
-        .flatten();
-        let shape_preview = match &self.editor.drag {
-            Some(Drag::Shape { start, current }) => {
-                Some((*start, *current, self.editor.shape_ellipse))
-            }
-            _ => None,
-        };
-        let measure_line = match &self.editor.drag {
-            Some(Drag::Measure { start, current }) => Some((*start, *current)),
-            _ => None,
-        };
-        // Curve overlays: comb strips and continuity rings, computed
-        // in design space from the shared analyses in core.
-        let comb_strips: Vec<Vec<runebender_core::curve::CombSample>> =
-            if self.curve_comb && self.editor.tool != Tool::Preview {
-                font.font
-                    .get_glyph(entry.name.as_ref())
-                    .map(|g| {
-                        let cubics =
-                            runebender_core::curve::cubics_from_norad(g);
-                        let maxk =
-                            runebender_core::curve::max_curvature(&cubics);
-                        if maxk <= 1e-12 {
-                            (Vec::new(), 0.0)
-                        } else {
-                            (
-                                runebender_core::curve::curvature_comb(
-                                    &cubics,
-                                    1.0,
-                                    74.0 / maxk,
-                                    false,
-                                    16,
-                                ),
-                                maxk,
-                            )
-                        }
-                    })
-                    .map(|(strips, _)| strips)
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-        let comb_maxk: f64 = comb_strips
-            .iter()
-            .flat_map(|s| s.iter())
-            .map(|s| s.kappa.abs())
-            .fold(0.0, f64::max);
-        let continuity_rings: Vec<(kurbo::Point, gpui::Rgba)> =
-            if self.curve_continuity && self.editor.tool != Tool::Preview {
-                font.font
-                    .get_glyph(entry.name.as_ref())
-                    .map(|g| {
-                        let cubics =
-                            runebender_core::curve::cubics_from_norad(g);
-                        runebender_core::curve::node_continuity(&cubics)
-                            .into_iter()
-                            .filter_map(|nc| {
-                                use runebender_core::curve::GLevel;
-                                let color = match nc.level {
-                                    GLevel::Corner => return None,
-                                    GLevel::G2 | GLevel::G3 => {
-                                        t::continuity_g2()
-                                    }
-                                    GLevel::G1 => t::continuity_g1(),
-                                    GLevel::G1Line => t::continuity_line(),
-                                    GLevel::Kink => t::continuity_kink(),
-                                };
-                                Some((nc.at, color))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-        // Measure-tool HUD: colorized strokes, measurements, and side
-        // bearings from core's measure module, in design space. The
-        // paint closure maps them to the screen and draws dimension
-        // lines + labels.
-        let measure_opts = self.measure_opts;
-        // Every segment's own bounding box, for the size labels.
-        let segment_boxes: Vec<kurbo::Rect> = if self.measure_opts.sizes {
-            use kurbo::Shape as _;
-            font.font
-                .get_glyph(entry.name.as_ref())
-                .map(|g| {
-                    runebender_core::segment_ops::segments(g)
-                        .into_iter()
-                        .map(|hit| hit.seg.bounding_box())
-                        .filter(|b| b.width() >= 1.0 || b.height() >= 1.0)
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let measure_hud: Option<(
-            Vec<runebender_core::measure::ColoredStroke>,
-            Vec<runebender_core::measure::Measurement>,
-            Option<runebender_core::measure::SideBearings>,
-        )> = if measure_opts.any() && self.editor.tool != Tool::Preview {
-            font.font.get_glyph(entry.name.as_ref()).map(|g| {
-                use runebender_core::measure;
-                use runebender_core::model::workspace::Contour as WContour;
-                let paths: Vec<runebender_core::path::Path> = g
-                    .contours
-                    .iter()
-                    .map(|c| {
-                        runebender_core::path::Path::from_contour(
-                            &WContour::from_norad(c),
-                        )
-                    })
-                    .collect();
-                let strokes = if measure_opts.colorize {
-                    measure::colored_strokes(&paths)
-                } else {
-                    Vec::new()
-                };
-                let measurements = if measure_opts.handles
-                    || measure_opts.segments
-                    || measure_opts.spans
-                {
-                    measure::glyph_measurements(&paths)
-                } else {
-                    Vec::new()
-                };
-                let sb = (measure_opts.sidebearings && g.width > 0.0)
-                    .then(|| measure::side_bearings(&paths, g.width))
-                    .flatten();
-                (strokes, measurements, sb)
-            })
-        } else {
-            None
-        };
-        // Background layer outline + reference glyph ghost.
-        let background_path: Option<Arc<BezPath>> = self
-            .show_background
-            .then(|| {
-                Self::background_layer_name(&font.font).and_then(|layer| {
-                    font.font
-                        .layers
-                        .get(&layer)
-                        .and_then(|l| l.get_glyph(entry.name.as_ref()))
-                        .map(|g| {
-                            Arc::new(
-                                runebender_core::glyph_paths::contours_to_bezpath(g),
-                            )
-                        })
-                })
-            })
-            .flatten();
-        // Stacked color layers (COLRv0 preview): each mapped layer's
-        // copy of this glyph filled with its palette color, bottom
-        // first, under the editing outline.
-        let color_preview: Vec<(Arc<BezPath>, gpui::Rgba)> = if self
-            .show_color_preview
-        {
-            let palette = read_color_palette(&font.font);
-            read_color_mapping(&font.font)
-                .into_iter()
-                .filter_map(|(layer, color)| {
-                    let c = palette.get(color)?;
-                    let glyph = font
-                        .font
-                        .layers
-                        .get(&layer)?
-                        .get_glyph(entry.name.as_ref())?;
-                    Some((
-                        Arc::new(
-                            runebender_core::glyph_paths::contours_to_bezpath(
-                                glyph,
-                            ),
-                        ),
-                        gpui::Rgba {
-                            r: c[0] as f32,
-                            g: c[1] as f32,
-                            b: c[2] as f32,
-                            a: c[3] as f32,
-                        },
-                    ))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        // Visible per-glyph layers, drawn like the background.
-        let glyph_layer_paths: Vec<Arc<BezPath>> = font
-            .font
-            .layers
-            .iter()
-            .filter(|l| {
-                !l.is_default()
-                    && self.visible_glyph_layers.contains(l.name().as_str())
-            })
-            .filter_map(|l| l.get_glyph(entry.name.as_ref()))
-            .map(|g| {
-                Arc::new(runebender_core::glyph_paths::contours_to_bezpath(g))
-            })
-            .collect();
-        let reference_path: Option<Arc<BezPath>> = self
-            .reference_glyph
-            .as_ref()
-            .and_then(|name| font.name_map.get(name))
-            .map(|&g| font.glyphs[g].path.clone());
-        // Alt-hover segment highlight (select tool).
-        let hover_seg = self.editor.segment_hover;
-        // Sidebearing edge under the pointer (or mid-drag).
-        let sidebearing_hover = self.editor.sidebearing_hover.or(match &self.editor.drag {
-            Some(Drag::Sidebearing { right, .. }) => Some(*right),
-            _ => None,
-        });
-        let component_selected = self.editor.selected_component.is_some();
-        // Pen rubber band: last on-curve of the open contour to the
-        // pointer, with a ring on the start point when close would
-        // land (web PenPreview).
-        let pen_preview: Option<((f64, f64), (f64, f64), Option<(f64, f64)>)> = (|| {
-            let contour = self
-                .editor
-                .pen
-                .as_ref()
-                .map(|p| p.contour)
-                .or(self.editor.hyper_contour)?;
-            let pointer = self.editor.pointer?;
-            let (px_, py_) = self.editor.window_to_design(pointer);
-            let glyph = font.font.get_glyph(entry.name.as_ref())?;
-            let points = &glyph.contours.get(contour)?.points;
-            let last = points.iter().rev().find(|p| {
-                p.typ != norad::PointType::OffCurve
-            })?;
-            let start = points.first()?;
-            let close_radius = HIT_RADIUS_PX / self.editor.zoom();
-            let close = (points.len() >= 3
-                && ((start.x - px_).powi(2) + (start.y - py_).powi(2)).sqrt()
-                    <= close_radius)
-                .then_some((start.x, start.y));
-            Some(((last.x, last.y), (px_, py_), close))
-        })();
-
-        // Knife drag: the cut line plus its contour intersections.
-        let knife_line: Option<((f64, f64), (f64, f64), Vec<kurbo::Point>)> =
-            match &self.editor.drag {
-                Some(Drag::Knife { start, current }) => {
-                    let hits = font
-                        .font
-                        .get_glyph(entry.name.as_ref())
-                        .map(|g| {
-                            runebender_core::knife::knife_hit_points(
-                                g,
-                                kurbo::Point::new(start.0, start.1),
-                                kurbo::Point::new(current.0, current.1),
-                            )
-                        })
-                        .unwrap_or_default();
-                    Some((*start, *current, hits))
-                }
-                _ => None,
-            };
-        // An instance draws like Preview: filled, no editable chrome.
-        let preview_mode =
-            self.editor.tool == Tool::Preview || showing_instance;
-        let bounds_slot = self.editor.bounds.clone();
-        let needs_fit = !self.editor.initialized;
-
-        div()
-            .flex_1()
-            .relative()
-            .children(self.context_menu_overlay(cx))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    this.editor_mouse_down(
-                        event.position,
-                        event.modifiers.shift,
-                        event.modifiers.alt,
-                        event.click_count,
-                    );
-                    cx.notify();
-                }),
-            )
-            .on_mouse_move(cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
-                if event.pressed_button == Some(MouseButton::Left) {
-                    if this.editor_mouse_drag(
-                        event.position,
-                        event.modifiers.shift,
-                        event.modifiers.alt,
-                    ) {
-                        cx.notify();
-                    }
-                } else if this.editor_hover(event.position, event.modifiers.alt) {
-                    cx.notify();
-                }
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(move |this, _: &gpui::MouseUpEvent, _, cx| {
-                    this.editor_mouse_up();
-                    cx.notify();
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                    this.editor_context_menu(event.position);
-                    cx.notify();
-                }),
-            )
-            .on_scroll_wheel(cx.listener(move |this, event: &gpui::ScrollWheelEvent, _, cx| {
-                this.editor_scroll(event);
-                cx.notify();
-            }))
-            .child(
-                canvas(
-                    move |bounds, _, _| bounds,
-                    move |_, bounds: Bounds<gpui::Pixels>, window, cx| {
-                        *bounds_slot.lock().unwrap() = bounds;
-                        // Everything the editor draws is clipped to
-                        // the canvas: without a mask the outline and
-                        // the neighbouring sorts paint straight over
-                        // the header and the panels beside it.
-                        window.with_content_mask(
-                            Some(gpui::ContentMask { bounds }),
-                            move |window| {
-                            let mut transform = transform;
-                            let mut zoom = zoom;
-                            if needs_fit {
-                                // First paint after opening: fit the glyph.
-                                // Recompute locally; the entity state is
-                                // fitted on the next mouse interaction via
-                                // the same bounds slot.
-                                let h: f32 = bounds.size.height.into();
-                                let w: f32 = bounds.size.width.into();
-                                let mut vp = ViewPort::new();
-                                vp.fit_to_canvas(
-                                    w as f64,
-                                    h as f64,
-                                    advance,
-                                    ascender,
-                                    descender,
-                                    0.62,
-                                );
-                                transform = vp.affine();
-                                zoom = vp.zoom;
-                            }
-                            let _ = cx;
-                            let origin = bounds.origin;
-                            let to_screen = |x: f64, y: f64| {
-                                let p = transform * kurbo::Point::new(x, y);
-                                gpui::point(origin.x + px(p.x as f32), origin.y + px(p.y as f32))
-                            };
-
-                            // Zoom-dependent design grid behind everything
-                            // (web draw_design_grid): the 8-unit lattice
-                            // fades in past 0.8x, and past 8x a 2-unit fine
-                            // grid joins underneath — the 8s stay one grid
-                            // at every zoom. Anchored at the active sort's
-                            // origin (our design space is sort-relative),
-                            // so the baseline lands on a gridline.
-                            let smoothstep = |t: f64| t * t * (3.0 - 2.0 * t);
-                            let grid_mid_alpha =
-                                smoothstep(((zoom - 0.8) / 0.8).clamp(0.0, 1.0));
-                            let grid_close_alpha =
-                                smoothstep(((zoom - 8.0) / 8.0).clamp(0.0, 1.0));
-                            if !preview_mode && grid_mid_alpha > 0.0 {
-                                let inv = transform.inverse();
-                                let bw: f32 = bounds.size.width.into();
-                                let bh: f32 = bounds.size.height.into();
-                                let c0 = inv * kurbo::Point::new(0.0, 0.0);
-                                let c1 = inv * kurbo::Point::new(bw as f64, bh as f64);
-                                let (min_x, max_x) = (c0.x.min(c1.x), c0.x.max(c1.x));
-                                let (min_y, max_y) = (c0.y.min(c1.y), c0.y.max(c1.y));
-                                let level = |spacing: f64,
-                                                 skip_every: u64,
-                                                 width_px: f32,
-                                                 color: gpui::Rgba,
-                                                 window: &mut Window| {
-                                    let mut pb = PathBuilder::stroke(px(width_px));
-                                    for ix in (min_x / spacing).floor() as i64
-                                        ..=(max_x / spacing).ceil() as i64
-                                    {
-                                        if skip_every > 0
-                                            && ix.unsigned_abs() % skip_every == 0
-                                        {
-                                            continue;
-                                        }
-                                        let x = ix as f64 * spacing;
-                                        pb.move_to(to_screen(x, min_y));
-                                        pb.line_to(to_screen(x, max_y));
-                                    }
-                                    for iy in (min_y / spacing).floor() as i64
-                                        ..=(max_y / spacing).ceil() as i64
-                                    {
-                                        if skip_every > 0
-                                            && iy.unsigned_abs() % skip_every == 0
-                                        {
-                                            continue;
-                                        }
-                                        let y = iy as f64 * spacing;
-                                        pb.move_to(to_screen(min_x, y));
-                                        pb.line_to(to_screen(max_x, y));
-                                    }
-                                    if let Ok(p) = pb.build() {
-                                        window.paint_path(p, color);
-                                    }
-                                };
-                                level(
-                                    8.0,
-                                    0,
-                                    1.0,
-                                    t::design_grid_coarse(grid_mid_alpha as f32),
-                                    window,
-                                );
-                                let close_alpha =
-                                    smoothstep(((zoom - 8.0) / 8.0).clamp(0.0, 1.0));
-                                if close_alpha > 0.0 {
-                                    // The 2s only; every 4th line is an 8
-                                    // the mid pass already drew.
-                                    level(
-                                        2.0,
-                                        4,
-                                        0.5,
-                                        t::design_grid_fine(close_alpha as f32),
-                                        window,
-                                    );
-                                }
-                            }
-
-                            // Metrics: baseline, ascender, descender,
-                            // sidebearings.
-                            let hline = |y: f64, window: &mut Window| {
-                                let a = to_screen(0.0, y);
-                                let b = to_screen(advance, y);
-                                window.paint_quad(gpui::fill(
-                                    Bounds::from_corners(a, gpui::point(b.x, b.y + px(1.0))),
-                                    t::metrics_line(),
-                                ));
-                            };
-                            if !text_mode {
-                                // The tracing template sits under
-                                // everything.
-                                if let Some((image, rect)) = &glyph_image {
-                                    let a = to_screen(rect.x0, rect.y0);
-                                    let b = to_screen(rect.x1, rect.y1);
-                                    let target = Bounds::from_corners(
-                                        gpui::point(
-                                            a.x.min(b.x),
-                                            a.y.min(b.y),
-                                        ),
-                                        gpui::point(
-                                            a.x.max(b.x),
-                                            a.y.max(b.y),
-                                        ),
-                                    );
-                                    let _ = window.paint_image(
-                                        target,
-                                        target,
-                                        gpui::Corners::default(),
-                                        image.clone(),
-                                        0,
-                                        true,
-                                    );
-                                }
-                                // Alignment zone bands.
-                                for &(lo, hi) in &zones {
-                                    let a = to_screen(0.0, hi);
-                                    let b = to_screen(0.0, lo);
-                                    window.paint_quad(gpui::fill(
-                                        Bounds::from_corners(
-                                            gpui::point(bounds.origin.x, a.y),
-                                            gpui::point(
-                                                bounds.origin.x
-                                                    + bounds.size.width,
-                                                b.y,
-                                            ),
-                                        ),
-                                        t::zone_band(),
-                                    ));
-                                }
-                                // The color stack, bottom first, so
-                                // editing happens over the composite.
-                                for (path, color) in &color_preview {
-                                    if let Some(p) = build_fill_path(
-                                        path, transform, origin,
-                                    ) {
-                                        window.paint_path(p, *color);
-                                    }
-                                }
-                                // Every guide the font defines, the way
-                                // the web draws them: the baseline
-                                // always, then the box edges, the upm,
-                                // ascender, descender, x-height and
-                                // cap-height, deduplicated.
-                                let mut ys = vec![0.0, box_top, box_bottom, upm, ascender, descender];
-                                ys.extend(x_height);
-                                ys.extend(cap_height);
-                                ys.retain(|y: &f64| y.is_finite());
-                                ys.sort_by(|a, b| a.total_cmp(b));
-                                ys.dedup_by(|a, b| (*a - *b).abs() < 0.001);
-                                for y in ys {
-                                    hline(y, window);
-                                }
-                                let mut counts = (0usize, 0usize);
-                                for (local, line) in guides.iter() {
-                                    let (local, line) = (*local, line);
-                                    let gi = if local {
-                                        let i = counts.1;
-                                        counts.1 += 1;
-                                        i
-                                    } else {
-                                        let i = counts.0;
-                                        counts.0 += 1;
-                                        i
-                                    };
-                                    let hot = guide_hot == Some((local, gi));
-                                    let base = if local {
-                                        t::guide_local()
-                                    } else {
-                                        t::guide_line()
-                                    };
-                                    let color = if hot {
-                                        let mut c = base;
-                                        c.a = 1.0;
-                                        c
-                                    } else {
-                                        base
-                                    };
-                                    let thick = if hot { 2.0 } else { 1.0 };
-                                    // The knob sits on the guide's
-                                    // anchor: its stored point, or the
-                                    // origin axis for plain H/V lines
-                                    // (UFO stores only the offset).
-                                    let knob;
-                                    match *line {
-                                        norad::Line::Horizontal(y) => {
-                                            let p = to_screen(0.0, y);
-                                            window.paint_quad(gpui::fill(
-                                                Bounds::from_corners(
-                                                    gpui::point(bounds.origin.x, p.y),
-                                                    gpui::point(
-                                                        bounds.origin.x + bounds.size.width,
-                                                        p.y + px(thick),
-                                                    ),
-                                                ),
-                                                color,
-                                            ));
-                                            knob = p;
-                                        }
-                                        norad::Line::Vertical(x) => {
-                                            let p = to_screen(x, 0.0);
-                                            window.paint_quad(gpui::fill(
-                                                Bounds::from_corners(
-                                                    gpui::point(p.x, bounds.origin.y),
-                                                    gpui::point(
-                                                        p.x + px(thick),
-                                                        bounds.origin.y + bounds.size.height,
-                                                    ),
-                                                ),
-                                                color,
-                                            ));
-                                            knob = p;
-                                        }
-                                        norad::Line::Angle { x, y, degrees } => {
-                                            // A segment far longer than
-                                            // any canvas; the editor
-                                            // clips to its bounds.
-                                            let (sin, cos) =
-                                                degrees.to_radians().sin_cos();
-                                            const R: f64 = 1.0e5;
-                                            let a = to_screen(x - R * cos, y - R * sin);
-                                            let b = to_screen(x + R * cos, y + R * sin);
-                                            let mut pb =
-                                                PathBuilder::stroke(px(thick));
-                                            pb.move_to(a);
-                                            pb.line_to(b);
-                                            if let Ok(path) = pb.build() {
-                                                window.paint_path(path, color);
-                                            }
-                                            knob = to_screen(x, y);
-                                        }
-                                    }
-                                    // The grab knob, Glyphs-style.
-                                    let r = if hot { 5.0 } else { 4.0 };
-                                    let circle = {
-                                        use kurbo::Shape as _;
-                                        kurbo::Circle::new(
-                                            (
-                                                f32::from(knob.x) as f64,
-                                                f32::from(knob.y) as f64,
-                                            ),
-                                            r,
-                                        )
-                                        .to_path(0.25)
-                                    };
-                                    if let Some(path) = build_fill_path(
-                                        &circle,
-                                        Affine::IDENTITY,
-                                        gpui::point(px(0.0), px(0.0)),
-                                    ) {
-                                        window.paint_path(path, color);
-                                    }
-                                }
-                                // Node trajectories (HOI): each
-                                // point's path across the axis as a
-                                // thin line, dots at equal axis
-                                // stops — close dots mean slow,
-                                // spread dots mean fast; brace
-                                // layers bend the line.
-                                // Knobs and the live-dragged curve
-                                // ride on top of the tracks below.
-                                if !hoi_knobs.is_empty() {
-                                    use kurbo::Shape as _;
-                                    if let (
-                                        Some((id, q)),
-                                        Some((a, b)),
-                                    ) = (hoi_live, hoi_drag_ends)
-                                    {
-                                        let _ = id;
-                                        let mut pb =
-                                            PathBuilder::stroke(px(1.5));
-                                        for step in 0..=12 {
-                                            let t = step as f64 / 12.0;
-                                            let p = hoi_quad_at(a, b, q, t);
-                                            let sp = to_screen(p.0, p.1);
-                                            if step == 0 {
-                                                pb.move_to(sp);
-                                            } else {
-                                                pb.line_to(sp);
-                                            }
-                                        }
-                                        if let Ok(line) = pb.build() {
-                                            window
-                                                .paint_path(line, t::accent());
-                                        }
-                                    }
-                                    for (id, q) in &hoi_knobs {
-                                        let dragging = hoi_live
-                                            .is_some_and(|(live, _)| live == *id);
-                                        let q = if dragging {
-                                            hoi_live.unwrap().1
-                                        } else {
-                                            *q
-                                        };
-                                        let sp = to_screen(q.0, q.1);
-                                        let dot = kurbo::Circle::new(
-                                            (
-                                                f32::from(sp.x) as f64,
-                                                f32::from(sp.y) as f64,
-                                            ),
-                                            if dragging { 4.0 } else { 2.5 },
-                                        )
-                                        .to_path(0.25);
-                                        if let Some(path) = build_fill_path(
-                                            &dot,
-                                            Affine::IDENTITY,
-                                            gpui::point(px(0.0), px(0.0)),
-                                        ) {
-                                            window.paint_path(
-                                                path,
-                                                if dragging {
-                                                    t::accent()
-                                                } else {
-                                                    t::text_muted()
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                                if let Some(tracks) = &trajectories {
-                                    use kurbo::Shape as _;
-                                    // The velocity ribbon (Glyphs'
-                                    // Show velocity): one block per
-                                    // axis step, thickness and warmth
-                                    // scaling with how far the node
-                                    // travels that step — gold means
-                                    // the change rushes there, ember
-                                    // means it lingers.
-                                    for track in tracks {
-                                        let steps: Vec<f64> = track
-                                            .windows(2)
-                                            .map(|w| w[0].distance(w[1]))
-                                            .collect();
-                                        let max_step = steps
-                                            .iter()
-                                            .fold(0.0_f64, |a, &b| a.max(b));
-                                        if max_step < 1.0 {
-                                            continue; // static node
-                                        }
-                                        const RIBBON_PX: f32 = 13.0;
-                                        for (i, w) in
-                                            track.windows(2).enumerate()
-                                        {
-                                            let speed = steps[i] / max_step;
-                                            let a = to_screen(w[0].x, w[0].y);
-                                            let b = to_screen(w[1].x, w[1].y);
-                                            let (ax, ay) =
-                                                (f32::from(a.x), f32::from(a.y));
-                                            let (bx, by) =
-                                                (f32::from(b.x), f32::from(b.y));
-                                            let (dx_, dy_) =
-                                                (bx - ax, by - ay);
-                                            let len =
-                                                (dx_ * dx_ + dy_ * dy_).sqrt();
-                                            if len < 0.5 {
-                                                continue;
-                                            }
-                                            // One-sided comb, like
-                                            // Glyphs': offset to the
-                                            // left of travel.
-                                            let (nx, ny) = (
-                                                -dy_ / len,
-                                                dx_ / len,
-                                            );
-                                            let thick = RIBBON_PX
-                                                * speed as f32;
-                                            let mut quad = BezPath::new();
-                                            quad.move_to((
-                                                ax as f64, ay as f64,
-                                            ));
-                                            quad.line_to((
-                                                bx as f64, by as f64,
-                                            ));
-                                            quad.line_to((
-                                                (bx + nx * thick) as f64,
-                                                (by + ny * thick) as f64,
-                                            ));
-                                            quad.line_to((
-                                                (ax + nx * thick) as f64,
-                                                (ay + ny * thick) as f64,
-                                            ));
-                                            quad.close_path();
-                                            if let Some(path) =
-                                                build_fill_path(
-                                                    &quad,
-                                                    Affine::IDENTITY,
-                                                    gpui::point(
-                                                        px(0.0),
-                                                        px(0.0),
-                                                    ),
-                                                )
-                                            {
-                                                window.paint_path(
-                                                    path,
-                                                    t::velocity_ramp(speed),
-                                                );
-                                            }
-                                        }
-                                    }
-                                    for track in tracks {
-                                        let mut pb =
-                                            PathBuilder::stroke(px(1.0));
-                                        for (i, p) in track.iter().enumerate()
-                                        {
-                                            let sp = to_screen(p.x, p.y);
-                                            if i == 0 {
-                                                pb.move_to(sp);
-                                            } else {
-                                                pb.line_to(sp);
-                                            }
-                                        }
-                                        if let Ok(line) = pb.build() {
-                                            window.paint_path(
-                                                line,
-                                                t::trajectory_line(),
-                                            );
-                                        }
-                                        let last = track.len() - 1;
-                                        for (i, p) in track.iter().enumerate()
-                                        {
-                                            let sp = to_screen(p.x, p.y);
-                                            let r = if i == 0 || i == last {
-                                                3.0
-                                            } else {
-                                                1.7
-                                            };
-                                            let dot = kurbo::Circle::new(
-                                                (
-                                                    f32::from(sp.x) as f64,
-                                                    f32::from(sp.y) as f64,
-                                                ),
-                                                r,
-                                            )
-                                            .to_path(0.25);
-                                            if let Some(path) =
-                                                build_fill_path(
-                                                    &dot,
-                                                    Affine::IDENTITY,
-                                                    gpui::point(
-                                                        px(0.0),
-                                                        px(0.0),
-                                                    ),
-                                                )
-                                            {
-                                                window.paint_path(
-                                                    path,
-                                                    t::trajectory_dot(),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                for (right, x) in [(false, 0.0), (true, advance)] {
-                                    let hovered = sidebearing_hover == Some(right);
-                                    let a = to_screen(x, box_top);
-                                    let b = to_screen(x, box_bottom);
-                                    let (grow_l, grow_r) =
-                                        if hovered { (1.0, 2.0) } else { (0.0, 1.0) };
-                                    window.paint_quad(gpui::fill(
-                                        Bounds::from_corners(
-                                            gpui::point(a.x - px(grow_l), a.y),
-                                            gpui::point(a.x + px(grow_r), b.y),
-                                        ),
-                                        if hovered {
-                                            t::text_cursor()
-                                        } else {
-                                            t::metrics_line()
-                                        },
-                                    ));
-                                }
-                            }
-
-                            // Space-hold preview: the filled glyph and
-                            // nothing else on top of it.
-                            if preview_mode {
-                                let mut combined = outline.as_ref().clone();
-                                combined.extend(component_path.elements().iter().cloned());
-                                // The masked preview is the truth the
-                                // Bake Masks command makes permanent.
-                                if !mask_paths.is_empty() {
-                                    let mut cut = BezPath::new();
-                                    for m in &mask_paths {
-                                        cut.extend(
-                                            m.elements().iter().copied(),
-                                        );
-                                    }
-                                    if let Ok(result) = linesweeper::binary_op(
-                                        &combined,
-                                        &cut,
-                                        linesweeper::FillRule::NonZero,
-                                        linesweeper::BinaryOp::Difference,
-                                    ) {
-                                        combined = BezPath::new();
-                                        for contour in result.contours() {
-                                            combined.extend(
-                                                contour
-                                                    .path
-                                                    .elements()
-                                                    .iter()
-                                                    .copied(),
-                                            );
-                                        }
-                                    }
-                                }
-                                if let Some(p) =
-                                    build_fill_path(&combined, transform, origin)
-                                {
-                                    window.paint_path(p, t::text());
-                                }
-                            }
-
-                            // The text buffer, web-style. Quiet metric
-                            // boxes first so marks and fills sit on top.
-                            let zoom_now = zoom;
-                            let sort_h_px =
-                                ((sort_top - sort_bottom).max(1.0) * zoom_now).max(1.0);
-                            let mark = (sort_h_px * 0.05).clamp(1.5, 24.0);
-                            let marks_visible = mark >= 3.0;
-                            let line = |a: Point<gpui::Pixels>,
-                                            b: Point<gpui::Pixels>,
-                                            color: gpui::Rgba,
-                                            window: &mut Window| {
-                                let mut pb = PathBuilder::stroke(px(1.0));
-                                pb.move_to(a);
-                                pb.line_to(b);
-                                if let Ok(p) = pb.build() {
-                                    window.paint_path(p, color);
-                                }
-                            };
-                            if !preview_mode && marks_visible {
-                                for sp in sort_paints.iter() {
-                                    // Quiet full box for the sorts nobody is
-                                    // editing (the active one draws its own
-                                    // metrics outside text mode).
-                                    if !sp.active {
-                                        let color = t::metric_quiet();
-                                        for ex in [sp.x, sp.x + sp.advance] {
-                                            line(
-                                                to_screen(ex, sp.y + sort_bottom),
-                                                to_screen(ex, sp.y + sort_top),
-                                                color,
-                                                window,
-                                            );
-                                        }
-                                        for my in [sort_bottom, 0.0, ascender, sort_top] {
-                                            line(
-                                                to_screen(sp.x, sp.y + my),
-                                                to_screen(sp.x + sp.advance, sp.y + my),
-                                                color,
-                                                window,
-                                            );
-                                        }
-                                    }
-                                    // Corner marks: inward ticks at each
-                                    // metric height on both edges, clipped
-                                    // to the box. Skipped for the active
-                                    // sort outside text mode (it has the
-                                    // full green box instead).
-                                    if sp.active && !text_mode {
-                                        continue;
-                                    }
-                                    let color = match sp.kern {
-                                        1 => t::kern_active(),
-                                        2 => t::kern_previous(),
-                                        _ => t::metrics_line(),
-                                    };
-                                    let ca = to_screen(sp.x, sp.y + sort_bottom);
-                                    let cb =
-                                        to_screen(sp.x + sp.advance, sp.y + sort_top);
-                                    let (left, right) =
-                                        (ca.x.min(cb.x), ca.x.max(cb.x));
-                                    let (top_px, bottom_px) =
-                                        (ca.y.min(cb.y), ca.y.max(cb.y));
-                                    let mark_px = px(mark as f32);
-                                    for ex in [sp.x, sp.x + sp.advance] {
-                                        for my in [sort_bottom, 0.0, ascender, sort_top]
-                                        {
-                                            let c = to_screen(ex, sp.y + my);
-                                            let x0 = (c.x - mark_px).max(left);
-                                            let x1 = (c.x + mark_px).min(right);
-                                            if x1 > x0 {
-                                                line(
-                                                    gpui::point(x0, c.y),
-                                                    gpui::point(x1, c.y),
-                                                    color,
-                                                    window,
-                                                );
-                                            }
-                                            let y0 = (c.y - mark_px).max(top_px);
-                                            let y1 = (c.y + mark_px).min(bottom_px);
-                                            if y1 > y0 {
-                                                line(
-                                                    gpui::point(c.x, y0),
-                                                    gpui::point(c.x, y1),
-                                                    color,
-                                                    window,
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            // Sort fills: everyone but the active sort —
-                            // and the active one too while the text tool
-                            // is up (points return with select). Once the
-                            // design grid is up (you are drawing, not
-                            // reading) the neighbours thin to a 0.34 fill
-                            // plus an outline with read-only grey points,
-                            // the web's zoomed-in treatment.
-                            let zoomed_in = !preview_mode && zoom > 0.8;
-                            // The web's point_scale curve, simplified to
-                            // its zoom ramps (device scale is 1 here).
-                            let point_scale = if zoom <= 0.8 {
-                                0.72 + (1.0 - 0.72) * smoothstep((zoom / 0.8).clamp(0.0, 1.0))
-                            } else if zoom <= 8.0 {
-                                1.0 + 0.6 * smoothstep(((zoom - 0.8) / 7.2).clamp(0.0, 1.0))
-                            } else {
-                                1.6 + 0.8 * smoothstep(((zoom - 8.0) / 20.0).clamp(0.0, 1.0))
-                            };
-                            for sp in sort_paints.iter() {
-                                // The active sort renders as editable
-                                // chrome except in text mode, where it is
-                                // a plain fill like its neighbors. The
-                                // preview fill already drew it.
-                                if sp.active && (!text_mode || preview_mode) {
-                                    continue;
-                                }
-                                let Some(path) = sp.path.as_ref() else {
-                                    continue;
-                                };
-                                let dim = zoomed_in && !sp.active;
-                                let sort_transform =
-                                    transform * Affine::translate((sp.x, sp.y));
-                                if let Some(p) =
-                                    build_fill_path(path, sort_transform, origin)
-                                {
-                                    let mut fill = t::glyph_fill();
-                                    if dim {
-                                        fill.a *= 0.34;
-                                    }
-                                    window.paint_path(p, fill);
-                                }
-                                if !dim {
-                                    continue;
-                                }
-                                // Outline + read-only points so the
-                                // neighbour reads as structure.
-                                if let Some(p) = build_path(
-                                    path,
-                                    sort_transform,
-                                    origin,
-                                    PathBuilder::stroke(px(1.0)),
-                                ) {
-                                    window.paint_path(p, t::glyph_fill());
-                                }
-                                use kurbo::Shape as _;
-                                let on_r = 4.5 * point_scale * 0.85;
-                                let off_r = 4.5 * point_scale * 0.6;
-                                let screen = |pt: kurbo::Point| {
-                                    let sp2 = sort_transform * pt;
-                                    kurbo::Point::new(
-                                        sp2.x + f64::from(f32::from(origin.x)),
-                                        sp2.y + f64::from(f32::from(origin.y)),
-                                    )
-                                };
-                                let mut dots = BezPath::new();
-                                let mut handles = PathBuilder::stroke(px(1.0));
-                                let mut any_handles = false;
-                                let mut current = kurbo::Point::ZERO;
-                                let mut start = kurbo::Point::ZERO;
-                                let hline2 = |a: kurbo::Point,
-                                                  b: kurbo::Point,
-                                                  pb: &mut PathBuilder,
-                                                  any: &mut bool| {
-                                    pb.move_to(gpui::point(
-                                        px(a.x as f32),
-                                        px(a.y as f32),
-                                    ));
-                                    pb.line_to(gpui::point(
-                                        px(b.x as f32),
-                                        px(b.y as f32),
-                                    ));
-                                    *any = true;
-                                };
-                                for el in path.elements() {
-                                    match *el {
-                                        kurbo::PathEl::MoveTo(p) => {
-                                            let p = screen(p);
-                                            dots.extend(
-                                                kurbo::Circle::new(p, on_r)
-                                                    .to_path(0.25),
-                                            );
-                                            current = p;
-                                            start = p;
-                                        }
-                                        kurbo::PathEl::LineTo(p) => {
-                                            let p = screen(p);
-                                            dots.extend(
-                                                kurbo::Circle::new(p, on_r)
-                                                    .to_path(0.25),
-                                            );
-                                            current = p;
-                                        }
-                                        kurbo::PathEl::QuadTo(c, p) => {
-                                            let (c, p) = (screen(c), screen(p));
-                                            dots.extend(
-                                                kurbo::Circle::new(c, off_r)
-                                                    .to_path(0.25),
-                                            );
-                                            dots.extend(
-                                                kurbo::Circle::new(p, on_r)
-                                                    .to_path(0.25),
-                                            );
-                                            hline2(current, c, &mut handles, &mut any_handles);
-                                            hline2(c, p, &mut handles, &mut any_handles);
-                                            current = p;
-                                        }
-                                        kurbo::PathEl::CurveTo(c1, c2, p) => {
-                                            let (c1, c2, p) =
-                                                (screen(c1), screen(c2), screen(p));
-                                            dots.extend(
-                                                kurbo::Circle::new(c1, off_r)
-                                                    .to_path(0.25),
-                                            );
-                                            dots.extend(
-                                                kurbo::Circle::new(c2, off_r)
-                                                    .to_path(0.25),
-                                            );
-                                            dots.extend(
-                                                kurbo::Circle::new(p, on_r)
-                                                    .to_path(0.25),
-                                            );
-                                            hline2(current, c1, &mut handles, &mut any_handles);
-                                            hline2(c2, p, &mut handles, &mut any_handles);
-                                            current = p;
-                                        }
-                                        kurbo::PathEl::ClosePath => {
-                                            current = start;
-                                        }
-                                    }
-                                }
-                                if any_handles && let Ok(p) = handles.build() {
-                                    window.paint_path(p, t::point_readonly());
-                                }
-                                if let Some(p) = build_fill_path(
-                                    &dots,
-                                    Affine::IDENTITY,
-                                    gpui::point(px(0.0), px(0.0)),
-                                ) {
-                                    window.paint_path(p, t::point_inner());
-                                }
-                                if let Some(p) = build_path(
-                                    &dots,
-                                    Affine::IDENTITY,
-                                    gpui::point(px(0.0), px(0.0)),
-                                    PathBuilder::stroke(px(1.0)),
-                                ) {
-                                    window.paint_path(p, t::point_readonly());
-                                }
-                            }
-                            // Caret: line plus inward triangles, sized off
-                            // the sort's on-screen height like the web.
-                            if let Some((cx_, cy)) = text_caret {
-                                let top = to_screen(cx_, cy + sort_top);
-                                let bottom = to_screen(cx_, cy + sort_bottom);
-                                let caret_color = t::text_cursor();
-                                window.paint_quad(gpui::fill(
-                                    Bounds::from_corners(
-                                        gpui::point(top.x - px(0.75), top.y),
-                                        gpui::point(top.x + px(0.75), bottom.y),
-                                    ),
-                                    caret_color,
-                                ));
-                                let tri_scale =
-                                    ((sort_h_px * 0.09).clamp(4.0, 34.0)) / 24.0;
-                                let tw = px((24.0 * tri_scale) as f32);
-                                let th = px((16.0 * tri_scale) as f32);
-                                let mut tri = PathBuilder::fill();
-                                tri.move_to(gpui::point(top.x - tw / 2.0, top.y));
-                                tri.line_to(gpui::point(top.x + tw / 2.0, top.y));
-                                tri.line_to(gpui::point(top.x, top.y + th));
-                                if let Ok(p) = tri.build() {
-                                    window.paint_path(p, caret_color);
-                                }
-                                let mut tri = PathBuilder::fill();
-                                tri.move_to(gpui::point(bottom.x - tw / 2.0, bottom.y));
-                                tri.line_to(gpui::point(bottom.x + tw / 2.0, bottom.y));
-                                tri.line_to(gpui::point(bottom.x, bottom.y - th));
-                                if let Ok(p) = tri.build() {
-                                    window.paint_path(p, caret_color);
-                                }
-                            }
-
-                            // Reference layers: other masters as dim strokes.
-                            for path in &reference_paths {
-                                if let Some(p) = build_path(
-                                    path,
-                                    transform,
-                                    origin,
-                                    PathBuilder::stroke(px(1.0)),
-                                ) {
-                                    window.paint_path(p, t::reference_layer());
-                                }
-                            }
-
-                            // Components: dim distinct fill, not editable
-                            // directly (Cmd+Shift+D decomposes).
-                            if !component_path.elements().is_empty()
-                                && let Some(p) =
-                                    build_fill_path(&component_path, transform, origin)
-                            {
-                                let color = if component_selected {
-                                    t::component_selected_fill()
-                                } else {
-                                    t::component_fill()
-                                };
-                                window.paint_path(p, color);
-                            }
-                            // Interpolated instance at the axes-bar
-                            // location, as a ghost outline.
-                            if let Some(ghost) = &ghost
-                                && let Some(p) = build_path(
-                                    ghost,
-                                    transform,
-                                    origin,
-                                    PathBuilder::stroke(px(1.0)),
-                                )
-                            {
-                                window.paint_path(p, t::ghost());
-                            }
-                            // Reference glyph: a ghost fill so it never
-                            // reads as the background layer's outline.
-                            if let Some(path) = &reference_path
-                                && let Some(p) =
-                                    build_fill_path(path, transform, origin)
-                            {
-                                let mut fill = t::glyph_fill();
-                                fill.a *= 0.22;
-                                window.paint_path(p, fill);
-                            }
-                            // Background layer: a quiet outline behind the
-                            // drawing, the way Glyphs shows a background.
-                            if let Some(path) = &background_path
-                                && let Some(p) = build_path(
-                                    path,
-                                    transform,
-                                    origin,
-                                    PathBuilder::stroke(px(1.0)),
-                                )
-                            {
-                                window.paint_path(p, t::metric_quiet());
-                            }
-                            // Per-glyph layers with the eye on: same
-                            // quiet outline as the background.
-                            for path in &glyph_layer_paths {
-                                if let Some(p) = build_path(
-                                    path,
-                                    transform,
-                                    origin,
-                                    PathBuilder::stroke(px(1.0)),
-                                ) {
-                                    window.paint_path(p, t::metric_quiet());
-                                }
-                            }
-                            // The mark cloud, faint fills.
-                            if !mark_cloud.is_empty() {
-                                let mut ghost = t::glyph_fill();
-                                ghost.a *= 0.10;
-                                for path in &mark_cloud {
-                                    if let Some(p) = build_fill_path(
-                                        path, transform, origin,
-                                    ) {
-                                        window.paint_path(p, ghost);
-                                    }
-                                }
-                            }
-                            // Mask contours read as cuts: the local-
-                            // guide accent over the normal stroke.
-                            for path in &mask_paths {
-                                if let Some(p) = build_path(
-                                    path,
-                                    transform,
-                                    origin,
-                                    PathBuilder::stroke(px(2.0)),
-                                ) {
-                                    window.paint_path(p, t::guide_local());
-                                }
-                            }
-                            // Curvature comb, behind the outline so points
-                            // stay selectable over it.
-                            for strip in &comb_strips {
-                                for w in strip.windows(2) {
-                                    let (s0, s1) = (&w[0], &w[1]);
-                                    let mut quad = BezPath::new();
-                                    quad.move_to(transform * s0.on);
-                                    quad.line_to(transform * s1.on);
-                                    quad.line_to(transform * s1.outer);
-                                    quad.line_to(transform * s0.outer);
-                                    quad.close_path();
-                                    let k = if comb_maxk > 1e-12 {
-                                        (s0.kappa.abs() + s1.kappa.abs()) * 0.5
-                                            / comb_maxk
-                                    } else {
-                                        0.0
-                                    };
-                                    if let Some(p) = build_fill_path(
-                                        &quad,
-                                        Affine::IDENTITY,
-                                        origin,
-                                    ) {
-                                        window
-                                            .paint_path(p, t::comb_gradient(k));
-                                    }
-                                }
-                            }
-
-                            // Ghost fill under the glyph being edited: the
-                            // same grey the inactive sorts use at a tenth
-                            // strength, so counters read as counters
-                            // without competing with the outline (web
-                            // ACTIVE_GLYPH_FILL_ALPHA).
-                            if !preview_mode && !text_mode {
-                                let mut combined = outline.as_ref().clone();
-                                combined
-                                    .extend(component_path.elements().iter().cloned());
-                                if let Some(p) =
-                                    build_fill_path(&combined, transform, origin)
-                                {
-                                    let mut fill = t::glyph_fill();
-                                    fill.a *= 0.16;
-                                    window.paint_path(p, fill);
-                                }
-                            }
-                            // Edit mode is a stroked outline (no fill),
-                            // like the other editors.
-                            if !preview_mode
-                                && !text_mode
-                                && let Some(path) =
-                                build_path(&outline, transform, origin, PathBuilder::stroke(px(1.0)))
-                            {
-                                window.paint_path(path, t::path_stroke());
-                            }
-
-                            // Handle lines: each off-curve connects to its
-                            // anchoring on-curve neighbor.
-                            if !preview_mode && !text_mode {
-                                let mut lines = PathBuilder::stroke(px(1.0));
-                                let mut any_line = false;
-                                for (i, p) in points.iter().enumerate() {
-                                    if p.on_curve {
-                                        continue;
-                                    }
-                                    // Neighbors within the same contour, cyclic.
-                                    let contour_pts: Vec<&GlyphPoint> = points
-                                        .iter()
-                                        .filter(|q| q.contour == p.contour)
-                                        .collect();
-                                    let n = contour_pts.len();
-                                    let pos = contour_pts
-                                        .iter()
-                                        .position(|q| q.index == p.index)
-                                        .unwrap_or(0);
-                                    let prev = contour_pts[(pos + n - 1) % n];
-                                    let next = contour_pts[(pos + 1) % n];
-                                    let anchor = if prev.on_curve {
-                                        prev
-                                    } else if next.on_curve {
-                                        next
-                                    } else {
-                                        continue;
-                                    };
-                                    lines.move_to(to_screen(p.x, p.y));
-                                    lines.line_to(to_screen(anchor.x, anchor.y));
-                                    any_line = true;
-                                    let _ = i;
-                                }
-                                if any_line && let Ok(path) = lines.build() {
-                                    window.paint_path(path, t::handle_line());
-                                }
-                            }
-
-                            // Points: smooth = blue circle, corner = green
-                            // square, off-curve = purple circle, selection
-                            // in yellow/orange — the shared palette.
-                            let circle = |window: &mut Window,
-                                          center: Point<gpui::Pixels>,
-                                          r: f32,
-                                          color: gpui::Rgba| {
-                                use kurbo::Shape;
-                                let cx_: f32 = center.x.into();
-                                let cy_: f32 = center.y.into();
-                                let shape = kurbo::Circle::new(
-                                    (cx_ as f64, cy_ as f64),
-                                    r as f64,
-                                )
-                                .to_path(0.25);
-                                if let Some(p) = build_fill_path(
-                                    &shape,
-                                    Affine::IDENTITY,
-                                    gpui::point(px(0.0), px(0.0)),
-                                ) {
-                                    window.paint_path(p, color);
-                                }
-                            };
-                            // A point is a dark window with a coloured
-                            // ring, the web's recipe: a halo casing so
-                            // it keeps an edge over the outline and the
-                            // comb, an interior fill that masks what
-                            // runs underneath, then a constant-width
-                            // ring on top. Selected points fill yellow
-                            // and ring in the selection colour.
-                            let ps = point_scale as f32;
-                            let ring_w = (1.5 * ps).max(1.0);
-                            let halo_w = ring_w + 2.0;
-                            let shape = |center: Point<gpui::Pixels>,
-                                         r: f32,
-                                         square: bool|
-                             -> kurbo::BezPath {
-                                use kurbo::Shape as _;
-                                let (cx_, cy_) =
-                                    (f32::from(center.x) as f64, f32::from(center.y) as f64);
-                                if square {
-                                    kurbo::Rect::new(
-                                        cx_ - r as f64,
-                                        cy_ - r as f64,
-                                        cx_ + r as f64,
-                                        cy_ + r as f64,
-                                    )
-                                    .to_path(0.1)
-                                } else {
-                                    kurbo::Circle::new((cx_, cy_), r as f64).to_path(0.15)
-                                }
-                            };
-                            let zero = gpui::point(px(0.0), px(0.0));
-                            // Colours are the batch key: an Rgba is not
-                            // hashable, so its bytes stand in.
-                            let color_key = |c: gpui::Rgba| -> u32 {
-                                u32::from_be_bytes([
-                                    (c.r * 255.0) as u8,
-                                    (c.g * 255.0) as u8,
-                                    (c.b * 255.0) as u8,
-                                    (c.a * 255.0) as u8,
-                                ])
-                            };
-                            let mut halo_batch: Vec<BezPath> = Vec::new();
-                            let mut fill_batch: std::collections::BTreeMap<
-                                u32,
-                                (gpui::Rgba, Vec<BezPath>),
-                            > = std::collections::BTreeMap::new();
-                            let mut ring_batch: std::collections::BTreeMap<
-                                u32,
-                                (gpui::Rgba, Vec<BezPath>),
-                            > = std::collections::BTreeMap::new();
-                            #[allow(clippy::type_complexity)]
-                            let mut chord_batch: std::collections::BTreeMap<
-                                u32,
-                                (gpui::Rgba, Vec<(f32, BezPath)>),
-                            > = std::collections::BTreeMap::new();
-                            for p in points.iter() {
-                                if preview_mode || text_mode {
-                                    break;
-                                }
-                                let center = to_screen(p.x, p.y);
-                                let is_selected =
-                                    selected_points.contains(&(p.contour, p.index));
-                                let is_locked = locked_points
-                                    .contains(&(p.contour, p.index));
-                                let (ring, inner) = if is_locked {
-                                    // Locked nodes read as inert.
-                                    (t::point_readonly(), t::point_readonly())
-                                } else if is_selected {
-                                    (t::point_selected_ring(), t::point_selected())
-                                } else if p.hyper {
-                                    (t::point_hyper_outer(), t::point_inner())
-                                } else if !p.on_curve {
-                                    (t::point_offcurve_outer(), t::point_inner())
-                                } else if p.smooth {
-                                    (t::point_smooth_outer(), t::point_inner())
-                                } else {
-                                    (t::point_corner_outer(), t::point_inner())
-                                };
-                                let is_square = p.on_curve && !p.smooth && !p.hyper;
-                                let r = if p.hyper && p.on_curve {
-                                    if is_selected { 5.0 } else { 4.0 }
-                                } else if is_square {
-                                    if is_selected { 4.5 } else { 3.5 }
-                                } else if is_selected {
-                                    5.5
-                                } else {
-                                    4.5
-                                } * ps;
-                                let path = shape(center, r, is_square);
-                                halo_batch.push(path.clone());
-                                fill_batch
-                                    .entry(color_key(inner))
-                                    .or_insert_with(|| (inner, Vec::new()))
-                                    .1
-                                    .push(path.clone());
-                                // The point is a window onto the design
-                                // grid: the gridlines that cross it are
-                                // redrawn inside, tinted with the
-                                // point's own colour, so you can read
-                                // where it sits (web draws this by
-                                // clipping the grid to the point; gpui
-                                // masks rectangles only, so the chords
-                                // are solved instead — exact, and it
-                                // costs a few lines per point).
-                                if grid_mid_alpha > 0.0 && !preview_mode && !text_mode {
-                                    let (cx_, cy_) = (
-                                        f32::from(center.x) as f64,
-                                        f32::from(center.y) as f64,
-                                    );
-                                    let r = r as f64;
-                                    let inv = transform.inverse();
-                                    for (spacing, alpha, wide) in [
-                                        (8.0_f64, grid_mid_alpha, 1.0_f32),
-                                        (2.0, grid_close_alpha, 0.7),
-                                    ] {
-                                        if alpha <= 0.0 {
-                                            continue;
-                                        }
-                                        let mut tint = ring;
-                                        tint.a = alpha as f32;
-                                        let mut lines = BezPath::new();
-                                        // Vertical gridlines: the chord
-                                        // is the circle's half-height at
-                                        // that offset (the full radius
-                                        // for a square point).
-                                        let a = (inv * kurbo::Point::new(cx_ - r, cy_)).x;
-                                        let b = (inv * kurbo::Point::new(cx_ + r, cy_)).x;
-                                        let (lo, hi) = (a.min(b), a.max(b));
-                                        for k in (lo / spacing).ceil() as i64
-                                            ..=(hi / spacing).floor() as i64
-                                        {
-                                            let sx = (transform
-                                                * kurbo::Point::new(
-                                                    k as f64 * spacing,
-                                                    0.0,
-                                                ))
-                                            .x;
-                                            let d = sx - cx_;
-                                            let half = if is_square {
-                                                r
-                                            } else {
-                                                (r * r - d * d).max(0.0).sqrt()
-                                            };
-                                            if half <= 0.2 {
-                                                continue;
-                                            }
-                                            lines.move_to((sx, cy_ - half));
-                                            lines.line_to((sx, cy_ + half));
-                                        }
-                                        let a = (inv * kurbo::Point::new(cx_, cy_ - r)).y;
-                                        let b = (inv * kurbo::Point::new(cx_, cy_ + r)).y;
-                                        let (lo, hi) = (a.min(b), a.max(b));
-                                        for k in (lo / spacing).ceil() as i64
-                                            ..=(hi / spacing).floor() as i64
-                                        {
-                                            let sy = (transform
-                                                * kurbo::Point::new(
-                                                    0.0,
-                                                    k as f64 * spacing,
-                                                ))
-                                            .y;
-                                            let d = sy - cy_;
-                                            let half = if is_square {
-                                                r
-                                            } else {
-                                                (r * r - d * d).max(0.0).sqrt()
-                                            };
-                                            if half <= 0.2 {
-                                                continue;
-                                            }
-                                            lines.move_to((cx_ - half, sy));
-                                            lines.line_to((cx_ + half, sy));
-                                        }
-                                        if !lines.is_empty() {
-                                            let entry = chord_batch
-                                                .entry(color_key(tint))
-                                                .or_insert_with(|| {
-                                                    (tint, Vec::new())
-                                                });
-                                            match entry
-                                                .1
-                                                .iter_mut()
-                                                .find(|(w, _)| *w == wide)
-                                            {
-                                                Some((_, acc)) => {
-                                                    acc.extend(lines.iter())
-                                                }
-                                                None => entry.1.push((wide, lines)),
-                                            }
-                                        }
-                                    }
-                                }
-                                ring_batch
-                                    .entry(color_key(ring))
-                                    .or_insert_with(|| (ring, Vec::new()))
-                                    .1
-                                    .push(path);
-                            }
-                            // Three path draws for every point on the
-                            // glyph, plus the gridlines, collapse into
-                            // one per colour.
-                            paint_batched(
-                                window,
-                                zero,
-                                t::halo(),
-                                &halo_batch,
-                                Some(halo_w),
-                            );
-                            for (color, paths) in fill_batch.values() {
-                                paint_batched(window, zero, *color, paths, None);
-                            }
-                            for (color, path) in chord_batch.values() {
-                                for (width, path) in path {
-                                    if let Some(p) = build_path(
-                                        path,
-                                        Affine::IDENTITY,
-                                        zero,
-                                        PathBuilder::stroke(px(*width)),
-                                    ) {
-                                        window.paint_path(p, *color);
-                                    }
-                                }
-                            }
-                            for (color, paths) in ring_batch.values() {
-                                paint_batched(
-                                    window,
-                                    zero,
-                                    *color,
-                                    paths,
-                                    Some(ring_w),
-                                );
-                            }
-                            // Start-of-contour arrow: which point a closed
-                            // contour begins at, and which way it runs
-                            // (web draw_start_arrow).
-                            if !preview_mode && !text_mode {
-                                for start in start_markers.iter() {
-                                    let (from, to, selected) = *start;
-                                    let a = to_screen(from.0, from.1);
-                                    let b = to_screen(to.0, to.1);
-                                    let size =
-                                        (if selected { 6.5 } else { 5.5 }) * ps;
-                                    let dir = (
-                                        f32::from(b.x - a.x),
-                                        f32::from(b.y - a.y),
-                                    );
-                                    let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt();
-                                    if len < 0.001 {
-                                        continue;
-                                    }
-                                    let f = (dir.0 / len, dir.1 / len);
-                                    let perp = (-f.1, f.0);
-                                    let cx_ = f32::from(a.x) + perp.0 * 8.0 * ps;
-                                    let cy_ = f32::from(a.y) + perp.1 * 8.0 * ps;
-                                    let tip = (cx_ + f.0 * size, cy_ + f.1 * size);
-                                    let base = (
-                                        cx_ - f.0 * size * 0.5,
-                                        cy_ - f.1 * size * 0.5,
-                                    );
-                                    let left = (
-                                        base.0 + perp.0 * size * 0.5,
-                                        base.1 + perp.1 * size * 0.5,
-                                    );
-                                    let right = (
-                                        base.0 - perp.0 * size * 0.5,
-                                        base.1 - perp.1 * size * 0.5,
-                                    );
-                                    let mut pb = PathBuilder::fill();
-                                    pb.move_to(gpui::point(px(tip.0), px(tip.1)));
-                                    pb.line_to(gpui::point(px(left.0), px(left.1)));
-                                    pb.line_to(gpui::point(px(right.0), px(right.1)));
-                                    pb.close();
-                                    if let Ok(path) = pb.build() {
-                                        window.paint_path(
-                                            path,
-                                            if selected {
-                                                t::point_selected()
-                                            } else {
-                                                t::point_smooth_outer()
-                                            },
-                                        );
-                                    }
-                                }
-                            }
-                            // Anchors: diamonds (rotated squares drawn as
-                            // two overlapping quads approximate; use a
-                            // filled path).
-                            // Anchors are diamonds built like points: a
-                            // dark window with a coloured ring, sized
-                            // off the smooth-point radius and widened a
-                            // little so a rotated square reads as the
-                            // same size (web ANCHOR_DIAMOND_SCALE).
-                            let mut anchor_halo: Vec<BezPath> = Vec::new();
-                            let mut anchor_fill: std::collections::BTreeMap<
-                                u32,
-                                (gpui::Rgba, Vec<BezPath>),
-                            > = std::collections::BTreeMap::new();
-                            let mut anchor_ring: std::collections::BTreeMap<
-                                u32,
-                                (gpui::Rgba, Vec<BezPath>),
-                            > = std::collections::BTreeMap::new();
-                            for (ai, (_, ax, ay)) in anchors.iter().enumerate() {
-                                if preview_mode || text_mode {
-                                    break;
-                                }
-                                let center = to_screen(*ax, *ay);
-                                let is_selected = selected_anchors.contains(&ai);
-                                let r = (if is_selected { 5.5 } else { 4.5 }) * ps * 1.35;
-                                let (cx_, cy_) = (
-                                    f32::from(center.x) as f64,
-                                    f32::from(center.y) as f64,
-                                );
-                                let r = r as f64;
-                                let mut diamond = BezPath::new();
-                                diamond.move_to((cx_, cy_ - r));
-                                diamond.line_to((cx_ + r, cy_));
-                                diamond.line_to((cx_, cy_ + r));
-                                diamond.line_to((cx_ - r, cy_));
-                                diamond.close_path();
-                                let (ring, inner) = if is_selected {
-                                    (t::point_selected_ring(), t::point_selected())
-                                } else {
-                                    (t::anchor(), t::point_inner())
-                                };
-                                anchor_halo.push(diamond.clone());
-                                anchor_fill
-                                    .entry(color_key(inner))
-                                    .or_insert_with(|| (inner, Vec::new()))
-                                    .1
-                                    .push(diamond.clone());
-                                anchor_ring
-                                    .entry(color_key(ring))
-                                    .or_insert_with(|| (ring, Vec::new()))
-                                    .1
-                                    .push(diamond);
-                            }
-                            paint_batched(
-                                window,
-                                zero,
-                                t::halo(),
-                                &anchor_halo,
-                                Some(halo_w),
-                            );
-                            for (color, paths) in anchor_fill.values() {
-                                paint_batched(window, zero, *color, paths, None);
-                            }
-                            for (color, paths) in anchor_ring.values() {
-                                paint_batched(
-                                    window,
-                                    zero,
-                                    *color,
-                                    paths,
-                                    Some(ring_w),
-                                );
-                            }
-
-                            // Shapes-tool live preview.
-                            if let Some((a, b, ellipse)) = shape_preview {
-                                use kurbo::Shape as _;
-                                let rect = kurbo::Rect::from_points(
-                                    kurbo::Point::new(a.0, a.1),
-                                    kurbo::Point::new(b.0, b.1),
-                                );
-                                let shape: BezPath = if ellipse {
-                                    kurbo::Ellipse::from_rect(rect).to_path(0.1)
-                                } else {
-                                    rect.to_path(0.1)
-                                };
-                                if let Some(p) = build_path(
-                                    &shape,
-                                    transform,
-                                    origin,
-                                    PathBuilder::stroke(px(1.0)),
-                                ) {
-                                    window.paint_path(p, t::accent());
-                                }
-                            }
-                            // Measure-tool line.
-                            if let Some(seg) = hover_seg {
-                                let mut pb = PathBuilder::stroke(px(3.0));
-                                match seg {
-                                    kurbo::PathSeg::Line(l) => {
-                                        pb.move_to(to_screen(l.p0.x, l.p0.y));
-                                        pb.line_to(to_screen(l.p1.x, l.p1.y));
-                                    }
-                                    kurbo::PathSeg::Quad(q) => {
-                                        pb.move_to(to_screen(q.p0.x, q.p0.y));
-                                        pb.curve_to(
-                                            to_screen(q.p2.x, q.p2.y),
-                                            to_screen(q.p1.x, q.p1.y),
-                                        );
-                                    }
-                                    kurbo::PathSeg::Cubic(c) => {
-                                        pb.move_to(to_screen(c.p0.x, c.p0.y));
-                                        pb.cubic_bezier_to(
-                                            to_screen(c.p3.x, c.p3.y),
-                                            to_screen(c.p1.x, c.p1.y),
-                                            to_screen(c.p2.x, c.p2.y),
-                                        );
-                                    }
-                                }
-                                if let Ok(p) = pb.build() {
-                                    window.paint_path(p, t::accent());
-                                }
-                            }
-                            if let Some(((lx, ly), (cx3, cy3), close)) = pen_preview {
-                                let mut pb = PathBuilder::stroke(px(1.0));
-                                pb.move_to(to_screen(lx, ly));
-                                pb.line_to(to_screen(cx3, cy3));
-                                if let Ok(p) = pb.build() {
-                                    window.paint_path(p, t::accent());
-                                }
-                                if let Some((sx2, sy2)) = close {
-                                    circle(
-                                        window,
-                                        to_screen(sx2, sy2),
-                                        6.0,
-                                        t::accent(),
-                                    );
-                                }
-                            }
-                            if let Some(((sx, sy), (cx2, cy2), hits)) = &knife_line {
-                                let a = to_screen(*sx, *sy);
-                                let b = to_screen(*cx2, *cy2);
-                                let mut line = PathBuilder::stroke(px(1.0));
-                                line.move_to(a);
-                                line.line_to(b);
-                                if let Ok(p) = line.build() {
-                                    window.paint_path(p, t::anchor());
-                                }
-                                for hit in hits {
-                                    let c = to_screen(hit.x, hit.y);
-                                    circle(window, c, 3.5, t::anchor());
-                                }
-                            }
-                            if let Some((a, b)) = measure_line {
-                                let mut pb = PathBuilder::stroke(px(1.0));
-                                let pa = to_screen(a.0, a.1);
-                                let pbp = to_screen(b.0, b.1);
-                                pb.move_to(pa);
-                                pb.line_to(pbp);
-                                if let Ok(p) = pb.build() {
-                                    window.paint_path(p, t::accent());
-                                }
-                            }
-                            // Measure-tool HUD (web draw_measurements):
-                            // popcount-colored outline, dimension lines
-                            // with outward arrowheads, and labels that
-                            // dodge each other. Fades in with zoom.
-                            if let Some((strokes, measurements, sb)) = &measure_hud {
-                                use runebender_core::measure::{self, MeasureKind};
-                                let t32 = (((zoom - 0.30) / 0.40).clamp(0.0, 1.0)) as f32;
-                                if t32 > 0.0 {
-                                    let fade = |mut c: gpui::Rgba, mul: f32| {
-                                        c.a *= t32 * mul;
-                                        c
-                                    };
-                                    for cs in strokes {
-                                        let width = if cs.wide { 1.5 } else { 1.0 };
-                                        if let Some(p) = build_path(
-                                            &cs.path,
-                                            transform,
-                                            origin,
-                                            PathBuilder::stroke(px(width)),
-                                        ) {
-                                            window.paint_path(
-                                                p,
-                                                fade(t::popcount_tier(cs.popcount), 1.0),
-                                            );
-                                        }
-                                    }
-                                    let gp = |p: kurbo::Point| {
-                                        gpui::point(
-                                            origin.x + px(p.x as f32),
-                                            origin.y + px(p.y as f32),
-                                        )
-                                    };
-                                    // A span's dimension line: a shaft that
-                                    // stops short of both endpoints with an
-                                    // outward arrowhead at each end.
-                                    let dim_line = |window: &mut gpui::Window,
-                                                    a: kurbo::Point,
-                                                    b: kurbo::Point,
-                                                    color: gpui::Rgba| {
-                                        let (dx, dy) = (b.x - a.x, b.y - a.y);
-                                        let len = dx.hypot(dy);
-                                        if len < 1e-3 {
-                                            return;
-                                        }
-                                        let (ux, uy) = (dx / len, dy / len);
-                                        let (nx, ny) = (-uy, ux);
-                                        let (end_gap, head, wing) = (3.0, 7.0, 4.0);
-                                        let a2 = kurbo::Point::new(
-                                            a.x + ux * end_gap,
-                                            a.y + uy * end_gap,
-                                        );
-                                        let b2 = kurbo::Point::new(
-                                            b.x - ux * end_gap,
-                                            b.y - uy * end_gap,
-                                        );
-                                        let mut pb = PathBuilder::stroke(px(1.25));
-                                        pb.move_to(gp(a2));
-                                        pb.line_to(gp(b2));
-                                        for (p0, sx) in [(a2, 1.0), (b2, -1.0)] {
-                                            for side in [1.0, -1.0] {
-                                                pb.move_to(gp(p0));
-                                                pb.line_to(gp(kurbo::Point::new(
-                                                    p0.x + sx * ux * head + side * nx * wing,
-                                                    p0.y + sx * uy * head + side * ny * wing,
-                                                )));
-                                            }
-                                        }
-                                        if let Ok(p) = pb.build() {
-                                            window.paint_path(p, color);
-                                        }
-                                    };
-                                    // Place a label just off its line, then
-                                    // step it outward (and to the other
-                                    // side) until it clears every label
-                                    // already placed this frame.
-                                    let label_px = px(13.0);
-                                    let line_h = px(15.0);
-                                    let label_font = window.text_style().font();
-                                    let mut placed: Vec<kurbo::Rect> = Vec::new();
-                                    let draw_label =
-                                        |window: &mut gpui::Window,
-                                         cx: &mut gpui::App,
-                                         a: kurbo::Point,
-                                         b: kurbo::Point,
-                                         text: String,
-                                         color: gpui::Rgba,
-                                         placed: &mut Vec<kurbo::Rect>| {
-                                            let label_text =
-                                                gpui::SharedString::from(text);
-                                            let run = gpui::TextRun {
-                                                len: label_text.len(),
-                                                font: label_font.clone(),
-                                                color: color.into(),
-                                                background_color: None,
-                                                underline: None,
-                                                strikethrough: None,
-                                            };
-                                            let line = window.text_system().shape_line(
-                                                label_text.clone(),
-                                                label_px,
-                                                std::slice::from_ref(&run),
-                                                None,
-                                            );
-                                            let w = f32::from(line.width) as f64;
-                                            let h = f32::from(line_h) as f64;
-                                            let (dx, dy) = (b.x - a.x, b.y - a.y);
-                                            let len = dx.hypot(dy).max(1e-6);
-                                            let (mut nx, mut ny) = (-dy / len, dx / len);
-                                            let horizontalish = dx.abs() >= dy.abs();
-                                            if (horizontalish && ny > 0.0)
-                                                || (!horizontalish && nx < 0.0)
-                                            {
-                                                nx = -nx;
-                                                ny = -ny;
-                                            }
-                                            let mid = a.midpoint(b);
-                                            let (base, step, pad) = (6.0, h + 4.0, 2.0);
-                                            let top_left = |dirx: f64, diry: f64, dist: f64| {
-                                                let cx0 = mid.x + dirx * dist;
-                                                let cy0 = mid.y + diry * dist;
-                                                let x = if dirx > 0.3 {
-                                                    cx0
-                                                } else if dirx < -0.3 {
-                                                    cx0 - w
-                                                } else {
-                                                    cx0 - w / 2.0
-                                                };
-                                                let y = if diry > 0.3 {
-                                                    cy0
-                                                } else if diry < -0.3 {
-                                                    cy0 - h
-                                                } else {
-                                                    cy0 - h / 2.0
-                                                };
-                                                kurbo::Point::new(x, y)
-                                            };
-                                            let mut chosen = top_left(nx, ny, base);
-                                            'search: for &sign in &[1.0_f64, -1.0] {
-                                                let (dirx, diry) = (nx * sign, ny * sign);
-                                                for k in 0..6 {
-                                                    let cand = top_left(
-                                                        dirx,
-                                                        diry,
-                                                        base + k as f64 * step,
-                                                    );
-                                                    let rect = kurbo::Rect::new(
-                                                        cand.x - pad,
-                                                        cand.y - pad,
-                                                        cand.x + w + pad,
-                                                        cand.y + h + pad,
-                                                    );
-                                                    let clear = !placed.iter().any(|r| {
-                                                        r.x0 < rect.x1
-                                                            && rect.x0 < r.x1
-                                                            && r.y0 < rect.y1
-                                                            && rect.y0 < r.y1
-                                                    });
-                                                    if clear {
-                                                        chosen = cand;
-                                                        break 'search;
-                                                    }
-                                                }
-                                            }
-                                            placed.push(kurbo::Rect::new(
-                                                chosen.x,
-                                                chosen.y,
-                                                chosen.x + w,
-                                                chosen.y + h,
-                                            ));
-                                            // A casing around the
-                                            // numerals, not a filled
-                                            // box: the web strokes each
-                                            // glyph in the halo colour
-                                            // before filling it. gpui
-                                            // has no stroked text, so
-                                            // the line is painted eight
-                                            // times around the centre
-                                            // instead, which reads the
-                                            // same and keeps the canvas
-                                            // visible behind the label.
-                                            let mut halo_color = t::halo();
-                                            halo_color.a *= t32;
-                                            let halo_run = gpui::TextRun {
-                                                len: run.len,
-                                                font: label_font.clone(),
-                                                color: halo_color.into(),
-                                                background_color: None,
-                                                underline: None,
-                                                strikethrough: None,
-                                            };
-                                            let halo_line =
-                                                window.text_system().shape_line(
-                                                    label_text.clone(),
-                                                    label_px,
-                                                    std::slice::from_ref(&halo_run),
-                                                    None,
-                                                );
-                                            for (ox, oy) in [
-                                                (-1.0, 0.0),
-                                                (1.0, 0.0),
-                                                (0.0, -1.0),
-                                                (0.0, 1.0),
-                                                (-1.0, -1.0),
-                                                (1.0, -1.0),
-                                                (-1.0, 1.0),
-                                                (1.0, 1.0),
-                                            ] {
-                                                let _ = halo_line.paint(
-                                                    gp(kurbo::Point::new(
-                                                        chosen.x + ox,
-                                                        chosen.y + oy,
-                                                    )),
-                                                    line_h,
-                                                    gpui::TextAlign::Left,
-                                                    None,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                            let _ = line.paint(
-                                                gp(chosen),
-                                                line_h,
-                                                gpui::TextAlign::Left,
-                                                None,
-                                                window,
-                                                cx,
-                                            );
-                                        };
-                                    if let Some(sb) = sb {
-                                        for (is_left, x, y, val) in [
-                                            (true, sb.min_x, sb.y_left, sb.lsb),
-                                            (false, sb.max_x, sb.y_right, sb.rsb),
-                                        ] {
-                                            let color = fade(
-                                                t::popcount_tier(measure::popcount(val)),
-                                                0.9,
-                                            );
-                                            let margin_x =
-                                                if is_left { 0.0 } else { sb.advance };
-                                            let a = transform
-                                                * kurbo::Point::new(margin_x, y);
-                                            let b = transform * kurbo::Point::new(x, y);
-                                            dim_line(window, a, b, color);
-                                            draw_label(
-                                                window,
-                                                cx,
-                                                a,
-                                                b,
-                                                measure_opts.label(val),
-                                                color,
-                                                &mut placed,
-                                            );
-                                        }
-                                    }
-                                    for m in measurements {
-                                        let show = match m.kind {
-                                            MeasureKind::Handle => measure_opts.handles,
-                                            MeasureKind::Segment => measure_opts.segments,
-                                            MeasureKind::Horizontal
-                                            | MeasureKind::Vertical => measure_opts.spans,
-                                        };
-                                        if !show {
-                                            continue;
-                                        }
-                                        let a = transform * m.a;
-                                        let b = transform * m.b;
-                                        let color = fade(
-                                            t::popcount_tier(measure::popcount(m.length)),
-                                            1.0,
-                                        );
-                                        if matches!(
-                                            m.kind,
-                                            MeasureKind::Horizontal | MeasureKind::Vertical
-                                        ) {
-                                            dim_line(window, a, b, color);
-                                        }
-                                        draw_label(
-                                            window,
-                                            cx,
-                                            a,
-                                            b,
-                                            measure_opts.label(m.length),
-                                            color,
-                                            &mut placed,
-                                        );
-                                    }
-                                    // Segment sizes: each curve's own
-                                    // box, labelled at its centre, so
-                                    // the whole glyph can be read at
-                                    // once instead of one selection at
-                                    // a time.
-                                    for b in segment_boxes.iter() {
-                                        let c0 = transform
-                                            * kurbo::Point::new(b.x0, b.y0);
-                                        let c1 = transform
-                                            * kurbo::Point::new(b.x1, b.y1);
-                                        let rect = kurbo::Rect::from_points(c0, c1);
-                                        let mut frame = PathBuilder::stroke(px(1.0));
-                                        let corners = [
-                                            (rect.x0, rect.y0),
-                                            (rect.x1, rect.y0),
-                                            (rect.x1, rect.y1),
-                                            (rect.x0, rect.y1),
-                                        ];
-                                        frame.move_to(gp(kurbo::Point::new(
-                                            corners[0].0,
-                                            corners[0].1,
-                                        )));
-                                        for (x, y) in corners.iter().skip(1) {
-                                            frame.line_to(gp(kurbo::Point::new(*x, *y)));
-                                        }
-                                        frame.line_to(gp(kurbo::Point::new(
-                                            corners[0].0,
-                                            corners[0].1,
-                                        )));
-                                        let color = fade(t::metric_quiet(), 1.0);
-                                        if let Ok(p) = frame.build() {
-                                            window.paint_path(p, color);
-                                        }
-                                        let text = format!(
-                                            "{:.0}×{:.0}",
-                                            b.width(),
-                                            b.height()
-                                        );
-                                        let mid_left = kurbo::Point::new(
-                                            rect.x0,
-                                            rect.center().y,
-                                        );
-                                        let mid_right = kurbo::Point::new(
-                                            rect.x1,
-                                            rect.center().y,
-                                        );
-                                        draw_label(
-                                            window,
-                                            cx,
-                                            mid_left,
-                                            mid_right,
-                                            text,
-                                            fade(t::text(), 1.0),
-                                            &mut placed,
-                                        );
-                                    }
-                                }
-                            }
-                            // Continuity rings around on-curve nodes.
-                            if !continuity_rings.is_empty() {
-                                use kurbo::Shape as _;
-                                let r = (4.5 * 1.9) as f64;
-                                for (at, color) in &continuity_rings {
-                                    let c = transform * *at;
-                                    let circle = kurbo::Circle::new(c, r)
-                                        .to_path(0.25);
-                                    if let Some(p) = build_path(
-                                        &circle,
-                                        Affine::IDENTITY,
-                                        origin,
-                                        PathBuilder::stroke(px(1.5)),
-                                    ) {
-                                        window.paint_path(p, *color);
-                                    }
-                                }
-                            }
-
-                            // Annotations: red working marks over
-                            // everything (arrows point at the spot,
-                            // circles ring it, notes label it).
-                            if !annotations.is_empty() {
-                                use kurbo::Shape as _;
-                                let color = t::annotation();
-                                for note in &annotations {
-                                    let p = to_screen(note.x, note.y);
-                                    let (px_, py_) = (
-                                        f32::from(p.x) as f64,
-                                        f32::from(p.y) as f64,
-                                    );
-                                    match note.kind.as_str() {
-                                        "circle" => {
-                                            let ring = kurbo::Circle::new(
-                                                (px_, py_),
-                                                12.0,
-                                            )
-                                            .to_path(0.25);
-                                            if let Some(path) = build_path(
-                                                &ring,
-                                                Affine::IDENTITY,
-                                                gpui::point(px(0.0), px(0.0)),
-                                                PathBuilder::stroke(px(2.0)),
-                                            ) {
-                                                window.paint_path(path, color);
-                                            }
-                                        }
-                                        "note" => {
-                                            let dot = kurbo::Circle::new(
-                                                (px_, py_),
-                                                3.0,
-                                            )
-                                            .to_path(0.25);
-                                            if let Some(path) =
-                                                build_fill_path(
-                                                    &dot,
-                                                    Affine::IDENTITY,
-                                                    gpui::point(
-                                                        px(0.0),
-                                                        px(0.0),
-                                                    ),
-                                                )
-                                            {
-                                                window.paint_path(path, color);
-                                            }
-                                            let text =
-                                                gpui::SharedString::from(
-                                                    note.text.clone(),
-                                                );
-                                            let run = gpui::TextRun {
-                                                len: text.len(),
-                                                font: window
-                                                    .text_style()
-                                                    .font(),
-                                                color: color.into(),
-                                                background_color: None,
-                                                underline: None,
-                                                strikethrough: None,
-                                            };
-                                            let line = window
-                                                .text_system()
-                                                .shape_line(
-                                                    text,
-                                                    px(12.0),
-                                                    std::slice::from_ref(&run),
-                                                    None,
-                                                );
-                                            let _ = line.paint(
-                                                gpui::point(
-                                                    p.x + px(8.0),
-                                                    p.y - px(7.0),
-                                                ),
-                                                px(14.0),
-                                                gpui::TextAlign::Left,
-                                                None,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                        _ => {
-                                            // Arrow from lower-right,
-                                            // tip on the point.
-                                            let mut arrow = BezPath::new();
-                                            arrow.move_to((px_, py_));
-                                            arrow.line_to((
-                                                px_ + 12.0,
-                                                py_ + 4.0,
-                                            ));
-                                            arrow.line_to((
-                                                px_ + 8.0,
-                                                py_ + 8.0,
-                                            ));
-                                            arrow.line_to((
-                                                px_ + 20.0,
-                                                py_ + 20.0,
-                                            ));
-                                            arrow.line_to((
-                                                px_ + 8.0 + 4.0,
-                                                py_ + 8.0 + 8.0,
-                                            ));
-                                            arrow.line_to((
-                                                px_ + 4.0,
-                                                py_ + 12.0,
-                                            ));
-                                            arrow.close_path();
-                                            if let Some(path) =
-                                                build_fill_path(
-                                                    &arrow,
-                                                    Affine::IDENTITY,
-                                                    gpui::point(
-                                                        px(0.0),
-                                                        px(0.0),
-                                                    ),
-                                                )
-                                            {
-                                                window.paint_path(path, color);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            // Free-transform box: the selection's
-                            // bounds, corner and edge handles, all
-                            // constant screen size (Glyphs 4's
-                            // on-canvas rotate and scale).
-                            if let Some(bbox) = transform_box {
-                                let pa = to_screen(bbox.x0, bbox.y0);
-                                let pb = to_screen(bbox.x1, bbox.y1);
-                                let rect = Bounds::from_corners(
-                                    gpui::point(pa.x.min(pb.x), pa.y.min(pb.y)),
-                                    gpui::point(pa.x.max(pb.x), pa.y.max(pb.y)),
-                                );
-                                window.paint_quad(gpui::outline(
-                                    rect,
-                                    t::marquee_stroke(),
-                                    gpui::BorderStyle::Solid,
-                                ));
-                                let (cx_, cy_) =
-                                    (bbox.center().x, bbox.center().y);
-                                const HANDLE: f32 = 6.0;
-                                for (hx, hy) in [
-                                    (bbox.x0, bbox.y0),
-                                    (bbox.x1, bbox.y0),
-                                    (bbox.x0, bbox.y1),
-                                    (bbox.x1, bbox.y1),
-                                    (cx_, bbox.y0),
-                                    (cx_, bbox.y1),
-                                    (bbox.x0, cy_),
-                                    (bbox.x1, cy_),
-                                ] {
-                                    let p = to_screen(hx, hy);
-                                    let half = px(HANDLE / 2.0);
-                                    let handle = Bounds::from_corners(
-                                        gpui::point(p.x - half, p.y - half),
-                                        gpui::point(p.x + half, p.y + half),
-                                    );
-                                    window.paint_quad(gpui::fill(
-                                        handle,
-                                        t::panel_bg(),
-                                    ));
-                                    window.paint_quad(gpui::outline(
-                                        handle,
-                                        t::marquee_stroke(),
-                                        gpui::BorderStyle::Solid,
-                                    ));
-                                }
-                            }
-                            // Marquee rectangle.
-                            if let Some((a, b)) = marquee {
-                                let pa = to_screen(a.0, a.1);
-                                let pb = to_screen(b.0, b.1);
-                                let rect = Bounds::from_corners(
-                                    gpui::point(pa.x.min(pb.x), pa.y.min(pb.y)),
-                                    gpui::point(pa.x.max(pb.x), pa.y.max(pb.y)),
-                                );
-                                window.paint_quad(gpui::fill(rect, t::marquee_fill()));
-                                window.paint_quad(gpui::outline(
-                                    rect,
-                                    t::marquee_stroke(),
-                                    gpui::BorderStyle::Solid,
-                                ));
-                            }
-                            let _ = (zoom, &component_names);
-                            },
-                        );
-                    },
-                )
-                .size_full(),
-            )
-            .child(self.editor_info_panel(index, cx))
-    }
-
-    /// The floating info panel Glyphs puts at the bottom of the edit
-    /// view: the glyph's name and codepoint, its sidebearings and
-    /// width, its kerning groups, and — while something is selected —
-    /// the selection's position and size.
-    fn editor_info_panel(
-        &self,
-        index: usize,
-        _cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        if self.editor.tool == Tool::Preview {
-            return div().into_any_element();
-        }
-        let Some(font) = self.font() else {
-            return div().into_any_element();
-        };
-        let entry = &font.glyphs[index];
-        let name: SharedString = entry.name.to_string().into();
-        let unicode: SharedString = entry
-            .codepoint
-            .map(|c| format!("{:04X}", c as u32))
-            .unwrap_or_default()
-            .into();
-        let group_l = runebender_core::glyph_ops::kern_group(
-            &font.font,
-            entry.name.as_ref(),
-            true,
-        )
-        .map(|g| g.as_str().replace("public.kern1.", ""))
-        .unwrap_or_default();
-        let group_r = runebender_core::glyph_ops::kern_group(
-            &font.font,
-            entry.name.as_ref(),
-            false,
-        )
-        .map(|g| g.as_str().replace("public.kern2.", ""))
-        .unwrap_or_default();
-
-        // One card, built on a 6px rhythm: an 8px inset on every side,
-        // 6px between rows, and a header band the same height as the
-        // fields under it.
-        const CARD_PAD: f32 = 8.0;
-        const CARD_GAP: f32 = 6.0;
-        const CARD_RADIUS: f32 = 6.0;
-        const HEADER_H: f32 = 22.0;
-        let card = || {
-            div()
-                .rounded(px(CARD_RADIUS))
-                .border(t::stroke())
-                .border_color(t::panel_outline())
-                .bg(t::panel_bg())
-                .flex()
-                .flex_col()
-        };
-        let label = |text: SharedString| {
-            div()
-                .text_xs()
-                .text_color(t::text_muted())
-                .child(text)
-        };
-        let metric = |input: &gpui::Entity<widgets::input::InputState>| {
-            div()
-                .w(px(64.0))
-                .child(widgets::input::Input::new(input).small())
-        };
-
-        let metrics = card()
-            .child(
-                // Header: the glyph on the left, its codepoint on the
-                // right. A quiet band, not a colour statement — the
-                // corners follow the card's radius so nothing pokes
-                // out past the border.
-                div()
-                    .h(px(HEADER_H))
-                    .px(px(CARD_PAD))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
-                    .rounded_t(px(CARD_RADIUS - 1.0))
-                    .bg(t::cell_selected_bg())
-                    .border_b_1()
-                    .border_color(t::panel_outline())
-                    .text_sm()
-                    .text_color(t::text())
-                    .child(name)
-                    .child(
-                        div()
-                            .text_color(t::text_muted())
-                            .child(unicode),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(CARD_GAP))
-                    .p(px(CARD_PAD))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(CARD_GAP))
-                            .child(label("LSB".into()))
-                            .child(metric(&self.metric_inputs.lsb))
-                            .child(metric(&self.metric_inputs.width))
-                            .child(metric(&self.metric_inputs.rsb))
-                            .child(label("RSB".into())),
-                    )
-                    .child(
-                        // Kerning groups sit under the sidebearing they
-                        // apply to, the way Glyphs stacks them.
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(label(SharedString::from(group_l)))
-                            .child(label(SharedString::from(group_r))),
-                    ),
-            );
-
-        let selection = self.selection_bounds().map(|r| {
-            let readout = |name: &'static str, value: f64| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(CARD_GAP))
-                    .child(div().w(px(10.0)).text_xs().text_color(t::text_muted()).child(name))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(t::text())
-                            .child(SharedString::from(format!("{value:.0}"))),
-                    )
-            };
-            card()
-                .child(
-                    div()
-                        .h(px(HEADER_H))
-                        .px(px(CARD_PAD))
-                        .flex()
-                        .items_center()
-                        .rounded_t(px(CARD_RADIUS - 1.0))
-                        .bg(t::cell_selected_bg())
-                        .border_b_1()
-                        .border_color(t::panel_outline())
-                        .text_sm()
-                        .text_color(t::text_muted())
-                        .child("Selection"),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(CARD_PAD * 2.0))
-                        .p(px(CARD_PAD))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(CARD_GAP))
-                                .child(readout("X", r.x0))
-                                .child(readout("Y", r.y0)),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(CARD_GAP))
-                                .child(readout("W", r.width()))
-                                .child(readout("H", r.height())),
-                        ),
-                )
-        });
-
-        div()
-            .absolute()
-            .bottom(px(12.0))
-            .left_0()
-            .right_0()
-            .flex()
-            .justify_center()
-            .items_end()
-            .gap_2()
-            .child(metrics)
-            .children(selection)
-            .into_any_element()
-    }
 
     fn ensure_editor_fit(&mut self) {
         if self.editor.initialized {
@@ -13814,7 +6391,9 @@ impl Workspace {
     /// Right-click on the canvas: build the web-style context menu
     /// for whatever is under the cursor.
     fn editor_context_menu(&mut self, pos: Point<gpui::Pixels>) {
-        let Mode::Editor(index) = self.mode else { return };
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
         let Some(font) = self.font() else { return };
         let (dx, dy) = self.editor.window_to_design(pos);
         let tolerance = 16.0 / self.editor.zoom().max(1e-6);
@@ -13823,28 +6402,21 @@ impl Workspace {
             .anchors
             .iter()
             .enumerate()
-            .map(|(i, (_, x, y))| {
-                (((x - dx).powi(2) + (y - dy).powi(2)).sqrt(), i)
-            })
+            .map(|(i, (_, x, y))| (((x - dx).powi(2) + (y - dy).powi(2)).sqrt(), i))
             .filter(|(dist, _)| *dist <= tolerance)
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, i)| i);
         let norad_glyph = font.font.get_glyph(entry.name.as_ref());
         let component = if anchor.is_none() {
-            norad_glyph
-                .and_then(|g| {
-                    runebender_core::glyph_ops::component_at(
-                        &font.font,
-                        g,
-                        kurbo::Point::new(dx, dy),
-                    )
+            norad_glyph.and_then(|g| {
+                runebender_core::glyph_ops::component_at(&font.font, g, kurbo::Point::new(dx, dy))
                     .map(|ci| {
                         let aligned = !runebender_core::composites::component_alignment_disabled(
                             &g.components[ci],
                         );
                         (ci, aligned)
                     })
-                })
+            })
         } else {
             None
         };
@@ -13898,9 +6470,7 @@ impl Workspace {
                 read_annotations(glyph)
                     .iter()
                     .enumerate()
-                    .map(|(i, a)| {
-                        (((a.x - dx).powi(2) + (a.y - dy).powi(2)).sqrt(), i)
-                    })
+                    .map(|(i, a)| (((a.x - dx).powi(2) + (a.y - dy).powi(2)).sqrt(), i))
                     .filter(|(dist, _)| *dist <= tolerance * 2.0)
                     .min_by(|a, b| a.0.total_cmp(&b.0))
                     .map(|(_, i)| i)
@@ -13911,18 +6481,19 @@ impl Workspace {
 
     /// Run one context-menu action and close the menu.
     fn context_menu_action(&mut self, action: &'static str) {
-        let Some(menu) = self.context_menu.take() else { return };
-        let Mode::Editor(index) = self.mode else { return };
+        let Some(menu) = self.context_menu.take() else {
+            return;
+        };
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
         match action {
             "guide-delete" => {
                 if let Some((local, gi)) = menu.guide {
                     if local {
-                        let name = self
-                            .font()
-                            .map(|f| f.glyphs[index].name.to_string());
+                        let name = self.font().map(|f| f.glyphs[index].name.to_string());
                         if let (Some(name), Some(f)) = (name, self.font_mut()) {
-                            if let Some(g) = f.font.get_glyph_mut(name.as_str())
-                            {
+                            if let Some(g) = f.font.get_glyph_mut(name.as_str()) {
                                 if gi < g.guidelines.len() {
                                     g.guidelines.remove(gi);
                                     f.dirty = true;
@@ -13940,8 +6511,7 @@ impl Workspace {
                     }
                 }
             }
-            "guide-add-h" | "guide-add-v" | "guide-add-local-h"
-            | "guide-add-local-v" => {
+            "guide-add-h" | "guide-add-v" | "guide-add-local-h" | "guide-add-local-v" => {
                 let (dx, dy) = menu.design;
                 let vertical = action.ends_with("-v");
                 let line = if vertical {
@@ -13952,9 +6522,7 @@ impl Workspace {
                 let guide = norad::Guideline::new(line, None, None, None);
                 if action.contains("local") {
                     // A local guide belongs to the open glyph.
-                    let name = self
-                        .font()
-                        .map(|f| f.glyphs[index].name.to_string());
+                    let name = self.font().map(|f| f.glyphs[index].name.to_string());
                     if let (Some(name), Some(f)) = (name, self.font_mut()) {
                         if let Some(g) = f.font.get_glyph_mut(name.as_str()) {
                             g.guidelines.push(guide);
@@ -13985,7 +6553,9 @@ impl Workspace {
                             let font_clone = f.font.clone();
                             f.edit_glyph(index, |g| {
                                 runebender_core::glyph_ops::decompose_single_component(
-                                    &font_clone, g, ci,
+                                    &font_clone,
+                                    g,
+                                    ci,
                                 )
                             })
                         })
@@ -13998,9 +6568,7 @@ impl Workspace {
             }
             "decompose-all" => {
                 self.push_undo_snapshot(index);
-                let ok = self
-                    .font_mut()
-                    .is_some_and(|f| f.decompose(index));
+                let ok = self.font_mut().is_some_and(|f| f.decompose(index));
                 if !ok {
                     self.editor.undo.pop();
                 }
@@ -14055,9 +6623,7 @@ impl Workspace {
                                 24.0,
                             )
                             .and_then(|(hit, t)| {
-                                runebender_core::segment_ops::insert_point_on_segment(
-                                    g, &hit, t,
-                                )
+                                runebender_core::segment_ops::insert_point_on_segment(g, &hit, t)
                             })
                         })
                     })
@@ -14077,11 +6643,7 @@ impl Workspace {
                     self.push_undo_snapshot(index);
                     let changed = self
                         .font_mut()
-                        .and_then(|f| {
-                            f.edit_glyph(index, |g| {
-                                toggle_contour_open(g, ci, pi)
-                            })
-                        })
+                        .and_then(|f| f.edit_glyph(index, |g| toggle_contour_open(g, ci, pi)))
                         .unwrap_or(false);
                     if !changed {
                         self.editor.undo.pop();
@@ -14108,9 +6670,7 @@ impl Workspace {
                         .font_mut()
                         .and_then(|f| {
                             f.edit_glyph(index, |g| {
-                                runebender_core::glyph_ops::set_contour_start(
-                                    g, ci, pi,
-                                )
+                                runebender_core::glyph_ops::set_contour_start(g, ci, pi)
                             })
                         })
                         .unwrap_or(false);
@@ -14122,15 +6682,12 @@ impl Workspace {
             "reverse" => {
                 if let Some(ci) = menu.contour {
                     self.push_undo_snapshot(index);
-                    let target: std::collections::HashSet<(usize, usize)> =
-                        [(ci, 0)].into();
+                    let target: std::collections::HashSet<(usize, usize)> = [(ci, 0)].into();
                     let ok = self
                         .font_mut()
                         .and_then(|f| {
                             f.edit_glyph(index, |g| {
-                                runebender_core::glyph_ops::reverse_contours(
-                                    g, &target,
-                                )
+                                runebender_core::glyph_ops::reverse_contours(g, &target)
                             })
                         })
                         .unwrap_or(false);
@@ -14148,9 +6705,7 @@ impl Workspace {
                         .font_mut()
                         .and_then(|f| {
                             f.edit_glyph(index, |g| {
-                                runebender_core::glyph_ops::move_contour(
-                                    g, ci, up,
-                                )
+                                runebender_core::glyph_ops::move_contour(g, ci, up)
                             })
                         })
                         .unwrap_or(false);
@@ -14164,11 +6719,7 @@ impl Workspace {
             "add-anchor" => {
                 self.push_undo_snapshot(index);
                 if let Some(font) = self.font_mut() {
-                    font.add_anchor(
-                        index,
-                        menu.design.0.round(),
-                        menu.design.1.round(),
-                    );
+                    font.add_anchor(index, menu.design.0.round(), menu.design.1.round());
                 }
             }
             "delete-anchor" => {
@@ -14187,7 +6738,9 @@ impl Workspace {
     /// Commit the Add Component name field.
     fn commit_add_component(&mut self, base: &str) {
         self.context_menu = None;
-        let Mode::Editor(index) = self.mode else { return };
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
         let base = base.trim().to_string();
         if base.is_empty() {
             return;
@@ -14198,11 +6751,7 @@ impl Workspace {
             .and_then(|f| {
                 let font_clone = f.font.clone();
                 f.edit_glyph(index, |g| {
-                    runebender_core::glyph_ops::add_component(
-                        &font_clone,
-                        g,
-                        &base,
-                    )
+                    runebender_core::glyph_ops::add_component(&font_clone, g, &base)
                 })
             })
             .unwrap_or(false);
@@ -14211,540 +6760,6 @@ impl Workspace {
             self.status_note = Some(format!("No glyph named {base}").into());
         } else {
             self.status_note = Some(format!("Added component {base}").into());
-        }
-    }
-
-    fn editor_mouse_down(&mut self, pos: Point<gpui::Pixels>, shift: bool, alt: bool, click_count: usize) {
-        self.context_menu = None;
-        self.nudging = false;
-
-        self.ensure_editor_fit();
-        let Mode::Editor(index) = self.mode else {
-            return;
-        };
-        if click_count >= 2 {
-            if self.double_click_edit(pos) {
-                return;
-            }
-            if self.activate_sort_at_pos(pos) {
-                return;
-            }
-        }
-        if self.editor.tool == Tool::Text {
-            self.text_tool_click(pos, shift);
-            return;
-        }
-        if self.editor.tool == Tool::Knife {
-            let (dx, dy) = self.editor.window_to_design(pos);
-            self.editor.drag = Some(Drag::Knife {
-                start: (dx, dy),
-                current: (dx, dy),
-            });
-            return;
-        }
-        if self.editor.tool == Tool::HyperPen {
-            self.hyper_pen_mouse_down(index, pos, shift);
-            return;
-        }
-        if self.editor.tool == Tool::Pen {
-            self.pen_mouse_down(index, pos, alt);
-            return;
-        }
-        if self
-            .project
-            .as_ref()
-            .is_some_and(|p| p.showing_instance())
-        {
-            // An instance is a view, never an edit: dragging pans, and
-            // the status bar says why nothing else responds.
-            let local = self.editor.window_to_local(pos);
-            self.editor.drag = Some(Drag::Pan {
-                last: (local.x, local.y),
-            });
-            self.status_note = Some(
-                "Interpolated instance · move an axis onto a master to edit"
-                    .into(),
-            );
-            return;
-        }
-        if self.editor.tool == Tool::Preview {
-            // Preview is the pan tool: dragging moves the viewport,
-            // the way the web's PreviewTool does. Hold space to reach
-            // it from any other tool.
-            let local = self.editor.window_to_local(pos);
-            self.editor.drag = Some(Drag::Pan {
-                last: (local.x, local.y),
-            });
-            return;
-        }
-        if matches!(self.editor.tool, Tool::Shapes | Tool::Measure) {
-            let (dx, dy) = self.editor.window_to_design(pos);
-            self.editor.drag = Some(if self.editor.tool == Tool::Shapes {
-                Drag::Shape {
-                    start: (dx, dy),
-                    current: (dx, dy),
-                }
-            } else {
-                Drag::Measure {
-                    start: (dx, dy),
-                    current: (dx, dy),
-                }
-            });
-            return;
-        }
-        if alt && self.editor.tool == Tool::Select {
-            // Alt-click on a line segment converts it to a curve
-            // (thirds handles); otherwise alt-drag pans.
-            let (adx, ady) = self.editor.window_to_design(pos);
-            let radius = HIT_RADIUS_PX / self.editor.zoom();
-            let converted = self
-                .font()
-                .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
-                .and_then(|g| {
-                    runebender_core::segment_ops::nearest_segment_with_t(
-                        g,
-                        kurbo::Point::new(adx, ady),
-                        radius,
-                    )
-                })
-                .filter(|(hit, _)| matches!(hit.seg, kurbo::PathSeg::Line(_)));
-            if let Some((seg_hit, _)) = converted {
-                self.push_undo_snapshot(index);
-                let new_controls = self
-                    .font_mut()
-                    .and_then(|f| {
-                        f.edit_glyph(index, |g| {
-                            runebender_core::segment_ops::convert_line_to_curve(
-                                g, &seg_hit,
-                            )
-                        })
-                    })
-                    .flatten();
-                match new_controls {
-                    Some(ids) => {
-                        self.editor.selected = ids.into_iter().collect();
-                    }
-                    None => {
-                        self.editor.undo.pop();
-                    }
-                }
-                self.editor.segment_hover = None;
-                return;
-            }
-            let local = self.editor.window_to_local(pos);
-            self.editor.drag = Some(Drag::Pan {
-                last: (local.x, local.y),
-            });
-            return;
-        }
-        let Some(font) = self.font() else {
-            return;
-        };
-        let (dx, dy) = self.editor.window_to_design(pos);
-        let tolerance = HIT_RADIUS_PX / self.editor.zoom();
-        let point_tolerance = POINT_HIT_RADIUS_PX / self.editor.zoom();
-        // Copy the point data out so selection can mutate afterwards.
-        let all_points: Vec<((usize, usize), (f64, f64))> = font.glyphs[index]
-            .points
-            .iter()
-            .map(|p| ((p.contour, p.index), (p.x, p.y)))
-            .collect();
-        // Free-transform handles outrank everything: a corner grab
-        // always transforms the selection (Glyphs 4's on-canvas
-        // rotate and scale).
-        // A point under the cursor still wins: the box corner usually
-        // sits exactly on a selected extreme, and grabbing that node
-        // must drag it, not scale the selection. Handles work from
-        // the parts of the box no point occupies.
-        let point_near = all_points.iter().any(|(_, (x, y))| {
-            ((x - dx).powi(2) + (y - dy).powi(2)).sqrt() <= point_tolerance
-        });
-        if self.editor.tool == Tool::Select && !shift && !point_near {
-            if let Some(bbox) = self.selection_bbox(index) {
-                let zoom = self.editor.zoom().max(1e-6);
-                let grab = 7.0 / zoom;
-                let ring = 22.0 / zoom;
-                let (cx_, cy_) = (bbox.center().x, bbox.center().y);
-                let corners = [
-                    ((bbox.x0, bbox.y0), (bbox.x1, bbox.y1)),
-                    ((bbox.x1, bbox.y0), (bbox.x0, bbox.y1)),
-                    ((bbox.x0, bbox.y1), (bbox.x1, bbox.y0)),
-                    ((bbox.x1, bbox.y1), (bbox.x0, bbox.y0)),
-                ];
-                let edges = [
-                    ((cx_, bbox.y0), (cx_, bbox.y1), false, true),
-                    ((cx_, bbox.y1), (cx_, bbox.y0), false, true),
-                    ((bbox.x0, cy_), (bbox.x1, cy_), true, false),
-                    ((bbox.x1, cy_), (bbox.x0, cy_), true, false),
-                ];
-                let dist = |p: (f64, f64)| {
-                    ((p.0 - dx).powi(2) + (p.1 - dy).powi(2)).sqrt()
-                };
-                let mut gesture: Option<((f64, f64), bool, bool, bool)> = None;
-                for (corner, opposite) in corners {
-                    if dist(corner) <= grab {
-                        gesture = Some((opposite, false, true, true));
-                        break;
-                    }
-                }
-                if gesture.is_none() {
-                    for (mid, opposite, sx, sy) in edges {
-                        if dist(mid) <= grab {
-                            gesture = Some((opposite, false, sx, sy));
-                            break;
-                        }
-                    }
-                }
-                if gesture.is_none() {
-                    for (corner, _) in corners {
-                        let d = dist(corner);
-                        if d > grab && d <= ring {
-                            gesture = Some(((cx_, cy_), true, false, false));
-                            break;
-                        }
-                    }
-                }
-                if let Some((anchor, rotate, scale_x, scale_y)) = gesture {
-                    self.push_undo_snapshot(index);
-                    self.editor.drag = Some(Drag::FreeTransform {
-                        anchor,
-                        start: (dx, dy),
-                        rotate,
-                        scale_x,
-                        scale_y,
-                        originals: all_points.iter().copied().collect(),
-                    });
-                    return;
-                }
-            }
-        }
-        // HOI knobs (trajectory intermediate points) come first while
-        // the trajectory view is up: each node's knob sits at its
-        // intermediate point, or the linear middle.
-        if self.editor.tool == Tool::Select && self.show_trajectories {
-            if let Some((lo, hi, curves)) =
-                self.project.as_ref().and_then(|p| {
-                    let (lo, hi) = p.axis_end_masters()?;
-                    let name = p.active_font().glyphs[index].name.clone();
-                    let canon = p.masters[lo].font.get_glyph(name.as_ref())?;
-                    Some((
-                        p.masters[lo]
-                            .font
-                            .get_glyph(name.as_ref())?
-                            .clone(),
-                        p.masters[hi]
-                            .font
-                            .get_glyph(name.as_ref())?
-                            .clone(),
-                        read_hoi_intermediates(canon),
-                    ))
-                })
-            {
-                let grab = 7.0 / self.editor.zoom().max(1e-6);
-                let mut best: Option<(f64, (usize, usize), (f64, f64), (f64, f64))> =
-                    None;
-                for (ci, (ca, cb)) in
-                    lo.contours.iter().zip(hi.contours.iter()).enumerate()
-                {
-                    for (pi, (pa, pb)) in
-                        ca.points.iter().zip(cb.points.iter()).enumerate()
-                    {
-                        let a = (pa.x, pa.y);
-                        let b = (pb.x, pb.y);
-                        let q = curves
-                            .get(&(ci, pi))
-                            .copied()
-                            .unwrap_or(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0));
-                        let dist =
-                            ((q.0 - dx).powi(2) + (q.1 - dy).powi(2)).sqrt();
-                        if dist <= grab
-                            && best.is_none_or(|(d, ..)| dist < d)
-                        {
-                            best = Some((dist, (ci, pi), a, b));
-                        }
-                    }
-                }
-                if let Some((_, id, a, b)) = best {
-                    self.hoi_live = Some((id, (dx, dy)));
-                    self.editor.drag = Some(Drag::HoiKnob { id, a, b });
-                    return;
-                }
-            }
-        }
-        // Anchors take priority over points.
-        let anchor_hit = font.glyphs[index]
-            .anchors
-            .iter()
-            .enumerate()
-            .map(|(i, (_, x, y))| {
-                let dist = ((x - dx).powi(2) + (y - dy).powi(2)).sqrt();
-                (dist, i, (*x, *y))
-            })
-            .filter(|(dist, _, _)| *dist <= point_tolerance)
-            .min_by(|a, b| a.0.total_cmp(&b.0));
-        let hit = all_points
-            .iter()
-            .map(|(id, (x, y))| {
-                let dist = ((x - dx).powi(2) + (y - dy).powi(2)).sqrt();
-                (dist, *id)
-            })
-            .filter(|(dist, id)| {
-                *dist <= point_tolerance
-                    && !self.editor.locked_points.contains(id)
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, id)| id);
-
-        match hit {
-            Some(id) => {
-                self.editor.selected_component = None;
-                if shift {
-                    if !self.editor.selected.remove(&id) {
-                        self.editor.selected.insert(id);
-                    }
-                } else if !self.editor.selected.contains(&id) {
-                    self.editor.selected.clear();
-                    self.editor.selected.insert(id);
-                }
-                if self.editor.selected.contains(&id) {
-                    let originals: std::collections::HashMap<
-                        (usize, usize),
-                        (f64, f64),
-                    > = all_points.iter().copied().collect();
-                    let anchor = self.selected_anchor_origin(index);
-                    self.push_undo_snapshot(index);
-                    self.editor.drag = Some(Drag::Points {
-                        start: (dx, dy),
-                        originals,
-                        anchor,
-                    });
-                }
-            }
-            None => {
-                // Points outrank anchors, and an anchor may be dragged
-                // together with a point selection (web keeps points and
-                // anchors in one selection). Shift adds to what is
-                // there; a plain click on a fresh anchor starts over.
-                if let Some((_, ai, _)) = anchor_hit {
-                    self.editor.selected_component = None;
-                    let already = self.editor.selected_anchors.contains(&ai);
-                    if shift {
-                        if already {
-                            self.editor.selected_anchors.retain(|a| *a != ai);
-                            return;
-                        }
-                        self.editor.selected_anchors.push(ai);
-                    } else {
-                        if !already {
-                            // A plain click on an unselected anchor
-                            // starts over; clicking one of a group
-                            // drags the whole group.
-                            self.editor.selected.clear();
-                            self.editor.selected_anchors = vec![ai];
-                        }
-                    }
-                    let originals: std::collections::HashMap<
-                        (usize, usize),
-                        (f64, f64),
-                    > = all_points.iter().copied().collect();
-                    let anchor = self.selected_anchor_origin(index);
-                    self.push_undo_snapshot(index);
-                    self.editor.drag = Some(Drag::Points {
-                        start: (dx, dy),
-                        originals,
-                        anchor,
-                    });
-                    return;
-                }
-                self.editor.selected_anchors.clear();
-                // Sidebearing edge before segments: with a small or
-                // negative sidebearing the outline runs along the
-                // metric line, and a click on the line must not drag
-                // the stem that shares it (web ordering).
-                let (top_b, bottom_b) = self.text_sort_bounds();
-                let advance = self
-                    .font()
-                    .map(|f| f.glyphs[index].advance)
-                    .unwrap_or(0.0);
-                if dy >= bottom_b - tolerance && dy <= top_b + tolerance {
-                    let edge = if (dx - advance).abs() <= tolerance {
-                        Some(true)
-                    } else if dx.abs() <= tolerance {
-                        Some(false)
-                    } else {
-                        None
-                    };
-                    if let Some(right) = edge {
-                        self.push_undo_snapshot(index);
-                        self.editor.sidebearing_hover = Some(right);
-                        self.editor.drag = Some(Drag::Sidebearing {
-                            right,
-                            start_x: dx,
-                            applied: 0.0,
-                            start_width: advance,
-                        });
-                        return;
-                    }
-                }
-                // A click on a segment selects its points and drags
-                // them together, like the web select tool.
-                let seg = self
-                    .font()
-                    .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
-                    .and_then(|g| {
-                        runebender_core::segment_ops::nearest_segment_with_t(
-                            g,
-                            kurbo::Point::new(dx, dy),
-                            tolerance,
-                        )
-                    });
-                if let Some((seg_hit, _)) = seg {
-                    let ids = seg_hit.point_ids();
-                    if shift {
-                        if ids.iter().all(|id| self.editor.selected.contains(id)) {
-                            // Shift-clicking a segment that is already
-                            // selected takes it back out, and starts no
-                            // drag (web returns Some(false) here).
-                            for id in &ids {
-                                self.editor.selected.remove(id);
-                            }
-                            return;
-                        }
-                        self.editor.selected.extend(ids.iter().copied());
-                    } else {
-                        self.editor.selected = ids.iter().copied().collect();
-                    }
-                    let originals: std::collections::HashMap<
-                        (usize, usize),
-                        (f64, f64),
-                    > = all_points.iter().copied().collect();
-                    let anchor = self.selected_anchor_origin(index);
-                    self.push_undo_snapshot(index);
-                    self.editor.drag = Some(Drag::Points {
-                        start: (dx, dy),
-                        originals,
-                        anchor,
-                    });
-                    return;
-                }
-                let component_hit = self
-                    .font()
-                    .and_then(|f| {
-                        let g = f.font.get_glyph(f.glyphs[index].name.as_ref())?;
-                        runebender_core::glyph_ops::component_at(
-                            &f.font,
-                            g,
-                            kurbo::Point::new(dx, dy),
-                        )
-                        .map(|ci| {
-                            let t = &g.components[ci].transform;
-                            (ci, (t.x_offset, t.y_offset))
-                        })
-                    });
-                if let Some((ci, orig)) = component_hit {
-                    self.editor.selected_component = Some(ci);
-                    self.editor.selected.clear();
-                    // An aligned component belongs to its anchor, so
-                    // dragging is refused rather than quietly breaking
-                    // the link — the Glyphs contract: unlock first,
-                    // then move (web translate_selected_component).
-                    let aligned = self
-                        .font()
-                        .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
-                        .and_then(|g| g.components.get(ci))
-                        .is_some_and(|c| {
-                            !runebender_core::composites::component_alignment_disabled(c)
-                        });
-                    if aligned {
-                        self.status_note = Some(
-                            "Component is anchor-locked · unlock it in the Selection panel to move it"
-                                .into(),
-                        );
-                        return;
-                    }
-                    self.push_undo_snapshot(index);
-                    self.editor.drag = Some(Drag::Component {
-                        index: ci,
-                        start: (dx, dy),
-                        orig,
-                    });
-                    return;
-                }
-                // Show All Masters: a node of another master under
-                // the click switches to that master with the node
-                // selected — the editable-overlay gesture.
-                if self.show_all_masters {
-                    let hit: Option<(usize, (usize, usize))> = self
-                        .project
-                        .as_ref()
-                        .and_then(|p| {
-                            let name = &p.active_font().glyphs[index].name;
-                            let mut best: Option<(f64, usize, (usize, usize))> =
-                                None;
-                            for (m, master) in p.masters.iter().enumerate() {
-                                if m == p.active {
-                                    continue;
-                                }
-                                let Some(glyph) = master
-                                    .glyphs
-                                    .iter()
-                                    .find(|g| g.name == *name)
-                                else {
-                                    continue;
-                                };
-                                for point in glyph.points.iter() {
-                                    let dist = ((point.x - dx).powi(2)
-                                        + (point.y - dy).powi(2))
-                                    .sqrt();
-                                    if dist <= point_tolerance
-                                        && best
-                                            .is_none_or(|(d, ..)| dist < d)
-                                    {
-                                        best = Some((
-                                            dist,
-                                            m,
-                                            (point.contour, point.index),
-                                        ));
-                                    }
-                                }
-                            }
-                            best.map(|(_, m, id)| (m, id))
-                        });
-                    if let Some((m, id)) = hit {
-                        self.switch_master(m);
-                        self.editor.selected.clear();
-                        self.editor.selected.insert(id);
-                        return;
-                    }
-                }
-                // Guides underlie everything: a guide drag starts
-                // only when no point, segment, or component claimed
-                // the click.
-                if let Some((local, gi)) = self.guide_hit(dx, dy, tolerance) {
-                    self.editor.selected_component = None;
-                    self.editor.selected.clear();
-                    self.editor.selected_anchors.clear();
-                    self.editor.drag = Some(Drag::Guide { local, index: gi });
-                    return;
-                }
-                self.editor.selected_component = None;
-                if !shift {
-                    self.editor.selected.clear();
-                    self.editor.selected_anchors.clear();
-                }
-                // The selection the marquee started from: every drag
-                // step recomputes selection = base ∪ enclosed, so
-                // shrinking the box gives points back (web
-                // select_in_screen_rect).
-                let base = self.editor.selected.clone();
-                let base_anchors = self.editor.selected_anchors.clone();
-                self.editor.drag = Some(Drag::Marquee {
-                    start: (dx, dy),
-                    current: (dx, dy),
-                    base,
-                    base_anchors,
-                });
-            }
         }
     }
 
@@ -14764,8 +6779,7 @@ impl Workspace {
             min = (min.0.min(p.x), min.1.min(p.y));
             max = (max.0.max(p.x), max.1.max(p.y));
         }
-        (min.0.is_finite()
-            && (max.0 - min.0 > 1e-9 || max.1 - min.1 > 1e-9))
+        (min.0.is_finite() && (max.0 - min.0 > 1e-9 || max.1 - min.1 > 1e-9))
             .then(|| kurbo::Rect::new(min.0, min.1, max.0, max.1))
     }
 
@@ -14824,340 +6838,6 @@ impl Workspace {
             .collect()
     }
 
-    fn editor_mouse_drag(
-        &mut self,
-        pos: Point<gpui::Pixels>,
-        shift: bool,
-        alt: bool,
-    ) -> bool {
-        let Mode::Editor(index) = self.mode else {
-            return false;
-        };
-        if self.editor.tool == Tool::Pen {
-            return self.pen_mouse_drag(index, pos);
-        }
-        let (dx, dy) = self.editor.window_to_design(pos);
-        self.editor.cursor = (dx, dy);
-        match &mut self.editor.drag {
-            Some(Drag::Points { start, originals, anchor }) => {
-                // The whole gesture is measured from where it began, so
-                // grid snapping cannot accumulate drift, and core owns
-                // the rules: handles ride along with their on-curve
-                // point, smooth tangents stay aimed, points land on the
-                // design grid. Alt moves the selection alone.
-                let delta = (dx - start.0, dy - start.1);
-                let originals = originals.clone();
-                let anchor = anchor.clone();
-                let selected = self.editor.selected.clone();
-                let Some(font) = self.font_mut() else {
-                    return false;
-                };
-                let mut changed = font
-                    .edit_glyph(index, |g| {
-                        runebender_core::point_ops::translate_points(
-                            g, &selected, &originals, delta, alt,
-                        )
-                    })
-                    .unwrap_or(false);
-                for (ai, (ox, oy)) in anchor {
-                    use runebender_core::point_ops::snap_coord;
-                    font.set_anchor(
-                        index,
-                        ai,
-                        snap_coord(ox + delta.0),
-                        snap_coord(oy + delta.1),
-                    );
-                    changed = true;
-                }
-                changed
-            }
-            Some(Drag::TextKern) => {
-                let bx = dx + self.editor.sort_offset.0;
-                let changed = self.edit_buffer.drag_manual_kerning(bx).is_some();
-                if changed {
-                    self.sync_sort_offset();
-                }
-                changed
-            }
-            Some(Drag::FreeTransform {
-                anchor,
-                start,
-                rotate,
-                scale_x,
-                scale_y,
-                originals,
-            }) => {
-                let (ax, ay) = *anchor;
-                let affine = if *rotate {
-                    let a0 = (start.1 - ay).atan2(start.0 - ax);
-                    let a1 = (dy - ay).atan2(dx - ax);
-                    let mut angle = a1 - a0;
-                    if shift {
-                        let step = 15f64.to_radians();
-                        angle = (angle / step).round() * step;
-                    }
-                    Affine::translate((ax, ay))
-                        * Affine::rotate(angle)
-                        * Affine::translate((-ax, -ay))
-                } else {
-                    let denx = start.0 - ax;
-                    let deny = start.1 - ay;
-                    let mut sx = if *scale_x && denx.abs() > 1e-6 {
-                        (dx - ax) / denx
-                    } else {
-                        1.0
-                    };
-                    let mut sy = if *scale_y && deny.abs() > 1e-6 {
-                        (dy - ay) / deny
-                    } else {
-                        1.0
-                    };
-                    if shift && *scale_x && *scale_y {
-                        // Proportional: the larger factor drives both.
-                        let s = sx.abs().max(sy.abs());
-                        sx = s * sx.signum();
-                        sy = s * sy.signum();
-                    }
-                    Affine::translate((ax, ay))
-                        * Affine::scale_non_uniform(sx, sy)
-                        * Affine::translate((-ax, -ay))
-                };
-                let originals = originals.clone();
-                let selected = self.editor.selected.clone();
-                self.font_mut().is_some_and(|f| {
-                    f.edit_glyph(index, |g| {
-                        let mut moved = false;
-                        for (c, contour) in g.contours.iter_mut().enumerate() {
-                            for (pi, point) in
-                                contour.points.iter_mut().enumerate()
-                            {
-                                if !selected.contains(&(c, pi)) {
-                                    continue;
-                                }
-                                let Some(&(ox, oy)) = originals.get(&(c, pi))
-                                else {
-                                    continue;
-                                };
-                                let p = affine * kurbo::Point::new(ox, oy);
-                                let (nx, ny) = (p.x.round(), p.y.round());
-                                if point.x != nx || point.y != ny {
-                                    point.x = nx;
-                                    point.y = ny;
-                                    moved = true;
-                                }
-                            }
-                        }
-                        moved
-                    })
-                    .unwrap_or(false)
-                })
-            }
-            Some(Drag::HoiKnob { id, .. }) => {
-                // Live only: the knob follows the cursor; commit and
-                // bake happen on mouse-up.
-                let id = *id;
-                self.hoi_live = Some((id, (dx, dy)));
-                true
-            }
-            Some(Drag::Guide { local, index: gi }) => {
-                let (local, gi) = (*local, *gi);
-                let move_line = |line: &mut norad::Line| match line {
-                    norad::Line::Vertical(x) => {
-                        let nx = dx.round();
-                        let changed = *x != nx;
-                        *x = nx;
-                        changed
-                    }
-                    norad::Line::Horizontal(y) => {
-                        let ny = dy.round();
-                        let changed = *y != ny;
-                        *y = ny;
-                        changed
-                    }
-                    norad::Line::Angle { x, y, .. } => {
-                        let (nx, ny) = (dx.round(), dy.round());
-                        let changed = *x != nx || *y != ny;
-                        *x = nx;
-                        *y = ny;
-                        changed
-                    }
-                };
-                if local {
-                    let name = self
-                        .font()
-                        .map(|f| f.glyphs[index].name.to_string());
-                    let Some(name) = name else { return false };
-                    self.font_mut().is_some_and(|f| {
-                        let moved = f
-                            .font
-                            .get_glyph_mut(name.as_str())
-                            .and_then(|g| g.guidelines.get_mut(gi))
-                            .map(|guide| move_line(&mut guide.line))
-                            .unwrap_or(false);
-                        if moved {
-                            f.dirty = true;
-                            f.modified_glyphs.insert(name);
-                        }
-                        moved
-                    })
-                } else {
-                    self.font_mut().is_some_and(|f| {
-                        let moved = f
-                            .font
-                            .font_info
-                            .guidelines
-                            .as_mut()
-                            .and_then(|gs| gs.get_mut(gi))
-                            .map(|guide| move_line(&mut guide.line))
-                            .unwrap_or(false);
-                        if moved {
-                            f.dirty = true;
-                        }
-                        moved
-                    })
-                }
-            }
-            Some(Drag::Sidebearing {
-                right,
-                start_x,
-                applied,
-                start_width,
-            }) => {
-                let (right, start_x, prev_applied, start_width) =
-                    (*right, *start_x, *applied, *start_width);
-                // Snap to the zoom-matched grid step like the web:
-                // 2 units zoomed close, 8 mid, whole units otherwise.
-                let zoom = self.editor.zoom();
-                let snap = if zoom > 8.0 {
-                    2.0
-                } else if zoom > 0.8 {
-                    8.0
-                } else {
-                    1.0
-                };
-                let total = dx - start_x;
-                let target = if right {
-                    ((start_width + total) / snap).round() * snap - start_width
-                } else {
-                    (total / snap).round() * snap
-                };
-                let step = target - prev_applied;
-                if step == 0.0 {
-                    return false;
-                }
-                if let Some(Drag::Sidebearing { applied, .. }) =
-                    &mut self.editor.drag
-                {
-                    *applied = target;
-                }
-                let changed = if right {
-                    self.font_mut().is_some_and(|f| {
-                        f.edit_glyph(index, |g| {
-                            g.width += step;
-                            g.width >= 0.0
-                        })
-                        .unwrap_or(false)
-                    })
-                } else {
-                    // The left edge moves: ink stays put on screen by
-                    // shifting glyph space and the viewport together.
-                    let ok = self.font_mut().is_some_and(|f| {
-                        f.edit_glyph(index, |g| {
-                            if g.width - step < 0.0 {
-                                return false;
-                            }
-                            runebender_core::glyph_ops::shift_ink(g, -step);
-                            g.width -= step;
-                            true
-                        })
-                        .unwrap_or(false)
-                    });
-                    if ok {
-                        self.editor.viewport.offset.x += step * self.editor.zoom();
-                    }
-                    ok
-                };
-                if changed {
-                    self.rebuild_text_models();
-                    self.sync_sort_offset();
-                }
-                changed
-            }
-            Some(Drag::Component { index: ci, start, orig }) => {
-                let (ci, start, orig) = (*ci, *start, *orig);
-                let target = (
-                    (orig.0 + dx - start.0).round(),
-                    (orig.1 + dy - start.1).round(),
-                );
-                self.font_mut().is_some_and(|f| {
-                    f.edit_glyph(index, |g| {
-                        if let Some(c) = g.components.get_mut(ci) {
-                            c.transform.x_offset = target.0;
-                            c.transform.y_offset = target.1;
-                            true
-                        } else {
-                            false
-                        }
-                    })
-                    .unwrap_or(false)
-                })
-            }
-            Some(Drag::Pan { last }) => {
-                let (lx, ly) = *last;
-                *last = (0.0, 0.0); // placeholder; recomputed below
-                let local = {
-                    // Reborrow immutably for the conversion.
-                    let ed = &self.editor;
-                    ed.window_to_local(pos)
-                };
-                self.editor.viewport.offset.x += local.x - lx;
-                self.editor.viewport.offset.y += local.y - ly;
-                if let Some(Drag::Pan { last }) = &mut self.editor.drag {
-                    *last = (local.x, local.y);
-                }
-                true
-            }
-            Some(Drag::Knife { start, current })
-            | Some(Drag::Measure { start, current }) => {
-                // Shift locks the line to an axis (web
-                // constrain_measure_end).
-                *current = if shift {
-                    let (sx, sy) = *start;
-                    if (dx - sx).abs() >= (dy - sy).abs() {
-                        (dx, sy)
-                    } else {
-                        (sx, dy)
-                    }
-                } else {
-                    (dx, dy)
-                };
-                true
-            }
-            Some(Drag::Shape { start, current }) => {
-                // Shift locks the shape square (web constrain_point).
-                *current = if shift {
-                    let (sx, sy) = *start;
-                    let size = (dx - sx).abs().max((dy - sy).abs());
-                    (
-                        sx + size * (dx - sx).signum(),
-                        sy + size * (dy - sy).signum(),
-                    )
-                } else {
-                    (dx, dy)
-                };
-                true
-            }
-            Some(Drag::Marquee { start, current, base, base_anchors }) => {
-                *current = (dx, dy);
-                let (sx, sy) = *start;
-                let (base, base_anchors) = (base.clone(), base_anchors.clone());
-                self.select_in_rect(index, (sx, sy), (dx, dy), &base, &base_anchors);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// Idle mouse move over the canvas: track the pointer for pen
     /// previews, and alt-hover highlights the nearest segment
     /// (select tool), like the web editor.
@@ -15166,20 +6846,12 @@ impl Workspace {
             return false;
         };
         let mut changed = false;
-        let track_pointer = matches!(
-            self.editor.tool,
-            Tool::Pen | Tool::HyperPen | Tool::Select
-        );
+        let track_pointer = matches!(self.editor.tool, Tool::Pen | Tool::HyperPen | Tool::Select);
         if track_pointer {
-            let moved = self
-                .editor
-                .pointer
-                .is_none_or(|p| p != pos);
+            let moved = self.editor.pointer.is_none_or(|p| p != pos);
             self.editor.pointer = Some(pos);
             // Re-render for the pen rubber band only while drawing.
-            if moved
-                && (self.editor.pen.is_some() || self.editor.hyper_contour.is_some())
-            {
+            if moved && (self.editor.pen.is_some() || self.editor.hyper_contour.is_some()) {
                 changed = true;
             }
         }
@@ -15187,10 +6859,7 @@ impl Workspace {
             let (dx, dy) = self.editor.window_to_design(pos);
             let tolerance = HIT_RADIUS_PX / self.editor.zoom();
             let (top_b, bottom_b) = self.text_sort_bounds();
-            let advance = self
-                .font()
-                .map(|f| f.glyphs[index].advance)
-                .unwrap_or(0.0);
+            let advance = self.font().map(|f| f.glyphs[index].advance).unwrap_or(0.0);
             let edge = if dy >= bottom_b - tolerance && dy <= top_b + tolerance {
                 if (dx - advance).abs() <= tolerance {
                     Some(true)
@@ -15273,288 +6942,6 @@ impl Workspace {
         self.editor.selected_anchors = anchors;
     }
 
-    fn editor_mouse_up(&mut self) {
-        if let Some(Drag::HoiKnob { id, .. }) = self.editor.drag.as_ref() {
-            let id = *id;
-            self.editor.drag = None;
-            if let Some((live_id, q)) = self.hoi_live.take() {
-                if live_id == id {
-                    self.commit_hoi_intermediate(id, q);
-                }
-            }
-            return;
-        }
-        if self.editor.tool == Tool::Pen {
-            if let Some(pen) = self.editor.pen.as_mut() {
-                pen.placing = None;
-            }
-            return;
-        }
-        let Mode::Editor(index) = self.mode else {
-            self.editor.drag = None;
-            return;
-        };
-        if let Some(Drag::Shape { start, current }) = self.editor.drag.as_ref() {
-            let rect = kurbo::Rect::from_points(
-                kurbo::Point::new(start.0, start.1),
-                kurbo::Point::new(current.0, current.1),
-            );
-            self.editor.drag = None;
-            if rect.width() >= 2.0 && rect.height() >= 2.0 {
-                self.push_undo_snapshot(index);
-                let ellipse = self.editor.shape_ellipse;
-                if let Some(font) = self.font_mut() {
-                    font.add_shape_contour(index, rect, ellipse);
-                }
-            }
-            return;
-        }
-        if matches!(self.editor.drag, Some(Drag::TextKern)) {
-            self.editor.drag = None;
-            if self.edit_buffer.end_manual_kerning() {
-                self.sync_kerning_from_buffer();
-            }
-            return;
-        }
-        if matches!(self.editor.drag, Some(Drag::Measure { .. })) {
-            self.editor.drag = None;
-            return;
-        }
-        if let Some(Drag::Knife { start, current }) = self.editor.drag.take() {
-            let p0 = kurbo::Point::new(start.0, start.1);
-            let p1 = kurbo::Point::new(current.0, current.1);
-            // Fewer than two crossings can't produce a cut; skip the
-            // edit entirely so a missed slice leaves nothing dirty.
-            let crossings = self
-                .font()
-                .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
-                .map(|g| runebender_core::knife::knife_hit_points(g, p0, p1).len())
-                .unwrap_or(0);
-            if p0.distance(p1) >= 2.0 && crossings >= 2 {
-                self.push_undo_snapshot(index);
-                let changed = self
-                    .font_mut()
-                    .and_then(|f| {
-                        f.edit_glyph(index, |g| {
-                            runebender_core::knife::knife_cut_glyph(g, p0, p1)
-                        })
-                    })
-                    .unwrap_or(false);
-                if !changed {
-                    self.editor.undo.pop();
-                } else {
-                    self.editor.selected.clear();
-                }
-            }
-            return;
-        }
-        if matches!(self.editor.drag, Some(Drag::Points { .. })) {
-            // A released drag settles its handles on the design grid,
-            // re-aiming smooth tangents afterwards (web
-            // snap_selected_offcurves_to_grid on left_drag_ended).
-            let selected = self.editor.selected.clone();
-            if let Some(font) = self.font_mut() {
-                font.edit_glyph(index, |g| {
-                    runebender_core::point_ops::snap_selected_offcurves(g, &selected)
-                });
-            }
-            self.editor.drag = None;
-            return;
-        }
-        if let Some(Drag::Marquee { start, current, base, base_anchors }) =
-            self.editor.drag.take()
-        {
-            self.select_in_rect(index, start, current, &base, &base_anchors);
-        }
-        self.editor.drag = None;
-    }
-
-    /// Pen click: place a point (line segment from the previous one,
-    /// curve if the previous point was dragged into a handle), start
-    /// a contour if none is open, or close the contour when clicking
-    /// its first point.
-    fn pen_mouse_down(&mut self, index: usize, pos: Point<gpui::Pixels>, alt: bool) {
-        let (dx, dy) = self.editor.window_to_design(pos);
-        let (x, y) = (dx.round(), dy.round());
-        let tolerance = HIT_RADIUS_PX / self.editor.zoom();
-
-        // Web pen: with no path in progress, a click on an existing
-        // segment inserts a point on it (alt converts a line to a
-        // curve instead).
-        if self.editor.pen.is_none() {
-            let snap_radius = 10.0 / self.editor.zoom().max(1e-6);
-            let seg = self
-                .font()
-                .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
-                .and_then(|g| {
-                    runebender_core::segment_ops::nearest_segment_with_t(
-                        g,
-                        kurbo::Point::new(dx, dy),
-                        snap_radius,
-                    )
-                });
-            if let Some((seg_hit, t)) = seg {
-                self.push_undo_snapshot(index);
-                let result = self.font_mut().and_then(|f| {
-                    f.edit_glyph(index, |g| {
-                        if alt {
-                            runebender_core::segment_ops::convert_line_to_curve(
-                                g, &seg_hit,
-                            )
-                            .map(|ids| ids[0])
-                        } else {
-                            runebender_core::segment_ops::insert_point_on_segment(
-                                g, &seg_hit, t,
-                            )
-                        }
-                    })
-                });
-                match result.flatten() {
-                    Some(id) => {
-                        self.editor.selected = [id].into();
-                    }
-                    None => {
-                        self.editor.undo.pop();
-                    }
-                }
-                return;
-            }
-        }
-        self.push_undo_snapshot(index);
-
-        match self.editor.pen.take() {
-            None => {
-                if let Some(contour) =
-                    self.font_mut().and_then(|f| f.start_contour(index, x, y))
-                {
-                    self.editor.pen = Some(PenState {
-                        contour,
-                        prev_out_handle: None,
-                        placing: Some((x, y)),
-                    });
-                }
-            }
-            Some(pen) => {
-                // Near the contour's start point? Close it.
-                let start = self.font().and_then(|f| {
-                    f.glyphs[index]
-                        .points
-                        .iter()
-                        .find(|p| p.contour == pen.contour && p.index == 0)
-                        .map(|p| (p.x, p.y))
-                });
-                let closing = start.is_some_and(|(sx, sy)| {
-                    ((sx - dx).powi(2) + (sy - dy).powi(2)).sqrt() <= tolerance
-                });
-                let controls = pen.prev_out_handle.map(|out| {
-                    let target = if closing { start.unwrap() } else { (x, y) };
-                    // Incoming control defaults onto the target until
-                    // the user drags this point into a curve.
-                    (out, target)
-                });
-                if let Some(font) = self.font_mut() {
-                    if closing {
-                        font.close_contour(index, pen.contour, controls);
-                        self.editor.pen = None;
-                    } else {
-                        font.append_segment(index, pen.contour, controls, x, y, false);
-                        self.editor.pen = Some(PenState {
-                            contour: pen.contour,
-                            prev_out_handle: None,
-                            placing: Some((x, y)),
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    /// Pen drag while placing a point: pull out symmetric handles.
-    /// The outgoing handle follows the cursor; the segment into the
-    /// point (if curved) gets the mirrored incoming handle.
-    fn pen_mouse_drag(&mut self, index: usize, pos: Point<gpui::Pixels>) -> bool {
-        let (dx, dy) = self.editor.window_to_design(pos);
-        let Some(pen) = self.editor.pen.as_mut() else {
-            return false;
-        };
-        let Some((px, py)) = pen.placing else {
-            return false;
-        };
-        let out = (dx.round(), dy.round());
-        let mirror = ((2.0 * px - out.0).round(), (2.0 * py - out.1).round());
-        pen.prev_out_handle = Some(out);
-        let contour = pen.contour;
-        // If the just-placed point ended a curve segment, move its
-        // incoming control to the mirror and mark the point smooth.
-        #[allow(clippy::type_complexity)]
-        let updates: Option<Vec<((usize, usize), (f64, f64))>> = self.font().map(|f| {
-            let pts: Vec<_> = f.glyphs[index]
-                .points
-                .iter()
-                .filter(|p| p.contour == contour)
-                .collect();
-            let n = pts.len();
-            // Points layout when last segment was a curve:
-            // [... c1 c2 P] — c2 is at n-2.
-            if n >= 3 && !pts[n - 2].on_curve && pts[n - 1].x == px && pts[n - 1].y == py {
-                vec![((contour, n - 2), mirror)]
-            } else {
-                Vec::new()
-            }
-        });
-        if let (Some(updates), Some(font)) = (updates, self.font_mut())
-            && !updates.is_empty()
-        {
-            font.set_points(index, &updates);
-        }
-        true
-    }
-
-    /// Finish an open pen contour without closing it.
-    /// Hyper pen click: extend the open hyperbezier contour
-    /// (shift-click adds a corner point), close it by clicking its
-    /// first point, or start a new one.
-    fn hyper_pen_mouse_down(
-        &mut self,
-        index: usize,
-        pos: Point<gpui::Pixels>,
-        corner: bool,
-    ) {
-        let (dx, dy) = self.editor.window_to_design(pos);
-        let (x, y) = (dx.round(), dy.round());
-        let tolerance = HIT_RADIUS_PX / self.editor.zoom();
-        self.push_undo_snapshot(index);
-
-        match self.editor.hyper_contour {
-            None => {
-                if let Some(contour) = self
-                    .font_mut()
-                    .and_then(|f| f.start_hyper_contour(index, x, y))
-                {
-                    self.editor.hyper_contour = Some(contour);
-                }
-            }
-            Some(contour) => {
-                let start = self.font().and_then(|f| {
-                    let c = f.font.get_glyph(f.glyphs[index].name.as_ref())?;
-                    let p = c.contours.get(contour)?.points.first()?;
-                    Some((p.x, p.y))
-                });
-                let closes = start.is_some_and(|(sx, sy)| {
-                    ((sx - x).powi(2) + (sy - y).powi(2)).sqrt() <= tolerance
-                });
-                if closes {
-                    if let Some(font) = self.font_mut() {
-                        font.close_hyper_contour(index, contour);
-                    }
-                    self.editor.hyper_contour = None;
-                } else if let Some(font) = self.font_mut() {
-                    font.append_hyper_point(index, contour, x, y, corner);
-                }
-            }
-        }
-    }
-
     /// End the open hyper contour (Enter/Escape/tool switch), leaving
     /// it open like an unfinished pen path; degenerate ones vanish.
     fn hyper_pen_finish(&mut self) {
@@ -15584,8 +6971,7 @@ impl Workspace {
         // A grid multi-selection batch-edits: the typed value lands
         // on every selected glyph, the Glyphs list-edit behavior.
         // No undo for the batch yet — undo is single-glyph.
-        let batch: Vec<usize> = if matches!(self.mode, Mode::Grid)
-            && self.multi_selected.len() > 1
+        let batch: Vec<usize> = if matches!(self.mode, Mode::Grid) && self.multi_selected.len() > 1
         {
             let Some(font) = self.font() else { return };
             self.multi_selected
@@ -15663,9 +7049,10 @@ impl Workspace {
 
     /// Set (or clear) the selected glyph's note in the active master.
     fn apply_glyph_note(&mut self, text: &str) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
+        let Some(index) = self.current_glyph_index() else {
+            return;
+        };
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string()) else {
             return;
         };
         let text = text.trim();
@@ -15684,8 +7071,12 @@ impl Workspace {
     /// Set or clear the glyph's production (export) name in every
     /// master's public.postscriptNames mapping.
     fn apply_glyph_production(&mut self, text: &str) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(project) = self.project.as_mut() else { return };
+        let Some(index) = self.current_glyph_index() else {
+            return;
+        };
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
         let name = project.active_font().glyphs[index].name.to_string();
         let text = text.trim().to_string();
         for master in project.masters.iter_mut() {
@@ -15715,10 +7106,7 @@ impl Workspace {
                     master.dirty = true;
                 }
             } else if before != Some(text.as_str()) {
-                dict.insert(
-                    name.clone(),
-                    plist::Value::String(text.clone()),
-                );
+                dict.insert(name.clone(), plist::Value::String(text.clone()));
                 master.dirty = true;
             }
         }
@@ -15728,22 +7116,19 @@ impl Workspace {
     /// groups, kerning, and the open text session.
     fn apply_glyph_rename(&mut self, new_name: &str) {
         let Some(index) = self.selected else { return };
-        let Some(old) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
+        let Some(old) = self.font().map(|f| f.glyphs[index].name.to_string()) else {
             return;
         };
         let new_name = new_name.trim().to_string();
         if new_name.is_empty() || new_name == old {
             return;
         }
-        let Some(project) = self.project.as_mut() else { return };
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
         let mut renamed = false;
         for master in project.masters.iter_mut() {
-            if runebender_core::glyph_ops::rename_glyph(
-                &mut master.font,
-                &old,
-                &new_name,
-            ) {
+            if runebender_core::glyph_ops::rename_glyph(&mut master.font, &old, &new_name) {
                 master.dirty = true;
                 master.kerning_dirty = true;
                 master.modified_glyphs.remove(&old);
@@ -15753,8 +7138,7 @@ impl Workspace {
             }
         }
         if !renamed {
-            self.status_note =
-                Some(format!("Cannot rename {old} to {new_name}").into());
+            self.status_note = Some(format!("Cannot rename {old} to {new_name}").into());
             return;
         }
         project.compat.remove(&old);
@@ -15782,12 +7166,8 @@ impl Workspace {
                             .map(|f| (f.glyphs[g].codepoint, f.glyphs[g].advance))
                     })
                     .unwrap_or((None, 0.0));
-                self.edit_buffer.update_glyph(
-                    i,
-                    new_name.clone(),
-                    codepoint,
-                    advance,
-                );
+                self.edit_buffer
+                    .update_glyph(i, new_name.clone(), codepoint, advance);
             }
         }
         self.sidebar_counts = None;
@@ -15799,11 +7179,12 @@ impl Workspace {
     /// "U+0041", "0x41"; empty clears).
     fn apply_glyph_unicode(&mut self, text: &str) {
         let Some(index) = self.selected else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string()) else {
             return;
         };
-        let Some(project) = self.project.as_mut() else { return };
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
         let mut ok = false;
         for master in project.masters.iter_mut() {
             if let Some(glyph_index) = master.name_map.get(&name).copied() {
@@ -15831,18 +7212,15 @@ impl Workspace {
     /// master (groups.plist; empty clears).
     fn apply_kern_group(&mut self, first_side: bool, text: &str) {
         let Some(index) = self.selected else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
+        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string()) else {
             return;
         };
-        let Some(project) = self.project.as_mut() else { return };
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
         for master in project.masters.iter_mut() {
-            if runebender_core::glyph_ops::set_kern_group(
-                &mut master.font,
-                &name,
-                first_side,
-                text,
-            ) {
+            if runebender_core::glyph_ops::set_kern_group(&mut master.font, &name, first_side, text)
+            {
                 master.dirty = true;
                 master.kerning_dirty = true;
             }
@@ -15852,35 +7230,26 @@ impl Workspace {
 
     /// Fill the Glyph panel's editable fields from the selected glyph
     /// unless one of them is being typed in.
-    fn refresh_glyph_inputs(
-        &mut self,
-        force: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !force
-            && window
-                .focused(cx)
-                .is_some_and(|f| f != self.focus_handle)
-        {
+    fn refresh_glyph_inputs(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !force && window.focused(cx).is_some_and(|f| f != self.focus_handle) {
             return;
         }
         let Some(index) = self.selected else { return };
         let Some(font) = self.font() else { return };
-        let Some(entry) = font.glyphs.get(index) else { return };
+        let Some(entry) = font.glyphs.get(index) else {
+            return;
+        };
         let name = entry.name.to_string();
         let unicode = entry
             .codepoint
             .map(|c| format!("{:04X}", c as u32))
             .unwrap_or_default();
-        let group_l =
-            runebender_core::glyph_ops::kern_group(&font.font, &name, true)
-                .map(|g| g.as_str().replace("public.kern1.", ""))
-                .unwrap_or_default();
-        let group_r =
-            runebender_core::glyph_ops::kern_group(&font.font, &name, false)
-                .map(|g| g.as_str().replace("public.kern2.", ""))
-                .unwrap_or_default();
+        let group_l = runebender_core::glyph_ops::kern_group(&font.font, &name, true)
+            .map(|g| g.as_str().replace("public.kern1.", ""))
+            .unwrap_or_default();
+        let group_r = runebender_core::glyph_ops::kern_group(&font.font, &name, false)
+            .map(|g| g.as_str().replace("public.kern2.", ""))
+            .unwrap_or_default();
         let set = |entity: &gpui::Entity<widgets::input::InputState>,
                    value: String,
                    window: &mut Window,
@@ -15913,8 +7282,7 @@ impl Workspace {
         let note_input = self.glyph_inputs.note.clone();
         let lkey_input = self.glyph_inputs.lsb_key.clone();
         let rkey_input = self.glyph_inputs.rsb_key.clone();
-        let production =
-            read_production_name(&font.font, name.as_str()).unwrap_or_default();
+        let production = read_production_name(&font.font, name.as_str()).unwrap_or_default();
         let production_input = self.glyph_inputs.production.clone();
         set(&name_input, name, window, cx);
         set(&unicode_input, unicode, window, cx);
@@ -15984,9 +7352,7 @@ impl Workspace {
                 ));
             }
             if !rules.is_empty() {
-                let body = format!(
-                    "    lookupflag RightToLeft IgnoreMarks;\n{rules}"
-                );
+                let body = format!("    lookupflag RightToLeft IgnoreMarks;\n{rules}");
                 blocks.push(("curs".to_string(), body));
             }
         }
@@ -16001,44 +7367,33 @@ impl Workspace {
             // (mark carriers: name, X pos).
             let mut families: BTreeMap<
                 String,
-                (Vec<(String, f64, f64)>, Vec<(String, f64, f64)>, Vec<(String, f64, f64)>),
+                (
+                    Vec<(String, f64, f64)>,
+                    Vec<(String, f64, f64)>,
+                    Vec<(String, f64, f64)>,
+                ),
             > = BTreeMap::new();
             for glyph in font.default_layer().iter() {
                 let is_mark_glyph = glyph
                     .anchors
                     .iter()
-                    .any(|a| {
-                        a.name
-                            .as_ref()
-                            .is_some_and(|n| n.as_str().starts_with('_'))
-                    });
+                    .any(|a| a.name.as_ref().is_some_and(|n| n.as_str().starts_with('_')));
                 for anchor in &glyph.anchors {
-                    let Some(name) =
-                        anchor.name.as_ref().map(|n| n.as_str())
-                    else {
+                    let Some(name) = anchor.name.as_ref().map(|n| n.as_str()) else {
                         continue;
                     };
                     if name == "entry" || name == "exit" {
                         continue;
                     }
                     if let Some(base_name) = name.strip_prefix('_') {
-                        families
-                            .entry(base_name.to_string())
-                            .or_default()
-                            .0
-                            .push((
-                                glyph.name().to_string(),
-                                anchor.x,
-                                anchor.y,
-                            ));
-                    } else {
-                        let entry =
-                            families.entry(name.to_string()).or_default();
-                        let record = (
+                        families.entry(base_name.to_string()).or_default().0.push((
                             glyph.name().to_string(),
                             anchor.x,
                             anchor.y,
-                        );
+                        ));
+                    } else {
+                        let entry = families.entry(name.to_string()).or_default();
+                        let record = (glyph.name().to_string(), anchor.x, anchor.y);
                         if is_mark_glyph {
                             entry.2.push(record);
                         } else {
@@ -16051,8 +7406,7 @@ impl Workspace {
             let mut mkmk_rules = String::new();
             let mut classes = String::new();
             for (family, (marks, bases, carriers)) in &families {
-                if marks.is_empty() || (bases.is_empty() && carriers.is_empty())
-                {
+                if marks.is_empty() || (bases.is_empty() && carriers.is_empty()) {
                     continue;
                 }
                 for (mark, x, y) in marks {
@@ -16072,10 +7426,7 @@ impl Workspace {
                 }
             }
             if !mark_rules.is_empty() {
-                blocks.push((
-                    "mark".to_string(),
-                    format!("{classes}{mark_rules}"),
-                ));
+                blocks.push(("mark".to_string(), format!("{classes}{mark_rules}")));
             }
             if !mkmk_rules.is_empty() {
                 let body = if mark_rules.is_empty() {
@@ -16108,30 +7459,21 @@ impl Workspace {
                 .default_layer()
                 .iter()
                 .filter(|g| {
-                    g.contours.is_empty()
-                        && g.components.len() >= 2
-                        && !g.name().contains('.')
+                    g.contours.is_empty() && g.components.len() >= 2 && !g.name().contains('.')
                 })
                 .filter_map(|g| {
-                    let parts: Vec<String> = g
-                        .components
-                        .iter()
-                        .map(|c| c.base.to_string())
-                        .collect();
+                    let parts: Vec<String> =
+                        g.components.iter().map(|c| c.base.to_string()).collect();
                     (parts.iter().all(|p| names.contains(p.as_str()))
                         && parts[1..].iter().any(|p| is_mark(p)))
                     .then(|| (g.name().to_string(), parts))
                 })
                 .collect();
-            compositions
-                .sort_by_key(|(_, parts)| std::cmp::Reverse(parts.len()));
+            compositions.sort_by_key(|(_, parts)| std::cmp::Reverse(parts.len()));
             if !compositions.is_empty() {
                 let mut rules = String::new();
                 for (name, parts) in compositions {
-                    rules.push_str(&format!(
-                        "    sub {} by {name};\n",
-                        parts.join(" ")
-                    ));
+                    rules.push_str(&format!("    sub {} by {name};\n", parts.join(" ")));
                 }
                 blocks.push(("ccmp".to_string(), rules));
             }
@@ -16142,19 +7484,15 @@ impl Workspace {
             .filter(|name| name.contains('_') && !name.contains('.'))
             .filter_map(|name| {
                 let parts: Vec<&str> = name.split('_').collect();
-                (parts.len() >= 2
-                    && parts.iter().all(|part| names.contains(part)))
-                .then(|| (*name, parts))
+                (parts.len() >= 2 && parts.iter().all(|part| names.contains(part)))
+                    .then(|| (*name, parts))
             })
             .collect();
         ligatures.sort_by_key(|(_, parts)| std::cmp::Reverse(parts.len()));
         if !ligatures.is_empty() {
             let mut rules = String::new();
             for (name, parts) in ligatures {
-                rules.push_str(&format!(
-                    "    sub {} by {name};\n",
-                    parts.join(" ")
-                ));
+                rules.push_str(&format!("    sub {} by {name};\n", parts.join(" ")));
             }
             blocks.push(("liga".to_string(), rules));
         }
@@ -16181,10 +7519,7 @@ impl Workspace {
                 continue;
             }
             carets.sort_by_key(|(n, _)| *n);
-            let positions: Vec<String> = carets
-                .iter()
-                .map(|(_, x)| format!("{x:.0}"))
-                .collect();
+            let positions: Vec<String> = carets.iter().map(|(_, x)| format!("{x:.0}")).collect();
             caret_rules.push_str(&format!(
                 "    LigatureCaretByPos {} {};
 ",
@@ -16216,9 +7551,7 @@ impl Workspace {
                 format!("feature {tag} {{\n{body}}} {tag};\n"),
             ),
         };
-        if let (Some(start), Some(end)) =
-            (fea.find(&open), fea.find(&close))
-        {
+        if let (Some(start), Some(end)) = (fea.find(&open), fea.find(&close)) {
             if end > start {
                 let mut out = String::with_capacity(fea.len());
                 out.push_str(&fea[..start]);
@@ -16257,37 +7590,6 @@ impl Workspace {
         out
     }
 
-    /// The Features section's Generate button: rewrite the automatic
-    /// blocks (init/medi/fina from name suffixes, liga from
-    /// underscore names) into the editor text for review; Apply
-    /// commits. Hand-written blocks with other tags are untouched.
-    fn command_generate_features(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(font) = self.font() else { return };
-        let blocks = Self::generated_feature_blocks(&font.font);
-        if blocks.is_empty() {
-            self.features_status =
-                Some("Nothing to generate from glyph names".into());
-            return;
-        }
-        let mut fea = self.features_input.read(cx).value().to_string();
-        let mut tags: Vec<String> = Vec::new();
-        for (tag, body) in blocks {
-            fea = Self::replace_feature_block(&fea, &tag, &body);
-            tags.push(tag);
-        }
-        self.features_input.update(cx, |st, cx| {
-            st.set_value(fea, window, cx);
-        });
-        self.features_edited = true;
-        self.features_status = Some(
-            format!("Generated {} · review and Apply", tags.join(", ")).into(),
-        );
-    }
-
     /// Compile-check a features.fea against the active master's
     /// glyph set, the same build the text engine shapes with.
     fn check_features_compile(font: &FontModel, fea: &str) -> Result<(), String> {
@@ -16316,123 +7618,11 @@ impl Workspace {
         .map(|_| ())
     }
 
-    /// Apply the features editor to the active master: write
-    /// features.fea, recompile the shaping models, and report the
-    /// compile verdict. A file that does not compile is still saved
-    /// (the old joining rules carry on), the way Glyphs lets you keep
-    /// a broken feature file open while you fix it.
-    fn command_apply_features(&mut self, cx: &mut Context<Self>) {
-        let fea = self.features_input.read(cx).value().to_string();
-        let verdict = self
-            .font()
-            .map(|f| Self::check_features_compile(f, &fea));
-        if let Some(font) = self.font_mut() {
-            if font.font.features != fea {
-                font.font.features = fea;
-                font.dirty = true;
-            }
-        } else {
-            return;
-        }
-        self.features_edited = false;
-        self.features_status = Some(match verdict {
-            Some(Ok(())) => "Compiled clean · shaping updated".into(),
-            Some(Err(e)) => {
-                let first = e.lines().find(|l| !l.trim().is_empty()).unwrap_or("error");
-                format!("Saved, but does not compile: {first}").into()
-            }
-            None => "Applied".into(),
-        });
-        self.rebuild_text_models();
-    }
-
-    /// The Features section (grid mode): the active master's
-    /// features.fea in a plain editor, Apply and Revert below, and
-    /// the compile verdict. Glyphs' Features tab, one file at a time
-    /// (UFO keeps prefixes, classes, and features in features.fea).
-    fn features_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        if self.project.is_none() {
-            return self.section(cx, "Features", div());
-        }
-        let button = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .px_2()
-                .py_0p5()
-                .rounded(t::radius())
-                .text_sm()
-                .cursor_pointer()
-                .border(t::stroke())
-                .border_color(t::cell_border())
-                .text_color(t::text())
-                .child(label)
-        };
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(
-                div().h(px(260.0)).child(
-                    widgets::input::Input::new(&self.features_input)
-                        .h_full(),
-                ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .items_center()
-                    .child(button("features-apply", "Apply").on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.command_apply_features(cx);
-                            cx.notify();
-                        }),
-                    ))
-                    .child(button("features-revert", "Revert").on_click(
-                        cx.listener(|this, _, window, cx| {
-                            this.features_edited = false;
-                            this.features_status = None;
-                            this.refresh_features_input(true, window, cx);
-                            cx.notify();
-                        }),
-                    ))
-                    .child(button("features-generate", "Generate").on_click(
-                        cx.listener(|this, _, window, cx| {
-                            this.command_generate_features(window, cx);
-                            cx.notify();
-                        }),
-                    ))
-                    .when(self.features_edited, |el| {
-                        el.child(
-                            div()
-                                .text_xs()
-                                .text_color(t::status_yellow())
-                                .child("edited"),
-                        )
-                    }),
-            )
-            .children(self.features_status.clone().map(|status| {
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child(status)
-            }));
-        self.section(cx, "Features", body)
-    }
-
     /// Push the active master's features.fea into the editor. Hands
     /// off while it holds unapplied edits or focus, unless forced.
-    fn refresh_features_input(
-        &mut self,
-        force: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn refresh_features_input(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
         if !force
-            && (self.features_edited
-                || window
-                    .focused(cx)
-                    .is_some_and(|f| f != self.focus_handle))
+            && (self.features_edited || window.focused(cx).is_some_and(|f| f != self.focus_handle))
         {
             return;
         }
@@ -16449,9 +7639,7 @@ impl Workspace {
     /// pair on the active master. First and second may be glyph names
     /// or group names (public.kern1./public.kern2.).
     fn apply_kern_pair(&mut self, first: &str, second: &str, value: f64) {
-        let (Ok(first), Ok(second)) =
-            (norad::Name::new(first), norad::Name::new(second))
-        else {
+        let (Ok(first), Ok(second)) = (norad::Name::new(first), norad::Name::new(second)) else {
             self.status_note = Some("Kerning: invalid name".into());
             return;
         };
@@ -16484,336 +7672,13 @@ impl Workspace {
         self.rebuild_text_models();
     }
 
-    /// Add the grid selection to a kerning group (creating it as
-    /// needed), on every master. `first_side` = public.kern1, the
-    /// first glyph's right edge.
-    fn command_add_selection_to_group(&mut self, first_side: bool, group: &str) {
-        let names = self.selection_names();
-        if names.is_empty() {
-            self.status_note =
-                Some("Select glyphs in the grid first".into());
-            return;
-        }
-        let prefix = if first_side { "public.kern1." } else { "public.kern2." };
-        let full = format!("{prefix}{group}");
-        let Ok(group_name) = norad::Name::new(&full) else { return };
-        let Some(project) = self.project.as_mut() else { return };
-        let mut added = 0usize;
-        for master in project.masters.iter_mut() {
-            let members = master
-                .font
-                .groups
-                .entry(group_name.clone())
-                .or_default();
-            for name in &names {
-                if let Ok(member) = norad::Name::new(name) {
-                    if !members.contains(&member) {
-                        members.push(member);
-                        added += 1;
-                    }
-                }
-            }
-            master.dirty = true;
-        }
-        self.rebuild_text_models();
-        self.status_note = Some(
-            format!("@{group}: {added} membership(s) added").into(),
-        );
-    }
-
-    /// Drop one glyph from a kerning group, on every master. An
-    /// emptied group is removed.
-    fn command_remove_from_group(&mut self, full_group: &str, member: &str) {
-        let Some(project) = self.project.as_mut() else { return };
-        for master in project.masters.iter_mut() {
-            let mut emptied = false;
-            if let Some(members) = master.font.groups.get_mut(full_group) {
-                members.retain(|m| m.as_str() != member);
-                emptied = members.is_empty();
-            }
-            if emptied {
-                master.font.groups.retain(|k, _| k.as_str() != full_group);
-            }
-            master.dirty = true;
-        }
-        self.rebuild_text_models();
-    }
-
-    /// Groups section (grid mode): the kerning groups as shelves —
-    /// members as chips with removal, and '+ sel' adds the grid
-    /// selection (the Glyphs 4 visual groups shelf, click-to-assign
-    /// instead of drag for now). The field creates a group from the
-    /// selection: 'o' for kern1, '|o' for kern2.
-    fn groups_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let Some(font) = self.font() else {
-            return self.section(cx, "Groups", div());
-        };
-        let mut rows = div().flex().flex_col().gap_1();
-        let mut shown = 0usize;
-        for (full, members) in font.font.groups.iter() {
-            let name = full.as_str();
-            let (side, short) =
-                if let Some(s) = name.strip_prefix("public.kern1.") {
-                    ("L", s)
-                } else if let Some(s) = name.strip_prefix("public.kern2.") {
-                    ("R", s)
-                } else {
-                    continue;
-                };
-            shown += 1;
-            if shown > 40 {
-                break;
-            }
-            let full_owned = name.to_string();
-            let short_owned = short.to_string();
-            let side_first = side == "L";
-            let mut chips = div().flex().flex_wrap().gap_1();
-            for member in members.iter().take(24) {
-                let member_owned = member.to_string();
-                let full_for_chip = full_owned.clone();
-                chips = chips.child(
-                    div()
-                        .id(gpui::SharedString::from(format!(
-                            "grp-{name}-{member}"
-                        )))
-                        .px_1()
-                        .rounded(t::radius())
-                        .border(t::stroke())
-                        .border_color(t::cell_border())
-                        .text_xs()
-                        .text_color(t::text())
-                        .cursor_pointer()
-                        .child(member.to_string())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.command_remove_from_group(
-                                &full_for_chip,
-                                &member_owned,
-                            );
-                            cx.notify();
-                        })),
-                );
-            }
-            if members.len() > 24 {
-                chips = chips.child(
-                    div()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child(format!("+{}", members.len() - 24)),
-                );
-            }
-            rows = rows.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(t::accent())
-                                    .child(format!("@{short} · {side}")),
-                            )
-                            .child(
-                                div()
-                                    .id(gpui::SharedString::from(format!(
-                                        "grp-add-{name}"
-                                    )))
-                                    .px_1()
-                                    .rounded(t::radius())
-                                    .text_xs()
-                                    .cursor_pointer()
-                                    .border(t::stroke())
-                                    .border_color(t::cell_border())
-                                    .text_color(t::text_muted())
-                                    .child("+ sel")
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            this.command_add_selection_to_group(
-                                                side_first,
-                                                &short_owned,
-                                            );
-                                            cx.notify();
-                                        },
-                                    )),
-                            ),
-                    )
-                    .child(chips),
-            );
-        }
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(widgets::input::Input::new(&self.group_name_input))
-            .child(rows)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Chip removes · + sel adds the grid selection"),
-            );
-        self.section(cx, "Groups", body)
-    }
-
-    /// Kerning section (grid mode): every pair on the active master,
-    /// filtered by the search field, with an editor row that commits
-    /// on Enter. Glyphs keeps this in its kerning window; the drag
-    /// workflow in text mode stays the fast path.
-    fn kerning_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let Some(font) = self.font() else {
-            return self.section(cx, "Kerning", div());
-        };
-        let filter = self
-            .kern_inputs
-            .filter
-            .read(cx)
-            .value()
-            .trim()
-            .to_lowercase();
-        let mut pairs: Vec<(String, String, f64)> = Vec::new();
-        let mut hidden = 0usize;
-        const CAP: usize = 200;
-        for (first, seconds) in font.font.kerning.iter() {
-            for (second, value) in seconds.iter() {
-                if !filter.is_empty()
-                    && !first.as_str().to_lowercase().contains(&filter)
-                    && !second.as_str().to_lowercase().contains(&filter)
-                {
-                    continue;
-                }
-                if pairs.len() >= CAP {
-                    hidden += 1;
-                    continue;
-                }
-                pairs.push((first.to_string(), second.to_string(), *value));
-            }
-        }
-        let total = pairs.len() + hidden;
-        let field = |input: &gpui::Entity<widgets::input::InputState>| {
-            div()
-                .flex_1()
-                .child(widgets::input::Input::new(input))
-        };
-        let editor_row = div()
-            .flex()
-            .gap_1()
-            .child(field(&self.kern_inputs.first))
-            .child(field(&self.kern_inputs.second))
-            .child(field(&self.kern_inputs.value));
-        let mut list = div()
-            .id("kerning-pairs")
-            .max_h(px(220.0))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col();
-        for (i, (first, second, value)) in pairs.iter().enumerate() {
-            let (f2, s2) = (first.clone(), second.clone());
-            let (f3, s3, v3) = (first.clone(), second.clone(), *value);
-            list = list.child(
-                div()
-                    .id(("kern-pair", i))
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px_1()
-                    .py_0p5()
-                    .text_xs()
-                    .cursor_pointer()
-                    .hover(|el| el.bg(t::cell_selected_bg()))
-                    // Clicking a row loads it into the editor row, so
-                    // adjusting an existing pair is click, type, Enter.
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        let sets = [
-                            (&this.kern_inputs.first, f3.clone()),
-                            (&this.kern_inputs.second, s3.clone()),
-                            (&this.kern_inputs.value, format!("{v3}")),
-                        ];
-                        for (entity, value) in sets {
-                            entity.clone().update(cx, |st, cx| {
-                                st.set_value(value, window, cx);
-                            });
-                        }
-                    }))
-                    .child({
-                        // Groups read as @name in the accent; raw
-                        // glyph pairs — exceptions — in the warning
-                        // yellow, the Glyphs kerning window's code.
-                        let is_group = |name: &str| {
-                            name.starts_with("public.kern1.")
-                                || name.starts_with("public.kern2.")
-                        };
-                        let short = |name: &str| {
-                            name.strip_prefix("public.kern1.")
-                                .or_else(|| name.strip_prefix("public.kern2."))
-                                .map(|g| format!("@{g}"))
-                                .unwrap_or_else(|| name.to_string())
-                        };
-                        let exception =
-                            !is_group(first) || !is_group(second);
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .truncate()
-                            .text_color(if exception {
-                                t::status_yellow()
-                            } else {
-                                t::text()
-                            })
-                            .child(format!(
-                                "{} · {}",
-                                short(first),
-                                short(second)
-                            ))
-                    })
-                    .child(
-                        div()
-                            .text_color(t::text_muted())
-                            .child(format!("{value:.0}")),
-                    )
-                    .child(
-                        div()
-                            .id(("kern-del", i))
-                            .px_1()
-                            .text_color(t::text_muted())
-                            .cursor_pointer()
-                            .hover(|el| el.text_color(t::text()))
-                            .child("×")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.delete_kern_pair(&f2, &s2);
-                                cx.notify();
-                            })),
-                    ),
-            );
-        }
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(widgets::input::Input::new(&self.kern_inputs.filter))
-            .child(editor_row)
-            .child(list)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child(if hidden > 0 {
-                        format!("{total} pairs · showing {CAP}")
-                    } else {
-                        format!("{total} pairs")
-                    }),
-            );
-        self.section(cx, "Kerning", body)
-    }
-
     /// Commit one Font Info field (Enter in the Font Info section).
     /// The family name is font-wide and lands on every master; style
     /// and the metrics belong to the active master.
     fn apply_font_info(&mut self, field: FontInfoField, text: &str) {
-        let Some(project) = self.project.as_mut() else { return };
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
         let text = text.trim();
         match field {
             FontInfoField::Family => {
@@ -16849,15 +7714,9 @@ impl Workspace {
                 let master = &mut project.masters[project.active];
                 let info = &mut master.font.font_info;
                 match field {
-                    FontInfoField::BlueValues => {
-                        info.postscript_blue_values = stored
-                    }
-                    FontInfoField::OtherBlues => {
-                        info.postscript_other_blues = stored
-                    }
-                    FontInfoField::StemsH => {
-                        info.postscript_stem_snap_h = stored
-                    }
+                    FontInfoField::BlueValues => info.postscript_blue_values = stored,
+                    FontInfoField::OtherBlues => info.postscript_other_blues = stored,
+                    FontInfoField::StemsH => info.postscript_stem_snap_h = stored,
                     _ => info.postscript_stem_snap_v = stored,
                 }
                 master.dirty = true;
@@ -16868,8 +7727,7 @@ impl Workspace {
                 let info = &mut master.font.font_info;
                 match field {
                     FontInfoField::Upm => {
-                        let Ok(upm) =
-                            norad::fontinfo::NonNegativeIntegerOrFloat::try_from(v)
+                        let Ok(upm) = norad::fontinfo::NonNegativeIntegerOrFloat::try_from(v)
                         else {
                             return;
                         };
@@ -16899,18 +7757,10 @@ impl Workspace {
                     FontInfoField::TypoDescender => {
                         info.open_type_os2_typo_descender = Some(v as i32)
                     }
-                    FontInfoField::TypoLineGap => {
-                        info.open_type_os2_typo_line_gap = Some(v as i32)
-                    }
-                    FontInfoField::HheaAscender => {
-                        info.open_type_hhea_ascender = Some(v as i32)
-                    }
-                    FontInfoField::HheaDescender => {
-                        info.open_type_hhea_descender = Some(v as i32)
-                    }
-                    FontInfoField::HheaLineGap => {
-                        info.open_type_hhea_line_gap = Some(v as i32)
-                    }
+                    FontInfoField::TypoLineGap => info.open_type_os2_typo_line_gap = Some(v as i32),
+                    FontInfoField::HheaAscender => info.open_type_hhea_ascender = Some(v as i32),
+                    FontInfoField::HheaDescender => info.open_type_hhea_descender = Some(v as i32),
+                    FontInfoField::HheaLineGap => info.open_type_hhea_line_gap = Some(v as i32),
                     FontInfoField::WinAscent => {
                         if v >= 0.0 {
                             info.open_type_os2_win_ascent = Some(v as u32)
@@ -16943,14 +7793,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !force
-            && window
-                .focused(cx)
-                .is_some_and(|f| f != self.focus_handle)
-        {
+        if !force && window.focused(cx).is_some_and(|f| f != self.focus_handle) {
             return;
         }
-        let Some(project) = self.project.as_ref() else { return };
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
         let master = &project.masters[project.active];
         let info = &master.font.font_info;
         let opt = |v: Option<f64>| v.map(|v| format!("{v:.0}")).unwrap_or_default();
@@ -16980,7 +7828,9 @@ impl Workspace {
             ),
             (
                 &self.font_info_inputs.italic_angle,
-                info.italic_angle.map(|v| format!("{v}")).unwrap_or_default(),
+                info.italic_angle
+                    .map(|v| format!("{v}"))
+                    .unwrap_or_default(),
             ),
             (
                 &self.font_info_inputs.ascender,
@@ -17066,465 +7916,6 @@ impl Workspace {
         }
     }
 
-    /// Append a hex color to the palette, on every master (CPAL
-    /// palettes must agree across sources). Returns true on success.
-    fn command_add_palette_color(&mut self, hex: &str) -> bool {
-        let Some(color) = parse_hex_color(hex) else {
-            self.status_note = Some("Color: use #RRGGBB or #RRGGBBAA".into());
-            return false;
-        };
-        let Some(project) = self.project.as_mut() else { return false };
-        for master in project.masters.iter_mut() {
-            let mut palette = read_color_palette(&master.font);
-            palette.push(color);
-            write_color_palette(&mut master.font, &palette);
-            master.dirty = true;
-        }
-        true
-    }
-
-    /// Drop a palette color. Refused while a layer still uses it,
-    /// because CPAL indices shift on removal.
-    fn command_remove_palette_color(&mut self, index: usize) {
-        let Some(project) = self.project.as_mut() else { return };
-        let used = project
-            .masters
-            .first()
-            .map(|m| read_color_mapping(&m.font))
-            .unwrap_or_default()
-            .iter()
-            .any(|(_, ci)| *ci == index);
-        if used {
-            self.status_note =
-                Some("Color is used by a layer · remove the layer first".into());
-            return;
-        }
-        for master in project.masters.iter_mut() {
-            let mut palette = read_color_palette(&master.font);
-            if index < palette.len() {
-                palette.remove(index);
-                write_color_palette(&mut master.font, &palette);
-                master.dirty = true;
-            }
-        }
-        // Higher indices shifted down: follow them in the mapping.
-        for master in project.masters.iter_mut() {
-            let mut mapping = read_color_mapping(&master.font);
-            for (_, ci) in mapping.iter_mut() {
-                if *ci > index {
-                    *ci -= 1;
-                }
-            }
-            write_color_mapping(&mut master.font, &mapping);
-        }
-        if self.color_selected >= index && self.color_selected > 0 {
-            self.color_selected -= 1;
-        }
-    }
-
-    /// Add a color layer: a UFO layer named color.N mapped to the
-    /// selected palette color, appended on top. The open glyph's
-    /// outline is copied in as a starting point; edit it through the
-    /// Glyph Layers swap arrows, drawing per master like any layer.
-    fn command_add_color_layer(&mut self) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(project) = self.project.as_ref() else { return };
-        if read_color_palette(&project.active_font().font).is_empty() {
-            self.status_note =
-                Some("Add a palette color first (hex field)".into());
-            return;
-        }
-        let name = project.active_font().glyphs[index].name.to_string();
-        let color = self.color_selected;
-        let Some(project) = self.project.as_mut() else { return };
-        // First free color.N name across the mapping.
-        let mapping = project
-            .masters
-            .first()
-            .map(|m| read_color_mapping(&m.font))
-            .unwrap_or_default();
-        let mut n = 0usize;
-        let layer_name = loop {
-            let candidate = format!("color.{n}");
-            if !mapping.iter().any(|(l, _)| *l == candidate) {
-                break candidate;
-            }
-            n += 1;
-        };
-        for master in project.masters.iter_mut() {
-            let mut mapping = read_color_mapping(&master.font);
-            mapping.push((layer_name.clone(), color));
-            write_color_mapping(&mut master.font, &mapping);
-            // Seed the layer with this master's outline of the glyph.
-            let seed = master.font.get_glyph(name.as_str()).cloned();
-            if let (Some(seed), Ok(layer)) = (
-                seed,
-                master.font.layers.get_or_create_layer(&layer_name),
-            ) {
-                let mut copy = norad::Glyph::new(name.as_str());
-                copy.width = seed.width;
-                copy.contours = seed.contours.clone();
-                copy.components = seed.components.clone();
-                layer.insert_glyph(copy);
-            }
-            master.dirty = true;
-            master.modified_glyphs.insert(name.clone());
-        }
-        self.show_color_preview = true;
-        self.status_note =
-            Some(format!("Color layer {layer_name} added").into());
-    }
-
-    /// Remove one mapping row (the UFO layer and its drawings stay).
-    fn command_remove_color_layer(&mut self, row: usize) {
-        let Some(project) = self.project.as_mut() else { return };
-        for master in project.masters.iter_mut() {
-            let mut mapping = read_color_mapping(&master.font);
-            if row < mapping.len() {
-                mapping.remove(row);
-                write_color_mapping(&mut master.font, &mapping);
-                master.dirty = true;
-            }
-        }
-    }
-
-    /// Color section's "To v1" button: explode every color glyph's
-    /// layers into real suffixed glyphs and write the explicit
-    /// colorLayers structures (solid paints), the COLRv1 baseline.
-    /// From here ufo2ft's own exploding is off; gradients upgrade
-    /// individual paints.
-    fn command_convert_to_colrv1(&mut self) {
-        let Some(project) = self.project.as_mut() else { return };
-        let mut exploded = 0usize;
-        for master in project.masters.iter_mut() {
-            let mapping = read_color_mapping(&master.font);
-            if mapping.is_empty() {
-                continue;
-            }
-            // Which glyphs have color-layer copies at all.
-            let color_glyphs: Vec<String> = master
-                .font
-                .default_layer()
-                .iter()
-                .map(|g| g.name().to_string())
-                .filter(|name| {
-                    !name.contains(".color.")
-                        && mapping.iter().any(|(layer, _)| {
-                            master
-                                .font
-                                .layers
-                                .get(layer)
-                                .is_some_and(|l| l.contains_glyph(name))
-                        })
-                })
-                .collect();
-            let mut layers_dict = plist::Dictionary::new();
-            for name in &color_glyphs {
-                let mut rows: Vec<plist::Value> = Vec::new();
-                for (layer, color) in &mapping {
-                    let Some(copy) = master
-                        .font
-                        .layers
-                        .get(layer)
-                        .and_then(|l| l.get_glyph(name.as_str()))
-                        .cloned()
-                    else {
-                        continue;
-                    };
-                    let suffixed = format!("{name}.{layer}");
-                    if master.font.get_glyph(suffixed.as_str()).is_none() {
-                        let mut real = norad::Glyph::new(suffixed.as_str());
-                        real.width = copy.width;
-                        real.contours = copy.contours.clone();
-                        real.components = copy.components.clone();
-                        master.font.default_layer_mut().insert_glyph(real);
-                    }
-                    rows.push(paint_glyph_layer(
-                        &suffixed,
-                        paint_solid(*color),
-                    ));
-                }
-                if !rows.is_empty() {
-                    let mut root = plist::Dictionary::new();
-                    root.insert(
-                        "Format".into(),
-                        plist::Value::Integer(1u64.into()),
-                    );
-                    root.insert("Layers".into(), plist::Value::Array(rows));
-                    layers_dict.insert(
-                        name.clone(),
-                        plist::Value::Dictionary(root),
-                    );
-                    exploded += 1;
-                }
-            }
-            if !layers_dict.is_empty() {
-                master.font.lib.insert(
-                    COLOR_LAYERS_EXPLICIT_KEY.into(),
-                    plist::Value::Dictionary(layers_dict),
-                );
-                master.dirty = true;
-            }
-            master.refresh_from_font();
-        }
-        self.sidebar_counts = None;
-        self.status_note = Some(
-            if exploded == 0 {
-                "No color layers to convert".to_string()
-            } else {
-                format!("COLRv1: {exploded} glyph entr(ies) written")
-            }
-            .into(),
-        );
-    }
-
-    /// Turn one of the selected glyph's color layers into a linear
-    /// gradient: from the row's color at the baseline to the
-    /// selected swatch at the ascender. Runs the v1 conversion
-    /// first when needed.
-    fn command_layer_gradient(&mut self, row: usize) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        if !self
-            .font()
-            .is_some_and(|f| has_v1_entry(&f.font, &name))
-        {
-            self.command_convert_to_colrv1();
-        }
-        let stop1 = self.color_selected;
-        let Some(project) = self.project.as_mut() else { return };
-        let mut changed = 0usize;
-        for master in project.masters.iter_mut() {
-            let (ascender, mapping) =
-                (master.ascender, read_color_mapping(&master.font));
-            let Some((_, stop0)) = mapping.get(row) else { continue };
-            let paint = linear_gradient_paint(
-                *stop0,
-                stop1,
-                (0.0, 0.0),
-                (0.0, ascender),
-            );
-            let Some(layer) = master
-                .font
-                .lib
-                .get_mut(COLOR_LAYERS_EXPLICIT_KEY)
-                .and_then(|v| v.as_dictionary_mut())
-                .and_then(|d| d.get_mut(name.as_str()))
-                .and_then(|v| v.as_dictionary_mut())
-                .and_then(|root| root.get_mut("Layers"))
-                .and_then(|v| v.as_array_mut())
-                .and_then(|layers| layers.get_mut(row))
-                .and_then(|v| v.as_dictionary_mut())
-            else {
-                continue;
-            };
-            layer.insert("Paint".into(), paint);
-            changed += 1;
-            master.dirty = true;
-        }
-        self.status_note = Some(
-            if changed == 0 {
-                "Gradient: convert to v1 first (To v1)".to_string()
-            } else {
-                format!(
-                    "Layer {row}: linear gradient to color {stop1} in {changed} master(s)"
-                )
-            }
-            .into(),
-        );
-    }
-
-    /// Color section: the CPAL palette, the layer mapping, and the
-    /// stacked-preview toggle (COLRv0 through the ufo2ft lib keys).
-    fn color_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let Some(font) = self.font() else {
-            return self.section(cx, "Color", div());
-        };
-        let palette = read_color_palette(&font.font);
-        let mapping = read_color_mapping(&font.font);
-        let swatch_color = |c: &[f64; 4]| gpui::Rgba {
-            r: c[0] as f32,
-            g: c[1] as f32,
-            b: c[2] as f32,
-            a: c[3] as f32,
-        };
-        let mut swatches = div().flex().flex_wrap().gap_1().items_center();
-        for (i, c) in palette.iter().enumerate() {
-            let selected = i == self.color_selected;
-            swatches = swatches.child(
-                div()
-                    .id(("cpal-swatch", i))
-                    .w(px(18.0))
-                    .h(px(18.0))
-                    .rounded(t::radius())
-                    .bg(swatch_color(c))
-                    .border(t::stroke_emphasis())
-                    .border_color(if selected {
-                        t::accent()
-                    } else {
-                        t::cell_border()
-                    })
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.color_selected = i;
-                        cx.notify();
-                    })),
-            );
-        }
-        swatches = swatches.child(
-            div().w(px(96.0)).child(widgets::input::Input::new(
-                &self.color_hex_input,
-            )),
-        );
-        if !palette.is_empty() {
-            let selected = self.color_selected;
-            swatches = swatches.child(
-                div()
-                    .id("cpal-remove")
-                    .px_1()
-                    .text_sm()
-                    .cursor_pointer()
-                    .text_color(t::text_muted())
-                    .hover(|el| el.text_color(t::text()))
-                    .child("×")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.command_remove_palette_color(selected);
-                        cx.notify();
-                    })),
-            );
-        }
-        let mut rows = div().flex().flex_col().gap_0p5();
-        for (i, (layer, color)) in mapping.iter().enumerate() {
-            let dot = palette
-                .get(*color)
-                .map(swatch_color)
-                .unwrap_or(t::text_muted());
-            rows = rows.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_xs()
-                    .child(
-                        div()
-                            .w(px(10.0))
-                            .h(px(10.0))
-                            .rounded_full()
-                            .bg(dot),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .truncate()
-                            .text_color(t::text())
-                            .child(layer.clone()),
-                    )
-                    .child(
-                        div()
-                            .id(("color-layer-grad", i))
-                            .px_1()
-                            .text_xs()
-                            .cursor_pointer()
-                            .text_color(t::text_muted())
-                            .hover(|el| el.text_color(t::text()))
-                            .child("◐")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.command_layer_gradient(i);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id(("color-layer-del", i))
-                            .px_1()
-                            .cursor_pointer()
-                            .text_color(t::text_muted())
-                            .hover(|el| el.text_color(t::text()))
-                            .child("×")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.command_remove_color_layer(i);
-                                cx.notify();
-                            })),
-                    ),
-            );
-        }
-        let toggle_on = self.show_color_preview;
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(swatches)
-            .child(rows)
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .id("color-layer-add")
-                            .px_2()
-                            .py_0p5()
-                            .rounded(t::radius())
-                            .text_sm()
-                            .cursor_pointer()
-                            .border(t::stroke())
-                            .border_color(t::cell_border())
-                            .text_color(t::text())
-                            .child("+ Color Layer")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.command_add_color_layer();
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("color-to-v1")
-                            .px_2()
-                            .py_0p5()
-                            .rounded(t::radius())
-                            .text_sm()
-                            .cursor_pointer()
-                            .border(t::stroke())
-                            .border_color(t::cell_border())
-                            .text_color(t::text())
-                            .child("To v1")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.command_convert_to_colrv1();
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("color-preview-toggle")
-                            .px_2()
-                            .py_0p5()
-                            .rounded(t::radius())
-                            .text_sm()
-                            .cursor_pointer()
-                            .border(t::stroke())
-                            .when(toggle_on, |el| {
-                                el.border_color(t::accent())
-                                    .text_color(t::accent())
-                            })
-                            .when(!toggle_on, |el| {
-                                el.border_color(t::cell_border())
-                                    .text_color(t::text())
-                            })
-                            .child("Preview")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.show_color_preview =
-                                    !this.show_color_preview;
-                                cx.notify();
-                            })),
-                    ),
-            );
-        self.section(cx, "Color", body)
-    }
-
     /// Measured stem and bar of a glyph: the narrowest horizontal
     /// and vertical black spans between facing straight edges.
     /// (Counters are white spans; the midpoint containment test
@@ -17533,24 +7924,23 @@ impl Workspace {
         use kurbo::Shape as _;
         use runebender_core::measure::{self, MeasureKind};
         use runebender_core::model::workspace::Contour as WContour;
-        let Some(font) = self.font() else { return (None, None) };
-        let Some(g) = font.font.get_glyph(name) else { return (None, None) };
+        let Some(font) = self.font() else {
+            return (None, None);
+        };
+        let Some(g) = font.font.get_glyph(name) else {
+            return (None, None);
+        };
         if g.contours.is_empty() {
             return (None, None);
         }
         let paths: Vec<runebender_core::path::Path> = g
             .contours
             .iter()
-            .map(|c| {
-                runebender_core::path::Path::from_contour(&WContour::from_norad(c))
-            })
+            .map(|c| runebender_core::path::Path::from_contour(&WContour::from_norad(c)))
             .collect();
         let filled = runebender_core::glyph_paths::glyph_to_bezpath(g, &font.font);
         let black = |m: &measure::Measurement| {
-            let mid = kurbo::Point::new(
-                (m.a.x + m.b.x) / 2.0,
-                (m.a.y + m.b.y) / 2.0,
-            );
+            let mid = kurbo::Point::new((m.a.x + m.b.x) / 2.0, (m.a.y + m.b.y) / 2.0);
             filled.contains(mid)
         };
         let measurements = measure::glyph_measurements(&paths);
@@ -17568,281 +7958,6 @@ impl Workspace {
         )
     }
 
-    /// Compare section (grid mode): every master against the active
-    /// one — glyph count, structural incompatibilities, differing
-    /// advances, kerning pair count, and the vertical metrics that
-    /// disagree. The Glyphs Compare Fonts window's job, inside one
-    /// project.
-    fn compare_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let Some(project) = self.project.as_ref() else {
-            return self.section(cx, "Compare", div());
-        };
-        if project.masters.len() < 2 {
-            return self.section(
-                cx,
-                "Compare",
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("One master · nothing to compare"),
-            );
-        }
-        let active = project.active;
-        let reference = &project.masters[active];
-        let incompatible =
-            project.compat.values().filter(|ok| !**ok).count();
-        let mut rows = div().flex().flex_col().gap_1();
-        for (i, master) in project.masters.iter().enumerate() {
-            if i == active {
-                continue;
-            }
-            let missing = reference
-                .glyphs
-                .iter()
-                .filter(|g| !master.name_map.contains_key(g.name.as_ref()))
-                .count();
-            let advance_diffs = reference
-                .glyphs
-                .iter()
-                .filter(|g| {
-                    master
-                        .name_map
-                        .get(g.name.as_ref())
-                        .map(|&j| {
-                            (master.glyphs[j].advance - g.advance).abs() > 0.5
-                        })
-                        .unwrap_or(false)
-                })
-                .count();
-            let pair_count = |m: &FontModel| {
-                m.font
-                    .kerning
-                    .values()
-                    .map(|seconds| seconds.len())
-                    .sum::<usize>()
-            };
-            let metrics_diff = {
-                let mut diffs: Vec<&str> = Vec::new();
-                if (master.ascender - reference.ascender).abs() > 0.5 {
-                    diffs.push("asc");
-                }
-                if (master.descender - reference.descender).abs() > 0.5 {
-                    diffs.push("desc");
-                }
-                if master.x_height != reference.x_height {
-                    diffs.push("xh");
-                }
-                if master.cap_height != reference.cap_height {
-                    diffs.push("cap");
-                }
-                diffs
-            };
-            rows = rows.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(t::text())
-                            .child(format!(
-                                "{} vs {}",
-                                project.master_names[i],
-                                project.master_names[active]
-                            )),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child(format!(
-                                "{} glyphs · {} missing · {} advance diffs · kerning {} vs {}{}",
-                                master.glyphs.len(),
-                                missing,
-                                advance_diffs,
-                                pair_count(master),
-                                pair_count(reference),
-                                if metrics_diff.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(
-                                        " · metrics differ: {}",
-                                        metrics_diff.join(", ")
-                                    )
-                                },
-                            )),
-                    ),
-            );
-        }
-        rows = rows.child(
-            div()
-                .text_xs()
-                .text_color(if incompatible == 0 {
-                    t::text_muted()
-                } else {
-                    t::status_yellow()
-                })
-                .child(format!(
-                    "{incompatible} structurally incompatible glyph(s)"
-                )),
-        );
-        self.section(cx, "Compare", rows)
-    }
-
-    /// Dimensions section (grid mode): measured stems and bars for
-    /// the reference glyphs, per master. Glyphs' Dimensions palette
-    /// is hand-typed; these are measured from the outlines.
-    fn dimensions_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        if self.project.is_none() {
-            return self.section(cx, "Dimensions", div());
-        }
-        let mut rows = div().flex().flex_col().gap_0p5();
-        let mut shown = 0usize;
-        for name in ["H", "O", "n", "o", "t", "v"] {
-            let (stem, bar) = self.measured_dimensions(name);
-            if stem.is_none() && bar.is_none() {
-                continue;
-            }
-            shown += 1;
-            let fmt = |v: Option<i64>| {
-                v.map(|v| v.to_string()).unwrap_or_else(|| "–".into())
-            };
-            rows = rows.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_xs()
-                    .child(
-                        div()
-                            .w(px(16.0))
-                            .text_sm()
-                            .text_color(t::text())
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .text_color(t::text_muted())
-                            .child(format!("stem {}", fmt(stem))),
-                    )
-                    .child(
-                        div()
-                            .text_color(t::text_muted())
-                            .child(format!("bar {}", fmt(bar))),
-                    ),
-            );
-        }
-        if shown == 0 {
-            return self.section(
-                cx,
-                "Dimensions",
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("No reference glyphs with straight stems"),
-            );
-        }
-        self.section(cx, "Dimensions", rows)
-    }
-
-    /// Font Info section (grid mode): names and vertical metrics of
-    /// the active master, saved to fontinfo.plist. The first slice of
-    /// Glyphs' Font Info window; axes and instances come later.
-    fn font_info_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        if self.project.is_none() {
-            return self.section(cx, "Font Info", div());
-        }
-        let field = |header: &'static str,
-                     input: &gpui::Entity<widgets::input::InputState>| {
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .child(div().text_xs().text_color(t::text_muted()).child(header))
-                .child(widgets::input::Input::new(input))
-        };
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(field("Family Name", &self.font_info_inputs.family))
-            .child(field("Style Name", &self.font_info_inputs.style))
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(field("UPM", &self.font_info_inputs.upm))
-                    .child(field("Italic Angle", &self.font_info_inputs.italic_angle)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(field("Ascender", &self.font_info_inputs.ascender))
-                    .child(field("Descender", &self.font_info_inputs.descender)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(field("x-Height", &self.font_info_inputs.x_height))
-                    .child(field("Cap Height", &self.font_info_inputs.cap_height)),
-            )
-            // The vertical-metrics parameters (typo/hhea/win), kept
-            // together the way the Glyphs Masters tab carries them.
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Vertical Metrics"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(field("typoAsc", &self.font_info_inputs.typo_asc))
-                    .child(field("typoDesc", &self.font_info_inputs.typo_desc))
-                    .child(field("typoGap", &self.font_info_inputs.typo_gap)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(field("hheaAsc", &self.font_info_inputs.hhea_asc))
-                    .child(field("hheaDesc", &self.font_info_inputs.hhea_desc))
-                    .child(field("hheaGap", &self.font_info_inputs.hhea_gap)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(field("winAsc", &self.font_info_inputs.win_asc))
-                    .child(field("winDesc", &self.font_info_inputs.win_desc)),
-            )
-            // PostScript hinting data: alignment zones (pairs of
-            // position, position+size) and standard stems, the
-            // Glyphs Masters-tab Metrics/Stems story. The zones
-            // also draw as bands in the editor.
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Zones & Stems"),
-            )
-            .child(field("Blue Values", &self.font_info_inputs.blue_values))
-            .child(field("Other Blues", &self.font_info_inputs.other_blues))
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(field("Stems H", &self.font_info_inputs.stems_h))
-                    .child(field("Stems V", &self.font_info_inputs.stems_v)),
-            );
-        self.section(cx, "Font Info", body)
-    }
-
     fn refresh_metric_inputs(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
         // The metric fields live in the Glyph panel, which is up in
         // both modes: in the grid they follow the selected cell.
@@ -17855,10 +7970,7 @@ impl Workspace {
         if !force {
             // Any focused element other than the workspace canvas
             // means an input might be active: leave the text alone.
-            if window
-                .focused(cx)
-                .is_some_and(|f| f != self.focus_handle)
-            {
+            if window.focused(cx).is_some_and(|f| f != self.focus_handle) {
                 return;
             }
         }
@@ -17907,8 +8019,12 @@ impl Workspace {
     /// section X/Y inputs), with an undo snapshot.
     /// Rename the selected anchor (Enter in the Selection panel).
     fn apply_anchor_name(&mut self, text: &str) {
-        let Mode::Editor(index) = self.mode else { return };
-        let Some(ai) = self.editor.selected_anchor() else { return };
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        let Some(ai) = self.editor.selected_anchor() else {
+            return;
+        };
         let name = text.trim();
         if name.is_empty() {
             return;
@@ -17967,7 +8083,9 @@ impl Workspace {
     }
 
     fn selection_bounds(&self) -> Option<kurbo::Rect> {
-        let Mode::Editor(index) = self.mode else { return None };
+        let Mode::Editor(index) = self.mode else {
+            return None;
+        };
         let font = self.font()?;
         let entry = &font.glyphs[index];
         if !self.editor.selected.is_empty() {
@@ -17988,13 +8106,9 @@ impl Workspace {
             let glyph = font.font.get_glyph(entry.name.as_ref())?;
             let component = glyph.components.get(ci)?;
             let base = font.font.get_glyph(component.base.as_str())?;
-            let transform = runebender_core::glyph_paths::component_affine(
-                &component.transform,
-            );
-            let path = transform
-                * &runebender_core::glyph_paths::glyph_to_bezpath(
-                    base, &font.font,
-                );
+            let transform = runebender_core::glyph_paths::component_affine(&component.transform);
+            let path =
+                transform * &runebender_core::glyph_paths::glyph_to_bezpath(base, &font.font);
             return Some(path.bounding_box());
         }
         if let Some(ai) = self.editor.selected_anchor() {
@@ -18007,11 +8121,15 @@ impl Workspace {
     /// Move whatever is selected so the quadrant reference lands on
     /// `value` along one axis (web move_selection_reference).
     fn apply_coord(&mut self, is_x: bool, value: f64) {
-        let Mode::Editor(index) = self.mode else { return };
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
         if !value.is_finite() {
             return;
         }
-        let Some(bounds) = self.selection_bounds() else { return };
+        let Some(bounds) = self.selection_bounds() else {
+            return;
+        };
         let reference = self.coord_quadrant.point_in_dspace_rect(bounds);
         let delta = if is_x {
             kurbo::Vec2::new(value - reference.x, 0.0)
@@ -18032,11 +8150,15 @@ impl Workspace {
     /// bounds reach `value` along one axis (web
     /// resize_selection_reference).
     fn apply_size(&mut self, is_width: bool, value: f64) {
-        let Mode::Editor(index) = self.mode else { return };
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
         if !value.is_finite() || value <= 0.0 {
             return;
         }
-        let Some(bounds) = self.selection_bounds() else { return };
+        let Some(bounds) = self.selection_bounds() else {
+            return;
+        };
         let current = if is_width {
             bounds.width()
         } else {
@@ -18069,22 +8191,18 @@ impl Workspace {
                 .font_mut()
                 .and_then(|f| {
                     f.edit_glyph(index, |g| {
-                        runebender_core::glyph_ops::translate_component(
-                            g, ci, delta.x, delta.y,
-                        )
+                        runebender_core::glyph_ops::translate_component(g, ci, delta.x, delta.y)
                     })
                 })
                 .unwrap_or(false);
         }
         if let Some(ai) = self.editor.selected_anchor() {
-            let target = self
-                .font()
-                .and_then(|f| {
-                    f.glyphs[index]
-                        .anchors
-                        .get(ai)
-                        .map(|(_, x, y)| (x + delta.x, y + delta.y))
-                });
+            let target = self.font().and_then(|f| {
+                f.glyphs[index]
+                    .anchors
+                    .get(ai)
+                    .map(|(_, x, y)| (x + delta.x, y + delta.y))
+            });
             if let Some((x, y)) = target {
                 if let Some(font) = self.font_mut() {
                     font.set_anchor(index, ai, x.round(), y.round());
@@ -18122,9 +8240,7 @@ impl Workspace {
                             return false;
                         };
                         let current =
-                            runebender_core::glyph_paths::component_affine(
-                                &component.transform,
-                            );
+                            runebender_core::glyph_paths::component_affine(&component.transform);
                         let combined = transform * current;
                         let c = combined.as_coeffs();
                         component.transform = norad::AffineTransform {
@@ -18162,9 +8278,7 @@ impl Workspace {
         self.font_mut()
             .and_then(|f| {
                 f.edit_glyph(index, |g| {
-                    runebender_core::glyph_ops::transform_selection(
-                        g, &selected, transform,
-                    )
+                    runebender_core::glyph_ops::transform_selection(g, &selected, transform)
                 })
             })
             .unwrap_or(false)
@@ -18172,17 +8286,12 @@ impl Workspace {
 
     /// Keep the Selection X/Y inputs showing the selected point.
     fn refresh_coord_inputs(&mut self, force: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if !force
-            && window
-                .focused(cx)
-                .is_some_and(|f| f != self.focus_handle)
-        {
+        if !force && window.focused(cx).is_some_and(|f| f != self.focus_handle) {
             return;
         }
         let (x, y, w, h) = match self.selection_bounds() {
             Some(bounds) => {
-                let reference =
-                    self.coord_quadrant.point_in_dspace_rect(bounds);
+                let reference = self.coord_quadrant.point_in_dspace_rect(bounds);
                 (
                     format!("{:.0}", reference.x),
                     format!("{:.0}", reference.y),
@@ -18196,7 +8305,9 @@ impl Workspace {
             .editor
             .selected_anchor()
             .and_then(|ai| {
-                let Mode::Editor(index) = self.mode else { return None };
+                let Mode::Editor(index) = self.mode else {
+                    return None;
+                };
                 self.font()
                     .and_then(|f| f.glyphs[index].anchors.get(ai).cloned())
             })
@@ -18217,251 +8328,6 @@ impl Workspace {
         }
     }
 
-    /// Selection section: count plus editable X/Y for a single point.
-    fn selection_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let count = self.editor.selected.len();
-        let single = self.single_selected_point();
-        // A quiet count line rather than a heading: the fields below
-        // say what they are.
-        let mut body = div().flex().flex_col().gap_2().child(
-            div()
-                .text_xs()
-                .text_color(t::text_muted())
-                .child(match count {
-                    0 => "nothing selected".to_string(),
-                    1 => "1 point".to_string(),
-                    n => format!("{n} points"),
-                }),
-        );
-        let _ = single;
-        // A whole segment selected: report the curve's real size, which
-        // is what you compare when matching one curve to another.
-        if let Some((segments, r)) = self.selected_segment_bounds() {
-            let label = if segments == 1 {
-                "Segment".to_string()
-            } else {
-                format!("{segments} segments")
-            };
-            body = body.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .text_sm()
-                    .child(
-                        div().text_color(t::text_muted()).child(label),
-                    )
-                    .child(
-                        div().text_color(t::text()).child(SharedString::from(
-                            format!("{:.0} × {:.0}", r.width(), r.height()),
-                        )),
-                    ),
-            );
-        }
-        // The picker and the fields are always up, the way the web's
-        // CoordinatePanel is: the reference point is a setting you
-        // choose before selecting, and an empty panel that appears and
-        // disappears makes the sidebar jump.
-        {
-            use runebender_core::path::Quadrant;
-            let field = |label: &'static str,
-                         input: &gpui::Entity<widgets::input::InputState>| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(div().w(px(14.0)).text_sm().text_color(t::text_muted()).child(label))
-                    .child(div().flex_1().child(widgets::input::Input::new(input)))
-            };
-            // The 9-point reference picker (web coordinate quadrant):
-            // numeric X/Y and W/H act about the chosen corner.
-            const QUADRANTS: [[Quadrant; 3]; 3] = [
-                [Quadrant::TopLeft, Quadrant::Top, Quadrant::TopRight],
-                [Quadrant::Left, Quadrant::Center, Quadrant::Right],
-                [
-                    Quadrant::BottomLeft,
-                    Quadrant::Bottom,
-                    Quadrant::BottomRight,
-                ],
-            ];
-            let mut picker = div()
-                .w(px(52.0))
-                .h(px(52.0))
-                .flex()
-                .flex_col()
-                .justify_between()
-                .border(t::stroke())
-                .border_color(t::panel_outline())
-                .p(px(3.0));
-            for (ri, row_quads) in QUADRANTS.iter().enumerate() {
-                let mut row_el =
-                    div().flex().justify_between().w_full();
-                for (qi, quadrant) in row_quads.iter().enumerate() {
-                    let quadrant = *quadrant;
-                    let active = self.coord_quadrant == quadrant;
-                    row_el = row_el.child(
-                        div()
-                            .id(("quadrant", ri * 3 + qi))
-                            .w(px(10.0))
-                            .h(px(10.0))
-                            .rounded_full()
-                            .cursor_pointer()
-                            .border(t::stroke())
-                            .when(active, |el| {
-                                el.bg(t::accent()).border_color(t::accent())
-                            })
-                            .when(!active, |el| {
-                                el.border_color(t::cell_border())
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.coord_quadrant = quadrant;
-                                cx.notify();
-                            })),
-                    );
-                }
-                picker = picker.child(row_el);
-            }
-            body = body.child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .items_center()
-                    .child(picker)
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(field("X", &self.metric_inputs.x))
-                            .child(field("Y", &self.metric_inputs.y)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(field("W", &self.metric_inputs.w))
-                            .child(field("H", &self.metric_inputs.h)),
-                    ),
-            );
-        }
-        // Selected anchor: editable name (web AnchorPanel).
-        if !self.editor.selected_anchors.is_empty() {
-            body = body.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(t::text_muted())
-                            .child("Anchor"),
-                    )
-                    .child(div().flex_1().child(
-                        widgets::input::Input::new(
-                            &self.anchor_name_input,
-                        ),
-                    )),
-            );
-        }
-        // Selected component: name plus the anchor lock, the Glyphs
-        // contract — locked follows its anchor, free is draggable.
-        if let (Mode::Editor(index), Some(ci)) =
-            (&self.mode, self.editor.selected_component)
-        {
-            let index = *index;
-            let info = self
-                .font()
-                .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
-                .and_then(|g| g.components.get(ci))
-                .map(|c| {
-                    (
-                        c.base.to_string(),
-                        !runebender_core::composites::component_alignment_disabled(c),
-                    )
-                });
-            if let Some((base, aligned)) = info {
-                body = body.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(t::text_muted())
-                                .child(format!("Component /{base}")),
-                        )
-                        .child(
-                            div()
-                                .id("component-lock")
-                                .px_2()
-                                .py_0p5()
-                                .rounded(t::radius())
-                                .text_sm()
-                                .cursor_pointer()
-                                .border(t::stroke())
-                                .when(aligned, |el| {
-                                    el.border_color(t::accent())
-                                        .text_color(t::accent())
-                                })
-                                .when(!aligned, |el| {
-                                    el.border_color(t::cell_border())
-                                        .text_color(t::text())
-                                })
-                                .child(if aligned { "Locked" } else { "Free" })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.toggle_component_alignment(index, ci);
-                                    cx.notify();
-                                })),
-                        ),
-                );
-                // A smart part gets its value field: Enter re-places
-                // it at the typed position — a bare number moves the
-                // first axis, "Height=30" names one.
-                let smart_axis = self.font().and_then(|f| {
-                    let glyph =
-                        f.font.get_glyph(f.glyphs[index].name.as_ref())?;
-                    let base = f
-                        .font
-                        .get_glyph(glyph.components.get(ci)?.base.as_str())?;
-                    let names: Vec<&str> = base
-                        .lib
-                        .get("com.schriftgestaltung.Glyphs.smartComponentAxes")?
-                        .as_array()?
-                        .iter()
-                        .filter_map(|a| a.as_dictionary()?.get("name")?.as_string())
-                        .collect();
-                    (!names.is_empty()).then(|| names.join(" · "))
-                });
-                if let Some(axis) = smart_axis {
-                    body = body.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(t::text_muted())
-                                    .child(format!("Smart {axis}")),
-                            )
-                            .child(div().w(px(64.0)).child(
-                                widgets::input::Input::new(
-                                    &self.smart_value_input,
-                                ),
-                            )),
-                    );
-                }
-            }
-        }
-        self.section(cx, "Coordinates", body)
-    }
-
     /// Lock the selected component back onto its anchor, or cut it
     /// loose. Unlocking leaves it exactly where it sits; locking
     /// snaps it home (the realign hook runs on the edit).
@@ -18471,7 +8337,9 @@ impl Workspace {
             .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
             .and_then(|g| g.components.get(ci))
             .map(|c| !runebender_core::composites::component_alignment_disabled(c));
-        let Some(aligned) = currently_aligned else { return };
+        let Some(aligned) = currently_aligned else {
+            return;
+        };
         self.push_undo_snapshot(index);
         self.font_mut().and_then(|f| {
             f.edit_glyph(index, |g| {
@@ -18482,213 +8350,6 @@ impl Workspace {
                 }
             })
         });
-    }
-
-    /// Round the selected corners into fillets sized like the
-    /// glyph's existing rounding.
-    fn command_round_corners(&mut self) {
-        let Mode::Editor(index) = self.mode else { return };
-        self.push_undo_snapshot(index);
-        let selected = self.editor.selected.clone();
-        let new_selection = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(index, |g| {
-                    runebender_core::glyph_ops::round_selected_corners(
-                        g, &selected,
-                    )
-                })
-            })
-            .flatten();
-        match new_selection {
-            Some(selection) => self.editor.selected = selection,
-            None => {
-                self.editor.undo.pop();
-            }
-        }
-    }
-
-    /// Glyph → Trace Image…: pick an image, autotrace it through
-    /// img2bez (the web editor's tracer), and replace the current
-    /// glyph's contours with the result. Undoable.
-    fn command_trace_image(&mut self, cx: &mut Context<Self>) {
-        let Mode::Editor(index) = self.mode else { return };
-        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Trace".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else {
-                return;
-            };
-            let Some(path) = paths.into_iter().next() else {
-                return;
-            };
-            let bytes = std::fs::read(&path);
-            this.update(cx, |workspace, cx| {
-                match bytes {
-                    Ok(bytes) => workspace.apply_image_trace(index, &bytes),
-                    Err(e) => {
-                        workspace.status_note =
-                            Some(format!("Trace: {e}").into());
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// The Local AI section: choose a model, run it, and see how the
-    /// result scores against a master already drawn.
-    ///
-    /// Both halves matter. Running a model is easy to offer and easy
-    /// to trust too far; scoring it against work done by hand is what
-    /// says whether the proposal was worth having.
-    fn local_ai_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let body = div().flex().flex_col().gap_1p5();
-
-        // Which model, and a way to change it.
-        let label: SharedString = self
-            .model_summary
-            .clone()
-            .unwrap_or_else(|| "No model chosen".into());
-        let body = body.child(
-            div()
-                .id("ai-model")
-                .px_1()
-                .py_0p5()
-                .border(t::stroke())
-                .border_color(t::panel_outline())
-                .cursor_pointer()
-                .text_xs()
-                .text_color(t::text())
-                .child(label)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.command_choose_model(cx);
-                })),
-        );
-
-        if self.model_dir.is_none() {
-            return body.child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child(
-                        "A model is a folder holding config.json, \
-                         weights.safetensors and vocab.txt. Nothing is \
-                         downloaded.",
-                    ),
-            );
-        }
-
-        // Strength, because a model can be right about direction and
-        // short on distance.
-        let body = match &self.model_strength_slider {
-            Some(slider) => body.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .w(px(58.0))
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child(format!("{:.2}x", self.model_strength)),
-                    )
-                    .child(div().flex_1().child(flat_slider(slider, cx))),
-            ),
-            None => body,
-        };
-
-        let in_editor = matches!(self.mode, Mode::Editor(_));
-        let body = body.child(
-            div()
-                .id("ai-run")
-                .px_1()
-                .py_0p5()
-                .border(t::stroke())
-                .border_color(if in_editor {
-                    t::accent()
-                } else {
-                    t::panel_outline()
-                })
-                .cursor_pointer()
-                .text_xs()
-                .text_color(if in_editor { t::text() } else { t::text_muted() })
-                .child(if in_editor {
-                    "Bolden this glyph"
-                } else {
-                    "Open a glyph to run"
-                })
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Mode::Editor(index) = this.mode {
-                        let dir = this.model_dir.clone();
-                        if let Some(dir) = dir {
-                            this.apply_bolden(index, &dir);
-                            cx.notify();
-                        }
-                    }
-                })),
-        );
-
-        // The judgement, when there is another master to judge against.
-        let body = body.child(
-            div()
-                .id("ai-score")
-                .px_1()
-                .py_0p5()
-                .border(t::stroke())
-                .border_color(t::panel_outline())
-                .cursor_pointer()
-                .text_xs()
-                .text_color(t::text_muted())
-                .child("Score against the other master")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.command_score_model();
-                    cx.notify();
-                })),
-        );
-
-        let body = match &self.model_score {
-            Some((glyph, model, baseline)) => {
-                let better = model < baseline;
-                body.child(
-                    div()
-                        .text_xs()
-                        .text_color(if better { t::accent() } else { t::text_muted() })
-                        .child(format!(
-                            "{glyph}: model {model:.1}, mean-shift {baseline:.1}"
-                        )),
-                )
-            }
-            None => body,
-        };
-        body
-    }
-
-    /// Choose a model directory and remember it.
-    fn command_choose_model(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Choose model".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else { return };
-            let Some(dir) = paths.into_iter().next() else { return };
-            this.update(cx, |workspace, cx| {
-                workspace.load_model(&dir);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
     }
 
     /// Read a model directory and cache the weights.
@@ -18712,110 +8373,6 @@ impl Workspace {
         }
     }
 
-    /// Score the model on the open glyph against the master furthest
-    /// from the active one, which is the one it is trying to predict.
-    fn command_score_model(&mut self) {
-        let Mode::Editor(index) = self.mode else {
-            self.status_note = Some("Open a glyph first".into());
-            return;
-        };
-        let Some(dir) = self.model_dir.clone() else { return };
-        let Ok(checkpoint) = font_ml::Checkpoint::open(&dir) else { return };
-        let Some(project) = self.project.as_ref() else { return };
-        if project.masters.len() < 2 {
-            self.status_note =
-                Some("Nothing to score against: one master".into());
-            return;
-        }
-        let target = if project.active == 0 { project.masters.len() - 1 } else { 0 };
-        let Some(entry) = project.active_font().glyphs.get(index) else { return };
-        let name = entry.name.to_string();
-        let advance = entry.advance;
-        let unicode = entry.codepoint.map(|c| c as u32);
-        let (Some(from), Some(actual)) = (
-            project.active_font().font.get_glyph(name.as_str()),
-            project.masters[target].font.get_glyph(name.as_str()),
-        ) else {
-            return;
-        };
-        let (Some(from_ops), Some(actual_ops)) =
-            (font_ml::ufo::glyph_ops(from), font_ml::ufo::glyph_ops(actual))
-        else {
-            self.status_note = Some("No outline to score".into());
-            return;
-        };
-        let Some(model) = self.model_loaded.clone() else { return };
-        let center = checkpoint
-            .config
-            .delta_center
-            .map(|c| (c[0], c[1]))
-            .unwrap_or((0, 0));
-        let Ok(result) = font_ml::bolden::bolden(
-            &model,
-            &name,
-            unicode,
-            advance,
-            &from_ops,
-            center,
-            checkpoint.config.trim_close,
-            self.model_strength,
-        ) else {
-            return;
-        };
-        let score = font_ml::eval::score(
-            &name,
-            &result.to,
-            &actual_ops,
-            &result.from,
-            (center.0 as f64, center.1 as f64),
-        );
-        if score.model.is_nan() {
-            self.status_note =
-                Some("Masters are not point-compatible here".into());
-            return;
-        }
-        self.status_note = Some(
-            format!(
-                "{name}: model {:.1}, mean-shift {:.1}",
-                score.model, score.baseline
-            )
-            .into(),
-        );
-        self.model_score =
-            Some((name.into(), score.model, score.baseline));
-    }
-
-    /// Glyph > Bolden With Model…: pick a model directory, predict a
-    /// heavier version of the open glyph, and install it as a proposal.
-    ///
-    /// The prediction is structure-forced: the model may only move the
-    /// points that are already there, so the result stays
-    /// point-compatible with what it came from. It lands in the
-    /// current glyph and is undoable, so the way to reject it is
-    /// Cmd+Z.
-    fn command_bolden_with_model(&mut self, cx: &mut Context<Self>) {
-        let Mode::Editor(index) = self.mode else {
-            self.status_note = Some("Open a glyph first".into());
-            return;
-        };
-        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Choose model".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else { return };
-            let Some(dir) = paths.into_iter().next() else { return };
-            this.update(cx, |workspace, cx| {
-                workspace.apply_bolden(index, &dir);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     /// Run the model over the open glyph and install what it predicts.
     fn apply_bolden(&mut self, index: usize, dir: &std::path::Path) {
         let checkpoint = match font_ml::Checkpoint::open(dir) {
@@ -18828,13 +8385,19 @@ impl Workspace {
         if self.model_loaded.is_none() {
             self.load_model(dir);
         }
-        let Some(model) = self.model_loaded.clone() else { return };
+        let Some(model) = self.model_loaded.clone() else {
+            return;
+        };
         let Some(font) = self.font() else { return };
-        let Some(entry) = font.glyphs.get(index) else { return };
+        let Some(entry) = font.glyphs.get(index) else {
+            return;
+        };
         let name = entry.name.to_string();
         let advance = entry.advance;
         let unicode = entry.codepoint.map(|c| c as u32);
-        let Some(glyph) = font.font.get_glyph(name.as_str()) else { return };
+        let Some(glyph) = font.font.get_glyph(name.as_str()) else {
+            return;
+        };
         let Some(ops) = font_ml::ufo::glyph_ops(glyph) else {
             self.status_note =
                 Some("Nothing to bolden: this glyph is built from components".into());
@@ -18865,8 +8428,7 @@ impl Workspace {
         // The encoding guarantees this; assert it before writing to a
         // font rather than take it on trust.
         if !result.is_compatible() {
-            self.status_note =
-                Some("Refused: the prediction changed the point structure".into());
+            self.status_note = Some("Refused: the prediction changed the point structure".into());
             return;
         }
 
@@ -18908,49 +8470,7 @@ impl Workspace {
         );
     }
 
-    /// Glyph > Place Image…: copy a picture into the UFO's images
-    /// store and set it as this glyph's background image, scaled to
-    /// the em and sitting on the descender. The tracing-template
-    /// workflow; norad round-trips the images directory.
-    fn command_place_image(&mut self, cx: &mut Context<Self>) {
-        let Mode::Editor(index) = self.mode else { return };
-        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Place".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else {
-                return;
-            };
-            let Some(path) = paths.into_iter().next() else {
-                return;
-            };
-            let bytes = std::fs::read(&path);
-            this.update(cx, |workspace, cx| {
-                match bytes {
-                    Ok(bytes) => {
-                        workspace.apply_place_image(index, &path, bytes)
-                    }
-                    Err(e) => {
-                        workspace.status_note =
-                            Some(format!("Place image: {e}").into());
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn apply_place_image(
-        &mut self,
-        index: usize,
-        path: &std::path::Path,
-        bytes: Vec<u8>,
-    ) {
+    fn apply_place_image(&mut self, index: usize, path: &std::path::Path, bytes: Vec<u8>) {
         // Decode first: a file the editor cannot draw is refused
         // rather than silently written into the font.
         let decoded = match image::load_from_memory(&bytes) {
@@ -18977,11 +8497,7 @@ impl Workspace {
             x_offset: 0.0,
             y_offset: descender,
         };
-        let image = match norad::Image::new(
-            std::path::PathBuf::from(&file_name),
-            None,
-            transform,
-        ) {
+        let image = match norad::Image::new(std::path::PathBuf::from(&file_name), None, transform) {
             Ok(image) => image,
             Err(e) => {
                 self.status_note = Some(format!("Place image: {e}").into());
@@ -19003,356 +8519,17 @@ impl Workspace {
         // The cache entry is rebuilt from the store on next paint.
         self.glyph_image_cache.lock().unwrap().remove(&file_name);
         self.show_background = true;
-        self.status_note = Some(
-            format!("Placed {file_name} · {img_w:.0}×{img_h:.0}px").into(),
-        );
+        self.status_note = Some(format!("Placed {file_name} · {img_w:.0}×{img_h:.0}px").into());
     }
 
-    fn glyph_smart_axis_ref(
-        &self,
-    ) -> gpui::Entity<widgets::input::InputState> {
+    fn glyph_smart_axis_ref(&self) -> gpui::Entity<widgets::input::InputState> {
         self.smart_axis_input.clone()
-    }
-
-    /// "Smart Axis" on a part glyph: "Width,0,100" writes the
-    /// glyphsLib smartComponentAxes entry, marks the default glyph
-    /// as the bottom pole, and seeds a part.top layer copy marked
-    /// as the top — edit it through the swap arrows, place the part
-    /// with a value through the Selection panel.
-    fn command_make_smart_axis(&mut self, text: &str) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let mut parts = text.split(',').map(str::trim);
-        let Some(name) = parts.next().filter(|n| !n.is_empty()) else {
-            return;
-        };
-        let bottom = parts
-            .next()
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(0.0);
-        let top = parts
-            .next()
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(100.0);
-        let Some(glyph_name) =
-            self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        if let Some(font) = self.font_mut() {
-            let Some(source) = font.font.get_glyph(glyph_name.as_str()).cloned()
-            else {
-                return;
-            };
-            // The axis entry, glyphsLib-shaped.
-            let mut axis = plist::Dictionary::new();
-            axis.insert("name".into(), plist::Value::String(name.into()));
-            axis.insert("bottomName".into(), plist::Value::String(String::new()));
-            axis.insert("bottomValue".into(), plist::Value::Real(bottom));
-            axis.insert("topName".into(), plist::Value::String(String::new()));
-            axis.insert("topValue".into(), plist::Value::Real(top));
-            if let Some(glyph) = font.font.get_glyph_mut(glyph_name.as_str()) {
-                glyph.lib.insert(
-                    "com.schriftgestaltung.Glyphs.smartComponentAxes".into(),
-                    plist::Value::Array(vec![plist::Value::Dictionary(axis)]),
-                );
-            }
-            // Seed the top pole as a layer copy, marked.
-            if let Ok(layer) = font.font.layers.get_or_create_layer("part.top")
-            {
-                let mut copy = norad::Glyph::new(glyph_name.as_str());
-                copy.width = source.width;
-                copy.contours = source.contours.clone();
-                let mut pole = plist::Dictionary::new();
-                pole.insert(
-                    name.to_string(),
-                    plist::Value::Integer(2u64.into()),
-                );
-                copy.lib.insert(
-                    "com.runebender.partSelection".into(),
-                    plist::Value::Dictionary(pole),
-                );
-                layer.insert_glyph(copy);
-            }
-            font.dirty = true;
-            font.modified_glyphs.insert(glyph_name.clone());
-        }
-        self.visible_glyph_layers.insert("part.top".into());
-        self.status_note = Some(
-            format!(
-                "{glyph_name} is a smart part: {name} {bottom:.0}–{top:.0} · edit part.top via the swap arrows"
-            )
-            .into(),
-        );
-    }
-
-    /// Set the selected smart component's value on its first axis
-    /// (the Selection panel's Smart field).
-    fn command_set_smart_value(&mut self, text: &str) {
-        let Mode::Editor(index) = self.mode else { return };
-        let Some(ci) = self.editor.selected_component else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        // "30" moves the first axis; "Height=30" names one.
-        let (axis_named, value) = match text.split_once('=') {
-            Some((axis, v)) => (Some(axis.trim()), v.trim().parse::<f64>()),
-            None => (None, text.trim().parse::<f64>()),
-        };
-        let Ok(value) = value else {
-            self.status_note = Some("Smart value: 30 or Height=30".into());
-            return;
-        };
-        let axis = self.font().and_then(|f| {
-            let glyph = f.font.get_glyph(name.as_str())?;
-            let base = f
-                .font
-                .get_glyph(glyph.components.get(ci)?.base.as_str())?;
-            let names: Vec<String> = base
-                .lib
-                .get("com.schriftgestaltung.Glyphs.smartComponentAxes")?
-                .as_array()?
-                .iter()
-                .filter_map(|a| {
-                    a.as_dictionary()?
-                        .get("name")?
-                        .as_string()
-                        .map(str::to_string)
-                })
-                .collect();
-            match axis_named {
-                Some(want) => names
-                    .iter()
-                    .find(|n| n.eq_ignore_ascii_case(want))
-                    .cloned(),
-                None => names.first().cloned(),
-            }
-        });
-        let Some(axis) = axis else {
-            self.status_note = Some(
-                "Selected component's base is not smart (or no such axis)"
-                    .into(),
-            );
-            return;
-        };
-        if let Some(font) = self.font_mut() {
-            let component_count = font
-                .font
-                .get_glyph(name.as_str())
-                .map(|g| g.components.len())
-                .unwrap_or(0);
-            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
-                const KEY: &str =
-                    "com.schriftgestaltung.Glyphs.componentsSmartComponentValues";
-                let mut rows: Vec<plist::Value> = glyph
-                    .lib
-                    .get(KEY)
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                rows.resize(
-                    component_count,
-                    plist::Value::Dictionary(plist::Dictionary::new()),
-                );
-                if let Some(entry) =
-                    rows.get_mut(ci).and_then(|v| v.as_dictionary_mut())
-                {
-                    entry.insert(axis.clone(), plist::Value::Real(value));
-                }
-                glyph.lib.insert(KEY.into(), plist::Value::Array(rows));
-                font.dirty = true;
-            }
-            font.modified_glyphs.insert(name.clone());
-            font.refresh_from_font();
-        }
-        self.status_note =
-            Some(format!("{axis} = {value:.0} on the component").into());
-    }
-
-    /// Flip a contour's mask flag on the open glyph (active master;
-    /// mask sets are per master like everything the lib carries).
-    fn command_toggle_mask(&mut self, ci: usize) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        if let Some(font) = self.font_mut() {
-            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
-                let mut masks = read_masks(glyph);
-                if !masks.remove(&ci) {
-                    masks.insert(ci);
-                }
-                write_masks(glyph, &masks);
-                font.dirty = true;
-                font.modified_glyphs.insert(name);
-            }
-        }
-    }
-
-    /// Glyph > Bake Masks: make the subtraction real in every
-    /// master, so the exported outline matches the preview.
-    fn command_bake_masks(&mut self) {
-        let Some(index) = self.current_glyph_index() else { return };
-        if let Mode::Editor(i) = self.mode {
-            self.push_undo_snapshot(i);
-        }
-        let Some(project) = self.project.as_mut() else { return };
-        let name = project.active_font().glyphs[index].name.to_string();
-        let mut baked = 0usize;
-        for master in project.masters.iter_mut() {
-            let Some(gi) = master.name_map.get(name.as_str()).copied() else {
-                continue;
-            };
-            if master.edit_glyph(gi, bake_masks).unwrap_or(false) {
-                baked += 1;
-            }
-        }
-        project.compute_compat();
-        self.editor.selected.clear();
-        self.status_note = Some(
-            if baked == 0 {
-                "No masks to bake".to_string()
-            } else {
-                format!("Masks baked in {baked} master(s)")
-            }
-            .into(),
-        );
-    }
-
-    /// Drop an annotation at a design-space point on the open
-    /// glyph (active master; annotations are working notes, never
-    /// exported).
-    fn command_add_annotation(
-        &mut self,
-        at: (f64, f64),
-        kind: &str,
-        text: &str,
-    ) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        if let Some(font) = self.font_mut() {
-            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
-                let mut notes = read_annotations(glyph);
-                notes.push(Annotation {
-                    kind: kind.to_string(),
-                    x: at.0.round(),
-                    y: at.1.round(),
-                    text: text.to_string(),
-                });
-                write_annotations(glyph, &notes);
-                font.dirty = true;
-                font.modified_glyphs.insert(name);
-            }
-        }
-    }
-
-    fn command_delete_annotation(&mut self, i: usize) {
-        let Some(index) = self.current_glyph_index() else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        if let Some(font) = self.font_mut() {
-            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
-                let mut notes = read_annotations(glyph);
-                if i < notes.len() {
-                    notes.remove(i);
-                    write_annotations(glyph, &notes);
-                    font.dirty = true;
-                    font.modified_glyphs.insert(name);
-                }
-            }
-        }
-    }
-
-    /// Glyph > Import SVG…: parse the file's path outlines and add
-    /// them to the open glyph, fitted between descender and
-    /// ascender, appended so existing drawing survives (undoable).
-    fn command_import_svg(&mut self, cx: &mut Context<Self>) {
-        let Mode::Editor(index) = self.mode else { return };
-        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Import".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else {
-                return;
-            };
-            let Some(path) = paths.into_iter().next() else {
-                return;
-            };
-            let text = std::fs::read_to_string(&path);
-            this.update(cx, |workspace, cx| {
-                let (ascender, descender) = match workspace.font() {
-                    Some(f) => (f.ascender, f.descender),
-                    None => return,
-                };
-                match text
-                    .map_err(|e| format!("{e}"))
-                    .and_then(|t| svg_to_contours(&t, ascender, descender))
-                {
-                    Ok(contours) => {
-                        workspace.push_undo_snapshot(index);
-                        let added = contours.len();
-                        let ok = workspace
-                            .font_mut()
-                            .and_then(|f| {
-                                f.edit_glyph(index, |g| {
-                                    g.contours.extend(contours);
-                                    true
-                                })
-                            })
-                            .unwrap_or(false);
-                        if ok {
-                            workspace.status_note = Some(
-                                format!("Imported {added} SVG contour(s)")
-                                    .into(),
-                            );
-                        } else {
-                            workspace.editor.undo.pop();
-                        }
-                    }
-                    Err(e) => {
-                        workspace.status_note =
-                            Some(format!("SVG import: {e}").into());
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Glyph > Remove Image: unlink this glyph's background image.
-    /// The stored file stays; other glyphs may reference it.
-    fn command_remove_image(&mut self) {
-        let Mode::Editor(index) = self.mode else { return };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        if let Some(font) = self.font_mut() {
-            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
-                if glyph.image.take().is_some() {
-                    font.dirty = true;
-                    font.modified_glyphs.insert(name);
-                }
-            }
-        }
     }
 
     /// The decoded background image for a file in the UFO images
     /// store, cached. gpui's RenderImage wants premultiplied BGRA.
     fn glyph_image(&self, file_name: &str) -> Option<Arc<gpui::RenderImage>> {
-        if let Some(cached) = self.glyph_image_cache.lock().unwrap().get(file_name)
-        {
+        if let Some(cached) = self.glyph_image_cache.lock().unwrap().get(file_name) {
             return cached.clone();
         }
         let decoded = self
@@ -19376,11 +8553,8 @@ impl Workspace {
                     px[1] = ((g * a) / 255) as u8;
                     px[2] = ((r * a) / 255) as u8;
                 }
-                let buffer = image::RgbaImage::from_raw(w, h, bytes)
-                    .expect("same-size buffer");
-                Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
-                    buffer,
-                )]))
+                let buffer = image::RgbaImage::from_raw(w, h, bytes).expect("same-size buffer");
+                Arc::new(gpui::RenderImage::new(vec![image::Frame::new(buffer)]))
             });
         self.glyph_image_cache
             .lock()
@@ -19427,88 +8601,12 @@ impl Workspace {
         }
     }
 
-    /// Duplicate the selection: contours holding selected points, or
-    /// the selected component or anchor, offset (20, 20), clones
-    /// selected (web duplicateSelection).
-    fn command_duplicate(&mut self) {
-        let Mode::Editor(index) = self.mode else { return };
-        self.push_undo_snapshot(index);
-        let changed = if let Some(ci) = self.editor.selected_component {
-            let new_index = self
-                .font_mut()
-                .and_then(|f| {
-                    f.edit_glyph(index, |g| {
-                        runebender_core::glyph_ops::duplicate_component(g, ci)
-                    })
-                })
-                .flatten();
-            if let Some(new_index) = new_index {
-                self.editor.selected_component = Some(new_index);
-            }
-            new_index.is_some()
-        } else if let Some(ai) = self.editor.selected_anchor() {
-            let new_index = self
-                .font_mut()
-                .and_then(|f| {
-                    f.edit_glyph(index, |g| {
-                        runebender_core::glyph_ops::duplicate_anchor(g, ai)
-                    })
-                })
-                .flatten();
-            if let Some(new_index) = new_index {
-                self.editor.selected_anchors = vec![new_index];
-            }
-            new_index.is_some()
-        } else {
-            let selected = self.editor.selected.clone();
-            let new_selection = self
-                .font_mut()
-                .and_then(|f| {
-                    f.edit_glyph(index, |g| {
-                        runebender_core::glyph_ops::duplicate_selection(
-                            g, &selected,
-                        )
-                    })
-                })
-                .flatten();
-            match new_selection {
-                Some(selection) => {
-                    self.editor.selected = selection;
-                    true
-                }
-                None => false,
-            }
-        };
-        if !changed {
-            self.editor.undo.pop();
-        }
-    }
-
-    /// Duplicate, then re-apply the last flip/rotate — the web's
-    /// duplicate-repeat, for rotated repeats around a center.
-    fn command_duplicate_repeat(&mut self) {
-        let before = self.editor.undo.len();
-        self.command_duplicate();
-        if self.editor.undo.len() == before {
-            return;
-        }
-        if let Some(transform) = self.editor.last_transform {
-            let Mode::Editor(index) = self.mode else { return };
-            let selected = self.editor.selected.clone();
-            self.font_mut().and_then(|f| {
-                f.edit_glyph(index, |g| {
-                    runebender_core::glyph_ops::transform_selection(
-                        g, &selected, transform,
-                    )
-                })
-            });
-        }
-    }
-
     /// Flip/rotate the selection (whole glyph when nothing selected)
     /// about its bbox center, with an undo snapshot.
     fn apply_transform(&mut self, transform: Affine) {
-        let Mode::Editor(index) = self.mode else { return };
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
         self.push_undo_snapshot(index);
         self.editor.last_transform = Some(transform);
         let selected = self.editor.selected.clone();
@@ -19544,40 +8642,10 @@ impl Workspace {
     /// the redo tail. Called at the start of every mutating gesture.
     /// Apply a change to the measure options, mirror it for the menu,
     /// and rebuild the menus so the ticks follow.
-    fn toggle_measure(
-        &mut self,
-        change: impl FnOnce(&mut MeasureOpts),
-        cx: &mut Context<Self>,
-    ) {
+    fn toggle_measure(&mut self, change: impl FnOnce(&mut MeasureOpts), cx: &mut Context<Self>) {
         change(&mut self.measure_opts);
         *MEASURE_MENU.lock().expect("measure menu") = self.measure_opts;
         cx.set_menus(app_menus());
-        cx.notify();
-    }
-
-    /// Switch the palette: the app's own colours, the widget library's
-    /// theme, and the menu tick all follow.
-    fn command_set_theme(
-        &mut self,
-        id: &str,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !t::set_theme(id) {
-            return;
-        }
-        cx.set_menus(app_menus());
-        self.status_note = Some(
-            format!(
-                "{} theme",
-                t::THEMES
-                    .iter()
-                    .find(|(name, _)| *name == id)
-                    .map(|(_, label)| *label)
-                    .unwrap_or(id)
-            )
-            .into(),
-        );
         cx.notify();
     }
 
@@ -19603,59 +8671,6 @@ impl Workspace {
     }
 
     // ---- app commands (menu bar + keymap) ----
-
-    /// Save every dirty master (native), or PUT modified files to the
-    /// workspace server (web).
-    fn command_save(&mut self, cx: &mut Context<Self>) {
-        #[cfg(target_family = "wasm")]
-        {
-            self.save_to_web_host(cx);
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let _ = cx;
-            if let Some(project) = self.project.as_mut() {
-                let mut saved = Vec::new();
-                let mut failed = Vec::new();
-                for master in project.masters.iter_mut() {
-                    if !master.dirty {
-                        continue;
-                    }
-                    match master.save() {
-                        Ok(()) => saved.push(master.source_path.display().to_string()),
-                        Err(e) => failed.push(format!("{e}")),
-                    }
-                }
-                // Instance edits go back into the designspace file.
-                if project.ds_dirty
-                    && let (Some(doc), Some(path)) = (
-                        project.ds_doc.as_ref(),
-                        project.export_source.as_ref(),
-                    )
-                    && path.extension().is_some_and(|e| e == "designspace")
-                {
-                    match doc.save(path) {
-                        Ok(()) => {
-                            project.ds_dirty = false;
-                            saved.push(path.display().to_string());
-                        }
-                        Err(e) => failed.push(format!("{e}")),
-                    }
-                }
-                *self.last_save.lock().unwrap() = web_time::Instant::now();
-                self.last_save_label = Some(
-                    chrono::Local::now().format("%-I:%M %p").to_string().into(),
-                );
-                self.status_note = Some(if !failed.is_empty() {
-                    format!("Save failed: {}", failed.join("; ")).into()
-                } else if saved.is_empty() {
-                    "Nothing to save".into()
-                } else {
-                    format!("Saved {}", saved.join(", ")).into()
-                });
-            }
-        }
-    }
 
     /// The repo's own Google Fonts build script above the source
     /// (build-fontc.sh preferred, then build.sh), with the directory
@@ -19701,233 +8716,12 @@ impl Workspace {
             .unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
     }
 
-    /// File > Export. Dirty masters are saved first because the
-    /// build reads from disk. With a Google Fonts build script above
-    /// the source, that script is the export — the repo pipeline is
-    /// the compatibility authority. Otherwise fontc compiles the
-    /// source directly, with a gftools-fix-font pass when the tool
-    /// can be found. Runs in the background; reports through the
-    /// status note.
-    #[cfg(not(target_family = "wasm"))]
-    fn command_export(&mut self, cx: &mut Context<Self>) {
-        if self
-            .project
-            .as_ref()
-            .is_some_and(|p| p.masters.iter().any(|m| m.dirty))
-        {
-            self.command_save(cx);
-        }
-        let Some(project) = self.project.as_ref() else { return };
-        let source = project
-            .export_source
-            .clone()
-            .unwrap_or_else(|| project.masters[project.active].source_path.clone());
-        if !source.exists() {
-            self.status_note = Some("Save the font before exporting".into());
-            return;
-        }
-        if let Some((script, workdir)) = Self::gf_build_script(&source) {
-            let label = script
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "build script".into());
-            self.status_note =
-                Some(format!("Exporting through {label}…").into());
-            cx.spawn(async move |this, cx| {
-                let result: Result<String, String> = cx
-                    .background_executor()
-                    .spawn({
-                        let label = label.clone();
-                        async move {
-                            let path_env =
-                                Workspace::export_path_env(Some(&workdir));
-                            let output =
-                                std::process::Command::new("/bin/bash")
-                                    .arg(&script)
-                                    .current_dir(&workdir)
-                                    .env("PATH", path_env)
-                                    .output()
-                                    .map_err(|e| format!("{e}"))?;
-                            if output.status.success() {
-                                Ok(format!(
-                                    "Exported through {label} → {}",
-                                    workdir.join("fonts").display()
-                                ))
-                            } else {
-                                let stderr =
-                                    String::from_utf8_lossy(&output.stderr);
-                                Err(stderr
-                                    .lines()
-                                    .rev()
-                                    .find(|l| !l.trim().is_empty())
-                                    .unwrap_or("build script failed")
-                                    .to_string())
-                            }
-                        }
-                    })
-                    .await;
-                this.update(cx, |workspace, cx| {
-                    workspace.status_note = Some(match result {
-                        Ok(note) => note.into(),
-                        Err(e) => format!("Export failed: {e}").into(),
-                    });
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
-            return;
-        }
-        let Some(fontc) = fontc_binary() else {
-            self.status_note =
-                Some("fontc not found: cargo install fontc".into());
-            return;
-        };
-        let out_dir = source
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("exports");
-        let stem = source
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "font".into());
-        let out_file = out_dir.join(format!("{stem}.ttf"));
-        self.status_note = Some(format!("Exporting {stem}.ttf…").into());
-        cx.spawn(async move |this, cx| {
-            let result: Result<(PathBuf, bool), String> = cx
-                .background_executor()
-                .spawn(async move {
-                    std::fs::create_dir_all(&out_dir)
-                        .map_err(|e| format!("{e}"))?;
-                    // fontc's working files go to a temp dir, not the
-                    // font's directory, so the file watcher and git
-                    // status stay quiet.
-                    let build_dir =
-                        std::env::temp_dir().join("runebender-fontc");
-                    let output = std::process::Command::new(&fontc)
-                        .arg(&source)
-                        .arg("--output-file")
-                        .arg(&out_file)
-                        .arg("--build-dir")
-                        .arg(&build_dir)
-                        .output()
-                        .map_err(|e| format!("{e}"))?;
-                    if output.status.success() {
-                        // Google Fonts spec fixes when gftools is
-                        // around (PATH after export_path_env, which
-                        // includes any repo venv above the source).
-                        let path_env =
-                            Workspace::export_path_env(source.parent());
-                        let fixed = std::process::Command::new(
-                            "gftools-fix-font",
-                        )
-                        .arg("-o")
-                        .arg(&out_file)
-                        .arg(&out_file)
-                        .env("PATH", path_env)
-                        .output()
-                        .is_ok_and(|o| o.status.success());
-                        Ok((out_file, fixed))
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        Err(stderr
-                            .lines()
-                            .rev()
-                            .find(|l| !l.trim().is_empty())
-                            .unwrap_or("fontc failed")
-                            .to_string())
-                    }
-                })
-                .await;
-            this.update(cx, |workspace, cx| {
-                workspace.status_note = Some(match result {
-                    Ok((path, fixed)) => if fixed {
-                        format!("Exported {} (gftools fixes applied)", path.display())
-                    } else {
-                        format!(
-                            "Exported {} (no gftools on PATH: skipped GF fixes)",
-                            path.display()
-                        )
-                    }
-                    .into(),
-                    Err(e) => format!("Export failed: {e}").into(),
-                });
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// The browser build has no fontc to run; exporting is native.
-    #[cfg(target_family = "wasm")]
-    fn command_export(&mut self, _cx: &mut Context<Self>) {
-        self.status_note =
-            Some("Export runs in the native app only".into());
-    }
-
-    /// Copy the selected contours (whole glyph when nothing selected).
-    fn command_copy(&mut self) {
-        let in_editor = matches!(self.mode, Mode::Editor(_));
-        let index = match self.mode {
-            Mode::Editor(i) => Some(i),
-            Mode::Grid => self.selected,
-        };
-        if let (Some(index), Some(font)) = (index, self.font()) {
-            let selected = if in_editor {
-                self.editor.selected.clone()
-            } else {
-                Default::default()
-            };
-            self.clipboard = font.contours_for_copy(index, &selected);
-            self.status_note =
-                Some(format!("Copied {} contours", self.clipboard.len()).into());
-        }
-    }
-
-    /// Paste copied contours into the current glyph, with undo.
-    fn command_paste(&mut self) {
-        let index = match self.mode {
-            Mode::Editor(i) => Some(i),
-            Mode::Grid => self.selected,
-        };
-        let Some(index) = index else { return };
-        if self.clipboard.is_empty() {
-            return;
-        }
-        self.push_undo_snapshot(index);
-        let contours = self.clipboard.clone();
-        if let Some(font) = self.font_mut() {
-            font.paste_contours(index, &contours);
-        }
-        if let Some(project) = self.project.as_mut() {
-            let name = project.active_font().glyphs[index].name.to_string();
-            project.recheck_compat(&name);
-        }
-    }
-
-    /// Cmd+V, routed the web way: copied contours paste whenever the
-    /// outline clipboard holds something and the Text tool isn't the
-    /// one in hand; otherwise the system clipboard's text types into
-    /// the editor's buffer.
-    fn command_paste_routed(&mut self, cx: &mut Context<Self>) {
-        let text_target = matches!(self.mode, Mode::Editor(_));
-        if (!self.clipboard.is_empty() && self.editor.tool != Tool::Text)
-            || !text_target
-        {
-            self.command_paste();
-            return;
-        }
-        self.paste_text_into_buffer(cx);
-    }
-
     /// Paste the system clipboard's text into the editor's buffer,
     /// character by character (web pasteTextIntoBuffer): switches to
     /// the Text tool, line breaks for newlines, characters with no
     /// glyph skipped.
     fn paste_text_into_buffer(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
-        else {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
         if text.is_empty() {
@@ -19973,344 +8767,6 @@ impl Workspace {
             }
             .into(),
         );
-    }
-
-    /// Remove overlap on the open glyph, with undo.
-    fn command_remove_overlap(&mut self) {
-        let Mode::Editor(index) = self.mode else {
-            return;
-        };
-        self.push_undo_snapshot(index);
-        let changed = self.font_mut().is_some_and(|f| f.remove_overlap(index));
-        if !changed {
-            self.editor.undo.pop();
-        } else {
-            self.editor.selected.clear();
-        }
-    }
-
-    /// Boolean path op over the glyph's contours (web boolean tiles):
-    /// union merges everything; the others apply first contour vs the
-    /// rest combined.
-    /// Expand contours into stroked outlines (the Make Stroke half
-    /// of Glyphs' Offset Curve): each selected contour — all when
-    /// nothing is selected — becomes the outline of a stroke of the
-    /// typed width, round joins and caps. The monoline workflow: draw
-    /// open skeleton paths, type a weight, get letterforms.
-    fn command_expand_stroke(&mut self, width: f64) {
-        let Mode::Editor(index) = self.mode else { return };
-        if !(width > 0.0) {
-            return;
-        }
-        self.push_undo_snapshot(index);
-        let selected_contours: std::collections::HashSet<usize> =
-            self.editor.selected.iter().map(|(c, _)| *c).collect();
-        let changed = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(index, |g| {
-                    expand_stroke_contours(g, &selected_contours, width)
-                })
-            })
-            .unwrap_or(false);
-        if !changed {
-            self.editor.undo.pop();
-        } else {
-            self.editor.selected.clear();
-        }
-    }
-
-    /// Offset the whole glyph bolder (positive) or lighter
-    /// (negative) by the typed number of units.
-    fn command_offset(&mut self, delta: f64) {
-        let Mode::Editor(index) = self.mode else { return };
-        self.push_undo_snapshot(index);
-        let changed = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(index, |g| offset_glyph_contours(g, delta))
-            })
-            .unwrap_or(false);
-        if !changed {
-            self.editor.undo.pop();
-        } else {
-            self.editor.selected.clear();
-        }
-    }
-
-    /// Fit Curve: set selected segments' handles to a percentage of
-    /// their tangent-intersection maximum.
-    fn command_fit_curve(&mut self, fraction: f64) {
-        let Mode::Editor(index) = self.mode else { return };
-        self.push_undo_snapshot(index);
-        let selected = self.editor.selected.clone();
-        let changed = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(index, |g| {
-                    fit_curve_handles(g, &selected, fraction)
-                })
-            })
-            .unwrap_or(false);
-        if !changed {
-            self.editor.undo.pop();
-        }
-    }
-
-    /// View > Next/Previous Sample String: rebuild the text buffer
-    /// as sample text around the open glyph.
-    fn command_sample_string(&mut self, step: isize) {
-        let Mode::Editor(index) = self.mode else { return };
-        let Some(font) = self.font() else { return };
-        let entry = &font.glyphs[index];
-        let (name, codepoint, advance) =
-            (entry.name.to_string(), entry.codepoint, entry.advance);
-        let count = SAMPLE_STRINGS.len() as isize;
-        self.sample_index =
-            (self.sample_index as isize + step).rem_euclid(count) as usize;
-        let sample = SAMPLE_STRINGS[self.sample_index];
-        self.edit_buffer.clear();
-        // The open glyph leads; the sample text follows it.
-        self.edit_buffer.insert_glyph(&name, codepoint, advance);
-        self.edit_buffer.activate_sort(0);
-        for c in sample.chars() {
-            self.edit_buffer.insert_character(c);
-        }
-        self.edit_buffer.activate_sort(0);
-        self.sync_sort_offset();
-        self.status_note = Some(format!("Sample: {sample}").into());
-    }
-
-    /// Extrude field: "offset" or "offset,angle" (angle default 30,
-    /// the Glyphs default). Prefix with k to keep the front face
-    /// ("k15,30" = Don't Subtract).
-    fn command_extrude(&mut self, text: &str) {
-        let Mode::Editor(index) = self.mode else { return };
-        let trimmed = text.trim();
-        let keep_front = trimmed.starts_with(['k', 'K']);
-        let trimmed = trimmed.trim_start_matches(['k', 'K']).trim();
-        let mut parts = trimmed.split(',').map(str::trim);
-        let Some(Ok(offset)) = parts.next().map(str::parse::<f64>) else {
-            return;
-        };
-        let angle = parts
-            .next()
-            .and_then(|p| p.parse::<f64>().ok())
-            .unwrap_or(30.0);
-        self.push_undo_snapshot(index);
-        let changed = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(index, |g| {
-                    extrude_glyph_contours(g, offset, angle, keep_front)
-                })
-            })
-            .unwrap_or(false);
-        if !changed {
-            self.editor.undo.pop();
-        } else {
-            self.editor.selected.clear();
-        }
-    }
-
-    /// Roughen field: "segment" or "segment,h,v" (h and v default to
-    /// the segment length and half of it). New random rough each
-    /// apply.
-    fn command_roughen(&mut self, text: &str) {
-        let Mode::Editor(index) = self.mode else { return };
-        let mut parts = text.trim().split(',').map(str::trim);
-        let Some(Ok(seg)) = parts.next().map(str::parse::<f64>) else {
-            return;
-        };
-        let h = parts
-            .next()
-            .and_then(|p| p.parse::<f64>().ok())
-            .unwrap_or(seg);
-        let v = parts
-            .next()
-            .and_then(|p| p.parse::<f64>().ok())
-            .unwrap_or(seg / 2.0);
-        self.push_undo_snapshot(index);
-        self.roughen_seed = self.roughen_seed.wrapping_add(1);
-        let seed = self.roughen_seed;
-        let selected_contours: std::collections::HashSet<usize> =
-            self.editor.selected.iter().map(|(c, _)| *c).collect();
-        let changed = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(index, |g| {
-                    roughen_glyph_contours(
-                        g,
-                        &selected_contours,
-                        seg,
-                        h,
-                        v,
-                        seed,
-                    )
-                })
-            })
-            .unwrap_or(false);
-        if !changed {
-            self.editor.undo.pop();
-        } else {
-            self.editor.selected.clear();
-        }
-    }
-
-    /// Path > Add Extremes.
-    fn command_add_extremes(&mut self) {
-        let Mode::Editor(index) = self.mode else { return };
-        self.push_undo_snapshot(index);
-        let selected = self.editor.selected.clone();
-        let changed = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(index, |g| add_extreme_points(g, &selected))
-            })
-            .unwrap_or(false);
-        if !changed {
-            self.editor.undo.pop();
-            self.status_note = Some("No missing extremes".into());
-        } else {
-            self.editor.selected.clear();
-        }
-    }
-
-    fn command_boolean(&mut self, op: linesweeper::BinaryOp) {
-        let Mode::Editor(index) = self.mode else {
-            return;
-        };
-        self.push_undo_snapshot(index);
-        let changed = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(index, |g| {
-                    match runebender_core::glyph_ops::boolean_contours(g, op) {
-                        Some(contours) => {
-                            g.contours = contours;
-                            true
-                        }
-                        None => false,
-                    }
-                })
-            })
-            .unwrap_or(false);
-        if !changed {
-            self.editor.undo.pop();
-        } else {
-            self.editor.selected.clear();
-        }
-    }
-
-    /// Make the selected on-curve point the contour's start point.
-    fn command_set_start_point(&mut self) {
-        let Mode::Editor(index) = self.mode else {
-            return;
-        };
-        if self.editor.selected.len() != 1 {
-            return;
-        }
-        let (contour, point) = *self.editor.selected.iter().next().unwrap();
-        self.push_undo_snapshot(index);
-        let changed = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(index, |g| {
-                    runebender_core::glyph_ops::set_contour_start(g, contour, point)
-                })
-            })
-            .unwrap_or(false);
-        if !changed {
-            self.editor.undo.pop();
-        } else {
-            self.editor.selected = [(contour, 0)].into();
-        }
-    }
-
-    /// Tab / shift-Tab: step the point selection through the glyph's
-    /// points in contour order (web cycle_selected_point). Bound as an
-    /// action so gpui's default tab-stop traversal never runs.
-    fn command_cycle_point(&mut self, back: bool) -> bool {
-        let Mode::Editor(index) = self.mode else {
-            return false;
-        };
-        let ids: Vec<(usize, usize)> = self
-            .font()
-            .map(|f| {
-                f.glyphs[index]
-                    .points
-                    .iter()
-                    .map(|p| (p.contour, p.index))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if ids.is_empty() {
-            return false;
-        }
-        let positions: Vec<usize> = ids
-            .iter()
-            .enumerate()
-            .filter(|(_, id)| self.editor.selected.contains(id))
-            .map(|(i, _)| i)
-            .collect();
-        let target = if positions.is_empty() {
-            if back { ids.len() - 1 } else { 0 }
-        } else if back {
-            let first = positions[0];
-            if first == 0 { ids.len() - 1 } else { first - 1 }
-        } else {
-            (positions[positions.len() - 1] + 1) % ids.len()
-        };
-        self.editor.selected_component = None;
-        self.editor.selected = [ids[target]].into();
-        true
-    }
-
-    /// Reverse the selected contours (all when none selected), undo.
-    fn command_reverse(&mut self) {
-        let Mode::Editor(index) = self.mode else {
-            return;
-        };
-        self.push_undo_snapshot(index);
-        let selected = self.editor.selected.clone();
-        let changed = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(index, |g| {
-                    runebender_core::glyph_ops::reverse_contours(g, &selected)
-                })
-            })
-            .unwrap_or(false);
-        if !changed {
-            self.editor.undo.pop();
-        } else {
-            self.editor.selected.clear();
-        }
-    }
-
-    /// Step to the next/previous master (menu: View).
-    fn command_step_master(&mut self, delta: isize) {
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        let n = project.masters.len() as isize;
-        if n < 2 {
-            return;
-        }
-        let next = (project.active as isize + delta).rem_euclid(n) as usize;
-        self.switch_master(next);
-    }
-
-    /// Decompose the open glyph's components, with undo.
-    fn command_decompose(&mut self) {
-        let Mode::Editor(index) = self.mode else {
-            return;
-        };
-        self.push_undo_snapshot(index);
-        let changed = self.font_mut().is_some_and(|f| f.decompose(index));
-        if !changed {
-            self.editor.undo.pop();
-        }
     }
 
     fn undo(&mut self) {
@@ -20363,9 +8819,7 @@ impl Workspace {
                 .font_mut()
                 .and_then(|f| {
                     f.edit_glyph(index, |g| {
-                        runebender_core::glyph_ops::translate_component(
-                            g, ci, dx, dy,
-                        )
+                        runebender_core::glyph_ops::translate_component(g, ci, dx, dy)
                     })
                 })
                 .unwrap_or(false);
@@ -20382,8 +8836,7 @@ impl Workspace {
         let mut changed = false;
         if let Some(ai) = anchor
             && let Some(font) = self.font_mut()
-            && let Some((x, y)) =
-                font.glyphs[index].anchors.get(ai).map(|(_, x, y)| (*x, *y))
+            && let Some((x, y)) = font.glyphs[index].anchors.get(ai).map(|(_, x, y)| (*x, *y))
         {
             font.set_anchor(index, ai, x + dx, y + dy);
             changed = true;
@@ -20432,190 +8885,29 @@ impl Workspace {
         let _ = delta.0;
     }
 
-    /// The Glyphs-style tab strip under the header: a Font tab that
-    /// returns to the full glyph overview, plus one tab per edit
-    /// session, titled with the session's text.
-    fn tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        if self.project.is_none() {
-            return div().into_any_element();
-        }
-        let in_editor = matches!(self.mode, Mode::Editor(_));
-        let tab = |id: gpui::ElementId, label: SharedString, active: bool| {
-            div()
-                .id(id)
-                .h(px(TAB_H))
-                .px_2()
-                .flex()
-                .items_center()
-                .rounded(t::radius())
-                .text_sm()
-                .cursor_pointer()
-                .when(active, |el| {
-                    el.border(t::stroke())
-                        .border_color(t::accent())
-                        .text_color(t::accent())
-                })
-                .when(!active, |el| {
-                    el.border(t::stroke())
-                        .border_color(t::cell_border())
-                        .text_color(t::text_muted())
-                })
-                .child(label)
-        };
-        // Each session tab reads like Glyphs: the buffer's text, with
-        // /name for unencoded glyphs, trimmed to fit.
-        let session_label = |buffer: &runebender_core::text::TextBuffer,
-                             fallback: &str|
-         -> SharedString {
-            let mut label = String::new();
-            for i in 0..buffer.len() {
-                let Some(sort) = buffer.sort(i) else {
-                    continue;
-                };
-                if sort.is_absorbed() {
-                    continue;
-                }
-                match &sort.kind {
-                    runebender_core::text::TextSortKind::Glyph {
-                        codepoint,
-                        name,
-                        ..
-                    } => match codepoint {
-                        Some(c) => label.push(*c),
-                        None => {
-                            label.push('/');
-                            label.push_str(name);
-                        }
-                    },
-                    _ => label.push(' '),
-                }
-                if label.chars().count() > 24 {
-                    label.truncate(
-                        label
-                            .char_indices()
-                            .nth(24)
-                            .map(|(i, _)| i)
-                            .unwrap_or(label.len()),
-                    );
-                    label.push('…');
-                    break;
-                }
-            }
-            if label.is_empty() {
-                label = fallback.to_string();
-            }
-            label.into()
-        };
-        let labels: Vec<SharedString> = self
-            .sessions
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let fallback: String = if i == self.active_session {
-                    match self.mode {
-                        Mode::Editor(index) => self
-                            .font()
-                            .map(|f| f.glyphs[index].name.to_string())
-                            .unwrap_or_default(),
-                        Mode::Grid => s.glyph_name.clone(),
-                    }
-                } else {
-                    s.glyph_name.clone()
-                };
-                if i == self.active_session {
-                    session_label(&self.edit_buffer, &fallback)
-                } else {
-                    session_label(&s.buffer, &fallback)
-                }
-            })
-            .collect();
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(tab("tab-font".into(), "Font".into(), !in_editor).on_click(
-                cx.listener(|this, _, _, cx| {
-                    if let Mode::Editor(index) = this.mode {
-                        this.last_editor = Some(index);
-                        let name = this
-                            .font()
-                            .map(|f| f.glyphs[index].name.to_string());
-                        if let (Some(name), Some(project)) =
-                            (name, this.project.as_mut())
-                        {
-                            project.recheck_compat(&name);
-                        }
-                        this.mode = Mode::Grid;
-                        this.status_note = None;
-                        cx.notify();
-                    }
-                }),
-            ))
-            .children(labels.into_iter().enumerate().map(|(i, label)| {
-                let active = in_editor && i == self.active_session;
-                tab(("tab-session", i).into(), label, active)
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        // Return to the session as it was left: same
-                        // buffer, tool, undo stack.
-                        this.activate_session(i);
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .id(("tab-close", i))
-                            .px_0p5()
-                            .rounded(t::radius())
-                            .text_color(t::text_muted())
-                            .hover(|el| el.text_color(t::text()))
-                            .child("×")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.close_session(i);
-                                cx.notify();
-                            })),
-                    )
-            }))
-            .child(
-                tab("tab-new".into(), "+".into(), false)
-                    .w(px(TAB_H))
-                    .justify_center()
-                    .on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.command_new_session();
-                        cx.notify();
-                    },
-                )),
-            )
-            .into_any_element()
-    }
-
     fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let (title, status): (SharedString, SharedString) =
-            match (self.font(), &self.load_error) {
-                (Some(font), _) => (
-                    // Just the file name, like Glyphs' title. The glyph
-                    // count lives in the status bar; upm belongs to font
-                    // info, not the chrome.
-                    font.source_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| font.source_path.display().to_string())
-                        .into(),
-                    if font.dirty {
-                        "Not saved".into()
-                    } else {
-                        match &self.last_save_label {
-                            Some(at) => format!("Saved {at}").into(),
-                            None => "Saved".into(),
-                        }
-                    },
-                ),
-                (None, Some(err)) => ("Load failed".into(), err.clone()),
-                (None, None) => ("Runebender".into(), "No font loaded".into()),
-            };
+        let (title, status): (SharedString, SharedString) = match (self.font(), &self.load_error) {
+            (Some(font), _) => (
+                // Just the file name, like Glyphs' title. The glyph
+                // count lives in the status bar; upm belongs to font
+                // info, not the chrome.
+                font.source_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| font.source_path.display().to_string())
+                    .into(),
+                if font.dirty {
+                    "Not saved".into()
+                } else {
+                    match &self.last_save_label {
+                        Some(at) => format!("Saved {at}").into(),
+                        None => "Saved".into(),
+                    }
+                },
+            ),
+            (None, Some(err)) => ("Load failed".into(), err.clone()),
+            (None, None) => ("Runebender".into(), "No font loaded".into()),
+        };
         let in_editor = matches!(self.mode, Mode::Editor(_));
         div()
             .flex()
@@ -20635,11 +8927,14 @@ impl Workspace {
                     .h(px(TAB_H))
                     .rounded(t::radius_control())
                     .cursor_pointer()
-                    .child(icon_svg("glyph-grid", if self.left_collapsed {
-                        t::text_muted()
-                    } else {
-                        t::text()
-                    }))
+                    .child(icon_svg(
+                        "glyph-grid",
+                        if self.left_collapsed {
+                            t::text_muted()
+                        } else {
+                            t::text()
+                        },
+                    ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.left_collapsed = !this.left_collapsed;
                         cx.notify();
@@ -20658,12 +8953,7 @@ impl Workspace {
                     .gap_2()
                     .overflow_hidden()
                     .child(div().text_sm().text_color(t::text()).child(title))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(t::status_yellow())
-                            .child(status),
-                    ),
+                    .child(div().text_sm().text_color(t::status_yellow()).child(status)),
             )
             .when(
                 // Always up in the editor, the Glyphs bottom-corner
@@ -20698,7 +8988,10 @@ impl Workspace {
                 .and_then(|loc| loc.get(&axis.name).copied())
                 .map(|normalized| {
                     runebender_core::var_model::denormalize_value(
-                        normalized, axis.min, axis.default, axis.max,
+                        normalized,
+                        axis.min,
+                        axis.default,
+                        axis.max,
                     )
                 })
                 .unwrap_or(axis.default);
@@ -20711,11 +9004,7 @@ impl Workspace {
             });
             let axis_info = axis.clone();
             let sub = cx.subscribe_in(&slider, window, {
-                move |this: &mut Workspace,
-                      _,
-                      event: &widgets::slider::SliderEvent,
-                      _window,
-                      cx| {
+                move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
                     let widgets::slider::SliderEvent::Change(value) = event else {
                         return;
                     };
@@ -20748,188 +9037,6 @@ impl Workspace {
         }
     }
 
-    /// Axis slider row (designspaces only).
-    /// Axes section for a sidebar: one labeled slider per designspace
-    /// axis (the web/Glyphs place these in a pane, not a full-width
-    /// strip).
-    fn axes_section(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
-        let project = self.project.as_ref()?;
-        if self.axis_sliders.is_empty() {
-            return None;
-        }
-        let mut rows = div().flex().flex_col().gap_2();
-        for (axis_index, slider) in &self.axis_sliders {
-            let Some(axis) = project.axes.get(*axis_index) else {
-                continue;
-            };
-            rows = rows.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(t::text_muted())
-                            .child(axis.tag.clone()),
-                    )
-                    .child(
-                        div().flex_1().child(flat_slider(slider, cx)),
-                    ),
-            );
-        }
-        let mut body = div().flex().flex_col().gap_2().child(rows);
-        if project.ds_doc.is_some() {
-            // Named designspace instances: one row each; clicking
-            // parks the sliders and the preview on that instance,
-            // × drops it. The field below renames the instance at
-            // the current location on Enter, or adds one there.
-            let mut list = div().flex().flex_col();
-            let here = &project.location;
-            for (i, (name, location)) in project.instances.iter().enumerate() {
-                let at_instance = project.axes.iter().all(|a| {
-                    let want = location.get(&a.name).copied().unwrap_or(0.0);
-                    let got = here.get(&a.name).copied().unwrap_or(0.0);
-                    (want - got).abs() < 1e-6
-                });
-                let target = location.clone();
-                list = list.child(
-                    div()
-                        .id(("instance-row", i))
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_1()
-                        .py_0p5()
-                        .text_sm()
-                        .cursor_pointer()
-                        .text_color(if at_instance {
-                            t::accent()
-                        } else {
-                            t::text()
-                        })
-                        .hover(|el| el.bg(t::cell_selected_bg()))
-                        .child(div().flex_1().min_w(px(0.0)).truncate().child(name.clone()))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.go_to_location(&target, window, cx);
-                        }))
-                        .child(
-                            div()
-                                .id(("instance-del", i))
-                                .px_1()
-                                .text_color(t::text_muted())
-                                .hover(|el| el.text_color(t::text()))
-                                .child("×")
-                                .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
-                                    let _ = ev;
-                                    cx.stop_propagation();
-                                    this.command_instance_delete(i);
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            }
-            body = body.child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Instances"),
-            );
-            body = body.child(list);
-            body = body.child(widgets::input::Input::new(
-                &self.instance_name_input,
-            ));
-        }
-        // Axis mappings (avar): user → design pairs on the first
-        // axis, the Glyphs Axis Mappings story. "400,430" adds or
-        // replaces the pair at that input; × removes.
-        if let Some(doc) = project.ds_doc.as_ref() {
-            if let Some(axis) = doc.axes.first() {
-                body = body.child(
-                    div()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child(format!("Mappings ({} user → design)", axis.tag)),
-                );
-                if let Some(map) = axis.map.as_ref() {
-                    let mut rows = div().flex().flex_wrap().gap_1();
-                    for (i, m) in map.iter().enumerate() {
-                        rows = rows.child(
-                            div()
-                                .id(("axis-map", i))
-                                .px_1()
-                                .rounded(t::radius())
-                                .border(t::stroke())
-                                .border_color(t::cell_border())
-                                .text_xs()
-                                .text_color(t::text())
-                                .cursor_pointer()
-                                .child(format!(
-                                    "{:.0}→{:.0} ×",
-                                    m.input, m.output
-                                ))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.command_remove_axis_mapping(i);
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                    body = body.child(rows);
-                }
-                body = body.child(div().w(px(110.0)).child(
-                    widgets::input::Input::new(&self.axis_map_input),
-                ));
-            }
-        }
-        // HOI: the trajectory view and the timing ease, the
-        // higher-order interpolation corner of the panel.
-        body = body.child(
-            div()
-                .text_xs()
-                .text_color(t::text_muted())
-                .child("Interpolation"),
-        );
-        let on = self.show_trajectories;
-        body = body.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .id("hoi-trajectories")
-                        .px_2()
-                        .py_0p5()
-                        .rounded(t::radius())
-                        .text_sm()
-                        .cursor_pointer()
-                        .border(t::stroke())
-                        .when(on, |el| {
-                            el.border_color(t::accent()).text_color(t::accent())
-                        })
-                        .when(!on, |el| {
-                            el.border_color(t::cell_border())
-                                .text_color(t::text())
-                        })
-                        .child("Trajectories")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_trajectories = !this.show_trajectories;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child("Ease"),
-                )
-                .child(div().w(px(64.0)).child(
-                    widgets::input::Input::new(&self.ease_input),
-                )),
-        );
-        Some(self.section(cx, "Axes", body))
-    }
-
     /// Google Fonts style linking for an instance name: RIBBI styles
     /// link inside the family; anything else becomes its own
     /// stylemap family with regular/italic, the shape gftools
@@ -20940,10 +9047,7 @@ impl Workspace {
                 (family.to_string(), style.to_lowercase())
             }
             lower => {
-                if let Some(base) = lower
-                    .strip_suffix(" italic")
-                    .map(|b| b.len())
-                {
+                if let Some(base) = lower.strip_suffix(" italic").map(|b| b.len()) {
                     (
                         format!("{family} {}", style[..base].trim()),
                         "italic".to_string(),
@@ -20952,146 +9056,6 @@ impl Workspace {
                     (format!("{family} {style}"), "regular".to_string())
                 }
             }
-        }
-    }
-
-    /// Add (or replace) one avar mapping pair on the first axis:
-    /// user-space input → design-space output, written into the
-    /// designspace and saved with it.
-    fn command_add_axis_mapping(&mut self, input: f32, output: f32) {
-        let Some(project) = self.project.as_mut() else { return };
-        let Some(doc) = project.ds_doc.as_mut() else {
-            self.status_note =
-                Some("Axis mappings need a designspace project".into());
-            return;
-        };
-        let Some(axis) = doc.axes.first_mut() else { return };
-        let map = axis.map.get_or_insert_with(Vec::new);
-        map.retain(|m| (m.input - input).abs() > 0.01);
-        map.push(norad::designspace::AxisMapping { input, output });
-        map.sort_by(|a, b| a.input.total_cmp(&b.input));
-        project.ds_dirty = true;
-        self.status_note = Some(
-            format!("Axis map: {input:.0} → {output:.0}").into(),
-        );
-    }
-
-    fn command_remove_axis_mapping(&mut self, index: usize) {
-        let Some(project) = self.project.as_mut() else { return };
-        let Some(doc) = project.ds_doc.as_mut() else { return };
-        let Some(axis) = doc.axes.first_mut() else { return };
-        if let Some(map) = axis.map.as_mut() {
-            if index < map.len() {
-                map.remove(index);
-                if map.is_empty() {
-                    axis.map = None;
-                }
-                project.ds_dirty = true;
-            }
-        }
-    }
-
-    /// Enter in the Instances field: rename the instance sitting at
-    /// the preview location, or add a new one there. The name is the
-    /// style name; the full name follows the family.
-    fn command_instance_upsert(&mut self, name: &str) {
-        let name = name.trim();
-        if name.is_empty() {
-            return;
-        }
-        let Some(project) = self.project.as_mut() else { return };
-        if project.ds_doc.is_none() {
-            self.status_note =
-                Some("Instances need a designspace project".into());
-            return;
-        }
-        // The preview location in design coordinates, one value per
-        // axis, computed before the document is borrowed.
-        let wants: Vec<(String, f64)> = project
-            .axes
-            .iter()
-            .map(|axis| {
-                let normalized =
-                    project.location.get(&axis.name).copied().unwrap_or(0.0);
-                let raw = runebender_core::var_model::denormalize_value(
-                    normalized, axis.min, axis.default, axis.max,
-                );
-                (axis.name.clone(), raw)
-            })
-            .collect();
-        let defaults: std::collections::HashMap<String, f64> = project
-            .axes
-            .iter()
-            .map(|a| (a.name.clone(), a.default))
-            .collect();
-        let family = project
-            .masters
-            .first()
-            .and_then(|m| m.font.font_info.family_name.clone());
-        let doc = project.ds_doc.as_mut().expect("checked above");
-        let at_location = |inst: &norad::designspace::Instance| {
-            wants.iter().all(|(axis, want)| {
-                let got = inst
-                    .location
-                    .iter()
-                    .find(|d| d.name == *axis)
-                    .and_then(|d| d.xvalue.or(d.uservalue))
-                    .map(|v| v as f64)
-                    .or_else(|| defaults.get(axis).copied())
-                    .unwrap_or(0.0);
-                (got - want).abs() < 0.5
-            })
-        };
-        let note = match doc.instances.iter().position(at_location) {
-            Some(i) => {
-                let inst = &mut doc.instances[i];
-                inst.stylename = Some(name.to_string());
-                if let Some(fam) = &family {
-                    inst.name = Some(format!("{fam} {name}"));
-                    let (map_family, map_style) = Self::style_linking(fam, name);
-                    inst.stylemapfamilyname = Some(map_family);
-                    inst.stylemapstylename = Some(map_style);
-                }
-                format!("Renamed instance to {name}")
-            }
-            None => {
-                let stylemap = family
-                    .as_ref()
-                    .map(|fam| Self::style_linking(fam, name));
-                doc.instances.push(norad::designspace::Instance {
-                    familyname: family.clone(),
-                    stylename: Some(name.to_string()),
-                    name: family.as_ref().map(|f| format!("{f} {name}")),
-                    stylemapfamilyname:
-                        stylemap.as_ref().map(|(f, _)| f.clone()),
-                    stylemapstylename:
-                        stylemap.as_ref().map(|(_, st)| st.clone()),
-                    location: wants
-                        .iter()
-                        .map(|(axis, value)| norad::designspace::Dimension {
-                            name: axis.clone(),
-                            xvalue: Some(*value as f32),
-                            ..Default::default()
-                        })
-                        .collect(),
-                    ..Default::default()
-                });
-                format!("Added instance {name}")
-            }
-        };
-        project.ds_dirty = true;
-        project.refresh_instances_from_doc();
-        self.status_note = Some(note.into());
-    }
-
-    /// Drop one instance (the × on its row). Saved with the font.
-    fn command_instance_delete(&mut self, index: usize) {
-        let Some(project) = self.project.as_mut() else { return };
-        let Some(doc) = project.ds_doc.as_mut() else { return };
-        if index < doc.instances.len() {
-            doc.instances.remove(index);
-            project.ds_dirty = true;
-            project.refresh_instances_from_doc();
         }
     }
 
@@ -21105,27 +9069,32 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let landed = {
-            let Some(project) = self.project.as_mut() else { return };
+            let Some(project) = self.project.as_mut() else {
+                return;
+            };
             project.location = target.clone();
             project.master_at_location()
         };
         // Sliders show design coordinates; the location is normalized.
-        let slider_values: Vec<(gpui::Entity<widgets::slider::SliderState>, f32)> =
-            {
-                let Some(project) = self.project.as_ref() else { return };
-                self.axis_sliders
-                    .iter()
-                    .filter_map(|(axis_index, slider)| {
-                        let axis = project.axes.get(*axis_index)?;
-                        let normalized =
-                            target.get(&axis.name).copied().unwrap_or(0.0);
-                        let raw = runebender_core::var_model::denormalize_value(
-                            normalized, axis.min, axis.default, axis.max,
-                        );
-                        Some((slider.clone(), raw as f32))
-                    })
-                    .collect()
+        let slider_values: Vec<(gpui::Entity<widgets::slider::SliderState>, f32)> = {
+            let Some(project) = self.project.as_ref() else {
+                return;
             };
+            self.axis_sliders
+                .iter()
+                .filter_map(|(axis_index, slider)| {
+                    let axis = project.axes.get(*axis_index)?;
+                    let normalized = target.get(&axis.name).copied().unwrap_or(0.0);
+                    let raw = runebender_core::var_model::denormalize_value(
+                        normalized,
+                        axis.min,
+                        axis.default,
+                        axis.max,
+                    );
+                    Some((slider.clone(), raw as f32))
+                })
+                .collect()
+        };
         for (slider, value) in slider_values {
             slider.update(cx, |st, cx| {
                 st.set_value(value, window, cx);
@@ -21164,12 +9133,9 @@ impl Workspace {
         let Some(font) = self.project.as_ref().map(|p| p.active_font()) else {
             return;
         };
-        let inventory =
-            runebender_core::text::TextGlyphInventory::from_font(&font.font);
+        let inventory = runebender_core::text::TextGlyphInventory::from_font(&font.font);
         let kerning = runebender_core::text::TextKerningModel::from_font(&font.font);
-        let edit_widths: Vec<(usize, String, Option<char>, f64)> = (0..self
-            .edit_buffer
-            .len())
+        let edit_widths: Vec<(usize, String, Option<char>, f64)> = (0..self.edit_buffer.len())
             .filter_map(|i| {
                 let sort = self.edit_buffer.sort(i)?;
                 let name = sort.glyph_name()?.to_string();
@@ -21301,12 +9267,8 @@ impl Workspace {
             .font
             .get_glyph(font.glyphs[index].name.as_ref())
             .and_then(|g| {
-                runebender_core::glyph_ops::component_at(
-                    &font.font,
-                    g,
-                    kurbo::Point::new(dx, dy),
-                )
-                .map(|ci| g.components[ci].base.to_string())
+                runebender_core::glyph_ops::component_at(&font.font, g, kurbo::Point::new(dx, dy))
+                    .map(|ci| g.components[ci].base.to_string())
             });
         if let Some(base_name) = base
             && let Some(&target) = font.name_map.get(&base_name)
@@ -21341,9 +9303,9 @@ impl Workspace {
         let (dx, dy) = self.editor.window_to_design(pos);
         let bx = dx + self.editor.sort_offset.0;
         let by = dy + self.editor.sort_offset.1;
-        let Some(activation) =
-            self.edit_buffer
-                .activate_sort_at(bx, by, line_height, top, bottom)
+        let Some(activation) = self
+            .edit_buffer
+            .activate_sort_at(bx, by, line_height, top, bottom)
         else {
             return false;
         };
@@ -21352,9 +9314,7 @@ impl Workspace {
             .sort(activation.index)
             .and_then(|s| s.glyph_name())
             .map(str::to_string);
-        let target = name.and_then(|n| {
-            self.font().and_then(|f| f.name_map.get(&n).copied())
-        });
+        let target = name.and_then(|n| self.font().and_then(|f| f.name_map.get(&n).copied()));
         if let Some(glyph) = target {
             if !matches!(self.mode, Mode::Editor(i) if i == glyph) {
                 self.mode = Mode::Editor(glyph);
@@ -21388,105 +9348,17 @@ impl Workspace {
                             .collect(),
                     )
                 })
-                .filter_map(|(first, seconds): (norad::Name, std::collections::BTreeMap<norad::Name, f64>)| {
-                    Some((first, seconds))
-                })
+                .filter_map(
+                    |(first, seconds): (
+                        norad::Name,
+                        std::collections::BTreeMap<norad::Name, f64>,
+                    )| { Some((first, seconds)) },
+                )
                 .collect();
             font.kerning_dirty = true;
             font.dirty = true;
         }
         self.rebuild_text_models();
-    }
-
-    /// A key while the editor's text tool is active. Typing composes
-    /// text around the open glyph; the open glyph follows the active
-    /// sort.
-    fn handle_edit_text_key(&mut self, event: &gpui::KeyDownEvent) -> bool {
-        let key = event.keystroke.key.as_str();
-        if self.font().is_none() {
-            return false;
-        }
-        let line_height = self.text_line_height();
-        let handled = match key {
-            "backspace" => {
-                self.edit_buffer.delete_before_cursor();
-                let cursor = self.edit_buffer.cursor();
-                self.edit_buffer.shape_arabic_around_if_rtl(cursor);
-                true
-            }
-            "delete" => {
-                self.edit_buffer.delete_after_cursor();
-                let cursor = self.edit_buffer.cursor();
-                self.edit_buffer.shape_arabic_around_if_rtl(cursor);
-                true
-            }
-            "left" => {
-                self.edit_buffer.move_cursor_visual_left();
-                true
-            }
-            "right" => {
-                self.edit_buffer.move_cursor_visual_right();
-                true
-            }
-            "up" => self.edit_buffer.move_cursor_vertically(-1, line_height),
-            "down" => self.edit_buffer.move_cursor_vertically(1, line_height),
-            "home" => {
-                self.edit_buffer.move_cursor_to_line_edge(false);
-                true
-            }
-            "end" => {
-                self.edit_buffer.move_cursor_to_line_edge(true);
-                true
-            }
-            "enter" => {
-                self.edit_buffer.insert_line_break();
-                true
-            }
-            "escape" => {
-                // The web editor keeps text mode alive on Escape.
-                true
-            }
-            _ => {
-                let Some(text) = event.keystroke.key_char.as_deref() else {
-                    return true;
-                };
-                let mut inserted = false;
-                for c in text.chars() {
-                    if c.is_control() {
-                        continue;
-                    }
-                    // Typing the active sort's own character reuses its
-                    // live (possibly just edited) advance width, like
-                    // the web editor.
-                    let active_advance = self
-                        .edit_buffer
-                        .active_sort()
-                        .and_then(|i| self.edit_buffer.sort(i))
-                        .and_then(|sort| match &sort.kind {
-                            runebender_core::text::TextSortKind::Glyph {
-                                codepoint,
-                                ..
-                            } => *codepoint,
-                            _ => None,
-                        })
-                        .filter(|active_char| *active_char == c)
-                        .and_then(|_| {
-                            let Mode::Editor(index) = self.mode else {
-                                return None;
-                            };
-                            self.font().map(|f| f.glyphs[index].advance)
-                        });
-                    inserted |= self
-                        .edit_buffer
-                        .insert_character_with_active_advance(c, active_advance);
-                }
-                inserted
-            }
-        };
-        if handled {
-            self.sync_sort_offset();
-        }
-        true
     }
 
     /// Seed the editor's text buffer for an opened glyph    /// Seed the editor's text buffer for an opened glyph: keep the
@@ -21517,196 +9389,6 @@ impl Workspace {
             }
         }
         self.sync_sort_offset();
-    }
-
-    fn preview_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let Some(font) = self.font() else {
-            return div().into_any_element();
-        };
-        let ascender = font.ascender;
-        let descender = font.descender;
-        let upm = font.units_per_em;
-        let line_height = self.text_line_height();
-        let layout = self.edit_buffer.layout(line_height);
-        // Each sort's outline, its pen position, and its advance, so
-        // the line can be measured and centered.
-        let items: Vec<(Arc<BezPath>, f64, f64, f64)> = layout
-            .items
-            .iter()
-            .filter_map(|item| {
-                let sort = self.edit_buffer.sort(item.index)?;
-                if sort.is_absorbed() {
-                    return None;
-                }
-                let name = sort.glyph_name()?;
-                // Bracket rules preview: past a shape switch the strip
-                // shows the substitute, like an exported instance.
-                let subbed = self
-                    .project
-                    .as_ref()
-                    .and_then(|p| p.rule_substitute(name));
-                let name: &str = subbed.as_deref().unwrap_or(name);
-                let glyph = *font.name_map.get(name)?;
-                // Off the masters the strip shows the interpolation,
-                // like the canvas ghost (and the Instances rows park
-                // the location, so clicking Medium previews Medium).
-                // Pen positions stay the buffer's: master metrics.
-                let path = self
-                    .project
-                    .as_ref()
-                    .and_then(|p| p.interpolated_glyph(name))
-                    .map(|(path, _)| Arc::new(path))
-                    .unwrap_or_else(|| font.glyphs[glyph].path.clone());
-                Some((
-                    path,
-                    item.x,
-                    item.y,
-                    font.glyphs[glyph].advance,
-                ))
-            })
-            .collect();
-        let line_width = items
-            .iter()
-            .map(|(_, x, _, adv)| x + adv)
-            .fold(0.0_f64, f64::max);
-        // The line's ink, in design units relative to the first
-        // baseline: what the preview centres on.
-        let ink_extent: Option<(f64, f64)> = {
-            use kurbo::Shape as _;
-            let mut extent: Option<(f64, f64)> = None;
-            for (path, _, y, _) in items.iter() {
-                if path.elements().is_empty() {
-                    continue;
-                }
-                let b = path.bounding_box();
-                let (top, bottom) = (b.y1 + y, b.y0 + y);
-                extent = Some(match extent {
-                    Some((t, bo)) => (t.max(top), bo.min(bottom)),
-                    None => (top, bottom),
-                });
-            }
-            extent
-        };
-
-        let blur = self.preview_blur;
-        let blur_cache = self.preview_blur_cache.clone();
-        let invert = self.preview_invert;
-
-        let body = div().size_full().min_h(px(0.0)).child(
-            canvas(
-                move |bounds, _, _| bounds,
-                move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                    let w: f64 = f32::from(bounds.size.width) as f64;
-                    let h: f64 = f32::from(bounds.size.height) as f64;
-                    let (ink, ground) = if invert {
-                        (t::window_bg(), t::preview_glyph())
-                    } else {
-                        (t::preview_glyph(), t::panel_bg())
-                    };
-                    window.paint_quad(gpui::fill(bounds, ground));
-                    // The type fits the pane, the way Glyphs and the
-                    // web preview do it: one scale that fits vertically
-                    // and the whole line horizontally, whichever is
-                    // tighter. Drag the pane taller and the text grows
-                    // with it.
-                    //
-                    // The em box is the wrong thing to centre on: for
-                    // "8" the descender depth is empty, so centring the
-                    // box leaves the ink riding high. Centre the ink
-                    // the line actually has instead, which also keeps a
-                    // deep Arabic descender in the middle of the pane
-                    // rather than hanging off the bottom. The em box is
-                    // the fallback when there is no ink at all.
-                    let pad = 16.0;
-                    let (ink_top, ink_bottom) = ink_extent
-                        .unwrap_or((ascender, descender));
-                    let ink_h = (ink_top - ink_bottom).max(1.0);
-                    let by_height = (h - pad * 2.0).max(1.0) / ink_h;
-                    let by_width = if line_width > 0.0 {
-                        (w - pad * 2.0).max(1.0) / line_width
-                    } else {
-                        by_height
-                    };
-                    let scale = by_height.min(by_width);
-                    // Baseline placed so the ink's own middle lands on
-                    // the pane's middle.
-                    let baseline = h / 2.0 + (ink_top + ink_bottom) / 2.0 * scale;
-                    let text_w = line_width * scale;
-                    let origin_x = (w - text_w) / 2.0;
-                    let _ = (upm, ascender, descender);
-                    // gpui paints paths, not filters, so a blur is a
-                    // stack of offset passes: one ring plus the middle,
-                    // each at a fraction of the ink's alpha.
-                    // One path for the whole line, in the pane's own
-                    // pixel space.
-                    let mut line = BezPath::new();
-                    for (path, x, y, _) in items.iter() {
-                        let transform = Affine::translate((
-                            origin_x + x * scale,
-                            baseline - y * scale,
-                        )) * Affine::scale_non_uniform(scale, -scale);
-                        line.extend(
-                            (transform * path.as_ref().clone()).into_iter(),
-                        );
-                    }
-                    if blur > 0.05 {
-                        // Rasterized and blurred for real: gpui has no
-                        // blur for paths, and stacking offset copies
-                        // reads as ghosting rather than defocus.
-                        let key = blur_key(&line, w, h, blur, ink, ground);
-                        let cached = {
-                            let slot = blur_cache.lock().unwrap();
-                            slot.as_ref()
-                                .filter(|(k, _)| *k == key)
-                                .map(|(_, image)| image.clone())
-                        };
-                        let image = cached.or_else(|| {
-                            let image = blur::blurred_line(
-                                &line,
-                                w as f32,
-                                h as f32,
-                                window.scale_factor(),
-                                ink,
-                                ground,
-                                blur,
-                            )?;
-                            *blur_cache.lock().unwrap() =
-                                Some((key, image.clone()));
-                            Some(image)
-                        });
-                        if let Some(image) = image {
-                            let _ = window.paint_image(
-                                bounds,
-                                bounds,
-                                gpui::Corners::default(),
-                                image,
-                                0,
-                                false,
-                            );
-                            return;
-                        }
-                    }
-                    if let Some(p) =
-                        build_fill_path(&line, Affine::IDENTITY, bounds.origin)
-                    {
-                        window.paint_path(p, ink);
-                    }
-                },
-            )
-            .size_full(),
-        );
-
-        let _ = cx;
-        div()
-            .size_full()
-            .min_h(px(0.0))
-            .flex()
-            .flex_col()
-            .bg(t::panel_bg())
-            .border_t_1()
-            .border_color(t::cell_border())
-            .child(body)
-            .into_any_element()
     }
 
     /// The preview's on/off switch, in the bottom bar's left corner
@@ -21770,57 +9452,6 @@ impl Workspace {
             }))
     }
 
-    /// Add an empty glyph to every master (bottom bar +), like
-    /// Glyphs' new-glyph command, and select it.
-    fn command_add_glyph(&mut self) {
-        let Some(project) = self.project.as_mut() else {
-            return;
-        };
-        // First free name: glyph, glyph.001, glyph.002, ...
-        let taken: std::collections::HashSet<String> = project
-            .masters
-            .iter()
-            .flat_map(|m| m.name_map.keys().cloned())
-            .collect();
-        let mut name = "glyph".to_string();
-        let mut counter = 0;
-        while taken.contains(&name) {
-            counter += 1;
-            name = format!("glyph.{counter:03}");
-        }
-        let upm = project.active_font().units_per_em;
-        for master in project.masters.iter_mut() {
-            master.add_glyph(&name, (upm * 0.5).round());
-        }
-        let name_owned = name.clone();
-        project.recheck_compat(&name_owned);
-        self.selected = self
-            .font()
-            .and_then(|f| f.name_map.get(&name).copied());
-        self.sidebar_counts = None;
-        self.status_note = Some(format!("Added {name}").into());
-    }
-
-    /// Remove the selected glyph from every master (bottom bar −).
-    fn command_remove_glyph(&mut self) {
-        let Some(index) = self.selected else {
-            self.status_note = Some("Select a glyph to remove".into());
-            return;
-        };
-        let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string())
-        else {
-            return;
-        };
-        if let Some(project) = self.project.as_mut() {
-            for master in project.masters.iter_mut() {
-                master.remove_glyph(&name);
-            }
-        }
-        self.selected = None;
-        self.sidebar_counts = None;
-        self.status_note = Some(format!("Removed {name}").into());
-    }
-
     /// Create the bottom bar's cell-size slider once a window exists.
     fn ensure_preview_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.preview_blur_slider.is_some() {
@@ -21834,13 +9465,8 @@ impl Workspace {
                 .default_value(0.0)
         });
         let sub = cx.subscribe_in(&slider, window, {
-            move |this: &mut Workspace,
-                  _,
-                  event: &widgets::slider::SliderEvent,
-                  _window,
-                  cx| {
-                let widgets::slider::SliderEvent::Change(value) = event
-                else {
+            move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
+                let widgets::slider::SliderEvent::Change(value) = event else {
                     return;
                 };
                 this.preview_blur = *value;
@@ -21852,11 +9478,7 @@ impl Workspace {
     }
 
     /// The strength control for model predictions.
-    fn ensure_model_strength_slider(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn ensure_model_strength_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.model_strength_slider.is_some() {
             return;
         }
@@ -21868,13 +9490,8 @@ impl Workspace {
                 .default_value(1.0)
         });
         let sub = cx.subscribe_in(&slider, window, {
-            move |this: &mut Workspace,
-                  _,
-                  event: &widgets::slider::SliderEvent,
-                  _window,
-                  cx| {
-                let widgets::slider::SliderEvent::Change(value) = event
-                else {
+            move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
+                let widgets::slider::SliderEvent::Change(value) = event else {
                     return;
                 };
                 this.model_strength = *value as f64;
@@ -21899,13 +9516,8 @@ impl Workspace {
                 .default_value(MINI_CELL)
         });
         let sub = cx.subscribe_in(&slider, window, {
-            move |this: &mut Workspace,
-                  _,
-                  event: &widgets::slider::SliderEvent,
-                  _window,
-                  cx| {
-                let widgets::slider::SliderEvent::Change(value) = event
-                else {
+            move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
+                let widgets::slider::SliderEvent::Change(value) = event else {
                     return;
                 };
                 this.sidebar_cell_size = *value;
@@ -21929,13 +9541,8 @@ impl Workspace {
                 .default_value(CELL)
         });
         let sub = cx.subscribe_in(&slider, window, {
-            move |this: &mut Workspace,
-                  _,
-                  event: &widgets::slider::SliderEvent,
-                  _window,
-                  cx| {
-                let widgets::slider::SliderEvent::Change(value) = event
-                else {
+            move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
+                let widgets::slider::SliderEvent::Change(value) = event else {
                     return;
                 };
                 this.grid_cell_size = *value;
@@ -21986,18 +9593,22 @@ impl Workspace {
                 .bg(t::panel_bg())
                 .border_t_1()
                 .border_color(t::cell_border())
-                .child(bar_button("add-glyph", IconMark::Plus).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.command_add_glyph();
-                        cx.notify();
-                    },
-                )))
-                .child(bar_button("remove-glyph", IconMark::Minus).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.command_remove_glyph();
-                        cx.notify();
-                    },
-                )))
+                .child(
+                    bar_button("add-glyph", IconMark::Plus).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.command_add_glyph();
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(
+                    bar_button("remove-glyph", IconMark::Minus).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.command_remove_glyph();
+                            cx.notify();
+                        },
+                    )),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -22009,28 +9620,29 @@ impl Workspace {
                 .child({
                     // Grid · Detail · List, the Glyphs 4 view modes,
                     // beside the cell zoom.
-                    let mode_button = |id: &'static str,
-                                       label: &'static str,
-                                       mode: FontViewMode,
-                                       current: FontViewMode,
-                                       cx: &mut Context<Self>| {
-                        div()
-                            .id(id)
-                            .px_1p5()
-                            .rounded(t::radius())
-                            .text_xs()
-                            .cursor_pointer()
-                            .text_color(if mode == current {
-                                t::accent()
-                            } else {
-                                t::text_muted()
-                            })
-                            .child(label)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.font_view_mode = mode;
-                                cx.notify();
-                            }))
-                    };
+                    let mode_button =
+                        |id: &'static str,
+                         label: &'static str,
+                         mode: FontViewMode,
+                         current: FontViewMode,
+                         cx: &mut Context<Self>| {
+                            div()
+                                .id(id)
+                                .px_1p5()
+                                .rounded(t::radius())
+                                .text_xs()
+                                .cursor_pointer()
+                                .text_color(if mode == current {
+                                    t::accent()
+                                } else {
+                                    t::text_muted()
+                                })
+                                .child(label)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.font_view_mode = mode;
+                                    cx.notify();
+                                }))
+                        };
                     let current = self.font_view_mode;
                     div()
                         .flex()
@@ -22038,7 +9650,11 @@ impl Workspace {
                         .gap_0p5()
                         .mr_2()
                         .child(mode_button(
-                            "view-grid", "Grid", FontViewMode::Grid, current, cx,
+                            "view-grid",
+                            "Grid",
+                            FontViewMode::Grid,
+                            current,
+                            cx,
                         ))
                         .child(mode_button(
                             "view-detail",
@@ -22048,7 +9664,11 @@ impl Workspace {
                             cx,
                         ))
                         .child(mode_button(
-                            "view-list", "List", FontViewMode::List, current, cx,
+                            "view-list",
+                            "List",
+                            FontViewMode::List,
+                            current,
+                            cx,
                         ))
                         .child(mode_button(
                             "view-matrix",
@@ -22058,9 +9678,11 @@ impl Workspace {
                             cx,
                         ))
                 })
-                .children(self.cell_slider.as_ref().map(|slider| {
-                    div().w(px(140.0)).child(flat_slider(slider, cx))
-                }));
+                .children(
+                    self.cell_slider
+                        .as_ref()
+                        .map(|slider| div().w(px(140.0)).child(flat_slider(slider, cx))),
+                );
         }
         let text: SharedString = if let Some(note) = &self.status_note {
             note.clone()
@@ -22095,9 +9717,7 @@ impl Workspace {
                             format!("{} · U+{:04X} · advance {}", g.name, c as u32, g.advance)
                                 .into()
                         }
-                        None => {
-                            format!("{} · unencoded · advance {}", g.name, g.advance).into()
-                        }
+                        None => format!("{} · unencoded · advance {}", g.name, g.advance).into(),
                     }
                 }
                 _ => "Click a glyph; double-click to edit · Cmd+O opens a font".into(),
@@ -22112,10 +9732,7 @@ impl Workspace {
             .bg(t::panel_bg())
             .border_t_1()
             .border_color(t::cell_border())
-            .children(
-                matches!(self.mode, Mode::Editor(_))
-                    .then(|| self.preview_toggle(cx)),
-            )
+            .children(matches!(self.mode, Mode::Editor(_)).then(|| self.preview_toggle(cx)))
             .child(
                 div()
                     .flex_1()
@@ -22124,10 +9741,7 @@ impl Workspace {
                     .text_color(t::text_muted())
                     .child(text),
             )
-            .children(
-                matches!(self.mode, Mode::Editor(_))
-                    .then(|| self.preview_controls(cx)),
-            )
+            .children(matches!(self.mode, Mode::Editor(_)).then(|| self.preview_controls(cx)))
     }
 
     /// Watch every master's UFO directory; external changes reload
@@ -22148,16 +9762,15 @@ impl Workspace {
             return;
         };
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<()>();
-        let mut watcher = match notify::recommended_watcher(
-            move |res: Result<notify::Event, notify::Error>| {
+        let mut watcher =
+            match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
                 if res.is_ok() {
                     let _ = tx.unbounded_send(());
                 }
-            },
-        ) {
-            Ok(w) => w,
-            Err(_) => return,
-        };
+            }) {
+                Ok(w) => w,
+                Err(_) => return,
+            };
         for master in &project.masters {
             let _ = notify::Watcher::watch(
                 &mut watcher,
@@ -22175,9 +9788,7 @@ impl Workspace {
                     .timer(std::time::Duration::from_millis(500))
                     .await;
                 while rx.try_recv().is_ok() {}
-                if last_save.lock().unwrap().elapsed()
-                    < std::time::Duration::from_secs(2)
-                {
+                if last_save.lock().unwrap().elapsed() < std::time::Duration::from_secs(2) {
                     continue;
                 }
                 if this
@@ -22265,8 +9876,9 @@ impl Workspace {
                             etags: fetched.etags,
                             ufo_prefixes,
                         });
-                        workspace.status_note =
-                            Some(format!("Connected · {n} masters · Cmd+S saves to the server").into());
+                        workspace.status_note = Some(
+                            format!("Connected · {n} masters · Cmd+S saves to the server").into(),
+                        );
                     }
                     Err(e) => {
                         workspace.load_error = Some(format!("{e}").into());
@@ -22285,8 +9897,7 @@ impl Workspace {
     #[cfg(target_family = "wasm")]
     fn save_to_web_host(&mut self, cx: &mut Context<Self>) {
         let Some(host) = self.web_host.as_ref() else {
-            self.status_note =
-                Some("No server connected: open with ?server=http://…".into());
+            self.status_note = Some("No server connected: open with ?server=http://…".into());
             return;
         };
         let Some(project) = self.project.as_ref() else {
@@ -22347,8 +9958,13 @@ impl Workspace {
             let mut new_etags: Vec<(String, String)> = Vec::new();
             let mut failure: Option<String> = None;
             for file in &to_save {
-                match web_host::put_file(&client, &base, file, etags.get(&file.path).map(|s| s.as_str()))
-                    .await
+                match web_host::put_file(
+                    &client,
+                    &base,
+                    file,
+                    etags.get(&file.path).map(|s| s.as_str()),
+                )
+                .await
                 {
                     Ok(etag) => new_etags.push((file.path.clone(), etag)),
                     Err(e) => {
@@ -22418,7 +10034,7 @@ impl Workspace {
                         workspace.status_note = None;
                         workspace.search_query.clear();
                         workspace.rebuild_text_models();
-                    workspace.start_watching(cx);
+                        workspace.start_watching(cx);
                     }
                     Err(e) => workspace.load_error = Some(e.into()),
                 }
@@ -22427,257 +10043,6 @@ impl Workspace {
             .ok();
         })
         .detach();
-    }
-
-    fn handle_key(
-        &mut self,
-        event: &gpui::KeyDownEvent,
-        window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> bool {
-        // Typing belongs to whichever field has the keyboard.
-        if widgets::input::any_field_focused(window, _cx) {
-            return false;
-        }
-        let key = event.keystroke.key.as_str();
-        let cmd = event.keystroke.modifiers.platform;
-        let shift = event.keystroke.modifiers.shift;
-        let in_editor = matches!(self.mode, Mode::Editor(_));
-        let ctrl = event.keystroke.modifiers.control;
-        let alt = event.keystroke.modifiers.alt;
-        // Web nudge steps: 2 design units, 8 with shift, 32 with ctrl
-        // (grid-sized moves).
-        let step = if ctrl {
-            32.0
-        } else if shift {
-            8.0
-        } else {
-            2.0
-        };
-        match (key, cmd) {
-            ("escape", _) if in_editor => {
-                if self.context_menu.is_some() {
-                    self.context_menu = None;
-                } else if self.editor.pen.is_some() || self.editor.hyper_contour.is_some() {
-                    self.pen_finish();
-                } else {
-                    let Mode::Editor(index) = self.mode else {
-                        return false;
-                    };
-                    let name = self
-                        .font()
-                        .map(|f| f.glyphs[index].name.to_string());
-                    if let (Some(name), Some(project)) = (name, self.project.as_mut()) {
-                        project.recheck_compat(&name);
-                    }
-                    if let Mode::Editor(index) = self.mode {
-                        self.last_editor = Some(index);
-                    }
-                    self.mode = Mode::Grid;
-                    self.status_note = None;
-                }
-                true
-            }
-            ("enter", _)
-                if in_editor
-                    && (self.editor.pen.is_some()
-                        || self.editor.hyper_contour.is_some()) =>
-            {
-                self.pen_finish();
-                true
-            }
-            ("enter", false) if !in_editor => {
-                if let Some(index) = self.selected {
-                    self.open_editor(index);
-                    true
-                } else {
-                    false
-                }
-            }
-            (_, false) if in_editor && self.editor.tool == Tool::Text => {
-                self.handle_edit_text_key(event)
-            }
-            ("v", false) if in_editor => {
-                self.pen_finish();
-                self.editor.tool = Tool::Select;
-                true
-            }
-            ("p", false) if in_editor => {
-                self.editor.tool = Tool::Pen;
-                true
-            }
-            ("r", false) if in_editor => {
-                if self.editor.tool == Tool::Shapes {
-                    self.editor.shape_ellipse = !self.editor.shape_ellipse;
-                }
-                self.pen_finish();
-                self.editor.tool = Tool::Shapes;
-                true
-            }
-            ("m", false) if in_editor => {
-                self.pen_finish();
-                self.editor.tool = Tool::Measure;
-                true
-            }
-            ("t", false) if in_editor => {
-                self.pen_finish();
-                self.editor.tool = Tool::Text;
-                true
-            }
-            ("k", false) if in_editor => {
-                self.pen_finish();
-                self.editor.tool = Tool::Knife;
-                true
-            }
-            ("h", false) if in_editor => {
-                self.pen_finish();
-                self.editor.tool = Tool::HyperPen;
-                true
-            }
-            ("space", false) if in_editor => {
-                // Hold space for the filled preview, like the web
-                // editor; releasing returns to the previous tool.
-                if self.editor.tool != Tool::Preview {
-                    self.editor.previous_tool = self.editor.tool;
-                    self.editor.tool = Tool::Preview;
-                }
-                true
-            }
-            ("a", false) if in_editor => {
-                let Mode::Editor(index) = self.mode else {
-                    return false;
-                };
-                self.push_undo_snapshot(index);
-                let (cx_, cy_) = self.editor.cursor;
-                if let Some(font) = self.font_mut() {
-                    font.add_anchor(index, cx_.round(), cy_.round());
-                }
-                true
-            }
-            ("backspace", false)
-                if in_editor
-                    && (self.editor.pen.is_some()
-                        || self.editor.hyper_contour.is_some()) =>
-            {
-                let Mode::Editor(index) = self.mode else {
-                    return false;
-                };
-                let contour = self
-                    .editor
-                    .pen
-                    .as_ref()
-                    .map(|p| p.contour)
-                    .or(self.editor.hyper_contour)
-                    .unwrap();
-                let remaining = self
-                    .font_mut()
-                    .and_then(|f| {
-                        f.edit_glyph(index, |g| {
-                            runebender_core::segment_ops::delete_last_pen_point(
-                                g, contour,
-                            )
-                        })
-                    })
-                    .flatten();
-                if remaining == Some(0) {
-                    if let Some(font) = self.font_mut() {
-                        font.remove_contour_if_degenerate(index, contour);
-                    }
-                    self.editor.pen = None;
-                    self.editor.hyper_contour = None;
-                }
-                remaining.is_some()
-            }
-            ("backspace" | "delete", false)
-                if in_editor && self.editor.selected_component.is_some() =>
-            {
-                let Mode::Editor(index) = self.mode else {
-                    return false;
-                };
-                let ci = self.editor.selected_component.take().unwrap();
-                self.push_undo_snapshot(index);
-                let changed = self
-                    .font_mut()
-                    .and_then(|f| {
-                        f.edit_glyph(index, |g| {
-                            runebender_core::glyph_ops::delete_component(g, ci)
-                        })
-                    })
-                    .unwrap_or(false);
-                if !changed {
-                    self.editor.undo.pop();
-                }
-                changed
-            }
-            ("backspace" | "delete", false) if in_editor && !self.editor.selected_anchors.is_empty() => {
-                let Mode::Editor(index) = self.mode else {
-                    return false;
-                };
-                let mut anchors =
-                    std::mem::take(&mut self.editor.selected_anchors);
-                anchors.sort_unstable();
-                self.push_undo_snapshot(index);
-                if let Some(font) = self.font_mut() {
-                    // Highest index first: deleting shifts the ones
-                    // after it.
-                    for ai in anchors.into_iter().rev() {
-                        font.delete_anchor(index, ai);
-                    }
-                }
-                true
-            }
-            ("backspace" | "delete", false) if in_editor => {
-                if self.editor.selected.is_empty() {
-                    false
-                } else {
-                    let Mode::Editor(index) = self.mode else {
-                        return false;
-                    };
-                    self.push_undo_snapshot(index);
-                    let selected = self.editor.selected.clone();
-                    let changed = self
-                        .font_mut()
-                        .is_some_and(|f| f.delete_points(index, &selected));
-                    if changed {
-                        self.editor.selected.clear();
-                    }
-                    changed
-                }
-            }
-            ("s", false) if in_editor => {
-                let Mode::Editor(index) = self.mode else {
-                    return false;
-                };
-                if self.editor.selected.is_empty() {
-                    false
-                } else {
-                    self.push_undo_snapshot(index);
-                    let selected = self.editor.selected.clone();
-                    self.font_mut()
-                        .is_some_and(|f| f.toggle_smooth(index, &selected))
-                }
-            }
-            ("left", false) if in_editor => self.nudge_selection(-step, 0.0, alt),
-            ("right", false) if in_editor => self.nudge_selection(step, 0.0, alt),
-            ("up", false) if in_editor => self.nudge_selection(0.0, step, alt),
-            ("down", false) if in_editor => self.nudge_selection(0.0, -step, alt),
-            ("+" | "=", false) if in_editor => {
-                let zoom = self.editor.viewport.zoom;
-                self.editor.viewport.zoom = (zoom * ZOOM_KEY_STEP).min(ZOOM_MAX);
-                true
-            }
-            ("-" | "_", false) if in_editor => {
-                let zoom = self.editor.viewport.zoom;
-                self.editor.viewport.zoom = (zoom / ZOOM_KEY_STEP).max(ZOOM_MIN);
-                true
-            }
-            ("0", _) if matches!(self.mode, Mode::Editor(_)) => {
-                self.editor.initialized = false;
-                self.ensure_editor_fit();
-                true
-            }
-            _ => false,
-        }
     }
 }
 
@@ -22726,34 +10091,31 @@ impl Render for Workspace {
                     // window's full height and the dividers between
                     // the three columns run all the way down.
                     .child(
-                        div()
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .child(
-                                v_resizable("editor-column")
-                                    .child(
-                                        resizable_panel().child(
-                                            // A flex column: the canvas
-                                            // grows into the panel. In a
-                                            // plain block its flex_1 is
-                                            // ignored and it lays out at
-                                            // zero height.
-                                            div()
-                                                .size_full()
-                                                .min_h(px(0.0))
-                                                .flex()
-                                                .flex_col()
-                                                .child(self.editor_view(index, cx)),
-                                        ),
-                                    )
-                                    .child(
-                                        resizable_panel()
-                                            .size(px(140.0))
-                                            .size_range(px(0.0)..px(720.0))
-                                            .visible(self.preview_visible)
-                                            .child(self.preview_strip(cx)),
+                        div().flex_1().min_h(px(0.0)).child(
+                            v_resizable("editor-column")
+                                .child(
+                                    resizable_panel().child(
+                                        // A flex column: the canvas
+                                        // grows into the panel. In a
+                                        // plain block its flex_1 is
+                                        // ignored and it lays out at
+                                        // zero height.
+                                        div()
+                                            .size_full()
+                                            .min_h(px(0.0))
+                                            .flex()
+                                            .flex_col()
+                                            .child(self.editor_view(index, cx)),
                                     ),
-                            ),
+                                )
+                                .child(
+                                    resizable_panel()
+                                        .size(px(140.0))
+                                        .size_range(px(0.0)..px(720.0))
+                                        .visible(self.preview_visible)
+                                        .child(self.preview_strip(cx)),
+                                ),
+                        ),
                     )
                     .child(self.status_bar(cx))
                     .into_any_element(),
@@ -22791,22 +10153,15 @@ impl Render for Workspace {
                         // starts at a row boundary and holds exactly
                         // the rows that fit, so nothing is ever half
                         // drawn at either edge.
-                        let start =
-                            self.grid_scroll_row.min(rows_total.saturating_sub(1));
-                        visible_rows = packed
-                            .iter()
-                            .skip(start)
-                            .take(fit.rows)
-                            .cloned()
-                            .collect();
+                        let start = self.grid_scroll_row.min(rows_total.saturating_sub(1));
+                        visible_rows = packed.iter().skip(start).take(fit.rows).cloned().collect();
                         packed
                             .into_iter()
                             .skip(start)
                             .take(fit.rows)
                             .flatten()
                             .map(|(i, span)| {
-                                let w = cell_w * span as f32
-                                    + GRID_GAP * (span - 1) as f32;
+                                let w = cell_w * span as f32 + GRID_GAP * (span - 1) as f32;
                                 self.glyph_cell_sized(i, w, cell_h, false, cx)
                                     .into_any_element()
                             })
@@ -22893,9 +10248,7 @@ impl Render for Workspace {
                             // the cell pipeline.
                             match self.font_view_mode {
                                 FontViewMode::List => self.glyph_list_view(cx),
-                                FontViewMode::Matrix => {
-                                    self.glyph_matrix_view(cx)
-                                }
+                                FontViewMode::Matrix => self.glyph_matrix_view(cx),
                                 _ => grid_block.into_any_element(),
                             }
                         })
@@ -22960,9 +10313,7 @@ impl Render for Workspace {
                         resizable_panel()
                             .size(px(230.0))
                             .size_range(px(170.0)..px(440.0))
-                            .child(
-                                div().size_full().bg(t::panel_bg()).child(right),
-                            ),
+                            .child(div().size_full().bg(t::panel_bg()).child(right)),
                     ),
             )
             .into_any_element();
@@ -23010,25 +10361,25 @@ impl Render for Workspace {
                 this.rebuild_text_models();
                 cx.notify();
             }))
-            .on_action(cx.listener(
-                |this, _: &CopyContours, window: &mut Window, cx| {
+            .on_action(
+                cx.listener(|this, _: &CopyContours, window: &mut Window, cx| {
                     // A focused field handles its own clipboard.
                     if widgets::input::any_field_focused(window, cx) {
                         return;
                     }
                     this.command_copy();
                     cx.notify();
-                },
-            ))
-            .on_action(cx.listener(
-                |this, _: &PasteContours, window: &mut Window, cx| {
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &PasteContours, window: &mut Window, cx| {
                     if widgets::input::any_field_focused(window, cx) {
                         return;
                     }
                     this.command_paste_routed(cx);
                     cx.notify();
-                },
-            ))
+                }),
+            )
             .on_action(cx.listener(|this, _: &CopySelectedGlyphs, _, cx| {
                 this.command_copy_selection_text(cx);
                 cx.notify();
@@ -23152,9 +10503,7 @@ impl Render for Workspace {
                         .font_mut()
                         .and_then(|f| {
                             f.edit_glyph(index, |g| {
-                                runebender_core::glyph_ops::convert_hyper_to_cubic(
-                                    g, &selected,
-                                )
+                                runebender_core::glyph_ops::convert_hyper_to_cubic(g, &selected)
                             })
                         })
                         .unwrap_or(false);
@@ -23182,25 +10531,23 @@ impl Render for Workspace {
                 this.command_round_coordinates();
                 cx.notify();
             }))
-            .on_action(cx.listener(
-                |this, _: &SelectAllPoints, window: &mut Window, cx| {
+            .on_action(
+                cx.listener(|this, _: &SelectAllPoints, window: &mut Window, cx| {
                     if widgets::input::any_field_focused(window, cx) {
                         return;
                     }
                     this.command_select_points(0);
                     cx.notify();
-                },
-            ))
+                }),
+            )
             .on_action(cx.listener(|this, _: &DeselectAllPoints, _, cx| {
                 this.command_select_points(1);
                 cx.notify();
             }))
-            .on_action(cx.listener(
-                |this, _: &InvertPointSelection, _, cx| {
-                    this.command_select_points(2);
-                    cx.notify();
-                },
-            ))
+            .on_action(cx.listener(|this, _: &InvertPointSelection, _, cx| {
+                this.command_select_points(2);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &NewGlyph, _, cx| {
                 this.command_add_glyph();
                 cx.notify();
@@ -23214,13 +10561,7 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FilterOffsetCurve, _, cx| {
-                if let Ok(delta) = this
-                    .offset_input
-                    .read(cx)
-                    .value()
-                    .trim()
-                    .parse::<f64>()
-                {
+                if let Ok(delta) = this.offset_input.read(cx).value().trim().parse::<f64>() {
                     this.command_offset(delta);
                 }
                 cx.notify();
@@ -23236,20 +10577,12 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FilterSlant, _, cx| {
-                if let Ok(deg) = this
-                    .slant_input
-                    .read(cx)
-                    .value()
-                    .trim()
-                    .parse::<f64>()
+                if let Ok(deg) = this.slant_input.read(cx).value().trim().parse::<f64>()
                     && deg != 0.0
                     && deg.abs() < 89.0
                 {
                     // Positive leans right, the italic convention.
-                    this.apply_transform(Affine::skew(
-                        deg.to_radians().tan(),
-                        0.0,
-                    ));
+                    this.apply_transform(Affine::skew(deg.to_radians().tan(), 0.0));
                 }
                 cx.notify();
             }))
@@ -23364,13 +10697,11 @@ impl Render for Workspace {
                 this.command_step_master(-1);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(
-                |this, event: &gpui::KeyDownEvent, window, cx| {
-                    if this.handle_key(event, window, cx) {
-                        cx.notify();
-                    }
-                },
-            ))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.handle_key(event, window, cx) {
+                    cx.notify();
+                }
+            }))
             .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, _, cx| {
                 if matches!(
                     event.keystroke.key.as_str(),
@@ -23378,9 +10709,7 @@ impl Render for Workspace {
                 ) {
                     this.nudging = false;
                 }
-                if event.keystroke.key.as_str() == "space"
-                    && this.editor.tool == Tool::Preview
-                {
+                if event.keystroke.key.as_str() == "space" && this.editor.tool == Tool::Preview {
                     this.editor.tool = this.editor.previous_tool;
                     cx.notify();
                 }
@@ -23442,21 +10771,14 @@ fn main() {
                 // Listed is not the same as loadable: report which
                 // families actually resolve, and to what.
                 let font = gpui::font(name.as_str());
-                let resolved = std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(|| {
-                        cx.text_system().resolve_font(&font)
-                    }),
-                );
+                let resolved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    cx.text_system().resolve_font(&font)
+                }));
                 match resolved {
                     Ok(id) => {
                         let got = cx.text_system().get_font_for_id(id);
-                        let same = got
-                            .as_ref()
-                            .is_some_and(|f| f.family == name.as_str());
-                        println!(
-                            "{name}\t{}",
-                            if same { "ok" } else { "FELL BACK" }
-                        );
+                        let same = got.as_ref().is_some_and(|f| f.family == name.as_str());
+                        println!("{name}\t{}", if same { "ok" } else { "FELL BACK" });
                     }
                     Err(_) => println!("{name}\tPANICKED"),
                 }
@@ -23516,7 +10838,6 @@ fn main() {
     #[cfg(target_family = "wasm")]
     let app = gpui_platform::single_threaded_web();
     let launch = move |cx: &mut App| {
-
         // The keymap for app commands; menu items show these as their
         // key equivalents.
         cx.bind_keys([
@@ -23546,11 +10867,7 @@ fn main() {
             gpui::KeyBinding::new("cmd-ctrl-m", SyncMetrics, None),
             gpui::KeyBinding::new("cmd-a", SelectAllPoints, None),
             gpui::KeyBinding::new("cmd-alt-a", DeselectAllPoints, None),
-            gpui::KeyBinding::new(
-                "cmd-alt-shift-i",
-                InvertPointSelection,
-                None,
-            ),
+            gpui::KeyBinding::new("cmd-alt-shift-i", InvertPointSelection, None),
             gpui::KeyBinding::new("cmd-alt-shift-n", NewGlyph, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
@@ -23561,8 +10878,7 @@ fn main() {
         #[cfg(not(target_family = "wasm"))]
         cx.set_menus(app_menus());
         #[cfg(not(target_os = "macos"))]
-        let app_menu_bar =
-            cx.new(|cx| widgets::menu_bar::MenuBar::new(app_menus(), cx));
+        let app_menu_bar = cx.new(|cx| widgets::menu_bar::MenuBar::new(app_menus(), cx));
 
         let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
         cx.open_window(
@@ -24804,13 +12120,11 @@ unicode = 65;
 unitsPerEm = 1000;
 }"#;
 
-
     /// A .glyphspackage on disk opens the same way a .glyphs file
     /// does: converted to sibling UFO files, then loaded.
     #[test]
     fn glyphspackage_opens() {
-        let dir = std::env::temp_dir()
-            .join(format!("rb-pkg-open-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rb-pkg-open-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("TestSans.glyphs");
@@ -24859,12 +12173,11 @@ unitsPerEm = 1000;
         // The saved document must equal the loaded one: instance
         // editing rewrites the whole file, so nothing may be lost.
         let path = default_font_path();
-        let doc = norad::designspace::DesignSpaceDocument::load(&path)
-            .expect("designspace loads");
+        let doc = norad::designspace::DesignSpaceDocument::load(&path).expect("designspace loads");
         let tmp = std::env::temp_dir().join("rb-ds-roundtrip.designspace");
         doc.save(&tmp).expect("designspace saves");
-        let doc2 = norad::designspace::DesignSpaceDocument::load(&tmp)
-            .expect("saved designspace loads");
+        let doc2 =
+            norad::designspace::DesignSpaceDocument::load(&tmp).expect("saved designspace loads");
         assert_eq!(doc, doc2, "designspace round-trips losslessly");
         std::fs::remove_file(&tmp).ok();
 
@@ -24884,9 +12197,7 @@ unitsPerEm = 1000;
         // A 2x2 png in the images store plus a glyph image reference
         // must survive a save and reload (norad owns the images dir).
         let mut font = runebender_core::new_font::new_font("Img", "Regular", 400);
-        let png: &[u8] = &[
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-        ];
+        let png: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         // Not a decodable png, but the store does not care; the
         // editor validates before writing, the test only checks the
         // round-trip.
@@ -24953,8 +12264,8 @@ unitsPerEm = 1000;
             .map(|p| (p.x, p.y))
             .collect();
         assert!(
-            ons.iter().any(|&(x, y)| (x - 100.0).abs() <= 1.0
-                && (y + 37.5).abs() <= 1.5),
+            ons.iter()
+                .any(|&(x, y)| (x - 100.0).abs() <= 1.0 && (y + 37.5).abs() <= 1.5),
             "extremum node added: {ons:?}"
         );
         // Second run finds nothing new.
@@ -25010,7 +12321,10 @@ unitsPerEm = 1000;
             l.insert(
                 axis.name.clone(),
                 runebender_core::var_model::normalize_value(
-                    500.0, axis.min, axis.default, axis.max,
+                    500.0,
+                    axis.min,
+                    axis.default,
+                    axis.max,
                 ),
             );
             l
@@ -25076,12 +12390,8 @@ unitsPerEm = 1000;
     #[test]
     fn feature_blocks_insert_at_automatic_code_marker() {
         let fea = "feature ss01 {\n    sub a by a.alt;\n} ss01;\n\n                   # Automatic Code\n\nfeature kern {\n} kern;\n";
-        let one = Workspace::replace_feature_block(
-            fea, "init", "    sub beh-ar by beh-ar.init;\n",
-        );
-        let two = Workspace::replace_feature_block(
-            &one, "liga", "    sub f i by fi;\n",
-        );
+        let one = Workspace::replace_feature_block(fea, "init", "    sub beh-ar by beh-ar.init;\n");
+        let two = Workspace::replace_feature_block(&one, "liga", "    sub f i by fi;\n");
         // Both new blocks land above the marker, in call order, and
         // the marker survives for the next run.
         let init = two.find("feature init").unwrap();
@@ -25090,14 +12400,14 @@ unitsPerEm = 1000;
         let ss01 = two.find("feature ss01").unwrap();
         assert!(ss01 < init && init < liga && liga < marker);
         // Replacing an existing block still edits it in place.
-        let three = Workspace::replace_feature_block(
-            &two, "ss01", "    sub a by a.bold;\n",
-        );
+        let three = Workspace::replace_feature_block(&two, "ss01", "    sub a by a.bold;\n");
         assert_eq!(three.matches("feature ss01").count(), 1);
         assert!(three.contains("a.bold"));
         // Without a marker, new blocks append at the end.
         let plain = Workspace::replace_feature_block(
-            "feature kern {\n} kern;\n", "liga", "    sub f i by fi;\n",
+            "feature kern {\n} kern;\n",
+            "liga",
+            "    sub f i by fi;\n",
         );
         assert!(plain.trim_end().ends_with("} liga;"));
     }
@@ -25126,9 +12436,7 @@ unitsPerEm = 1000;
             }
         }
         // A glyph missing everywhere else reports, not panics.
-        assert!(project
-            .reinterpolated_from_others("no.such.glyph")
-            .is_err());
+        assert!(project.reinterpolated_from_others("no.such.glyph").is_err());
     }
 
     #[test]
@@ -25204,10 +12512,7 @@ unitsPerEm = 1000;
         let mut font = norad::Font::new();
         assert_eq!(read_production_name(&font, "uni0627"), None);
         let mut dict = plist::Dictionary::new();
-        dict.insert(
-            "alef-ar".into(),
-            plist::Value::String("uni0627".into()),
-        );
+        dict.insert("alef-ar".into(), plist::Value::String("uni0627".into()));
         font.lib
             .insert(PSNAMES_KEY.into(), plist::Value::Dictionary(dict));
         assert_eq!(
@@ -25237,9 +12542,7 @@ unitsPerEm = 1000;
         let pts = |coords: &[(f64, f64)]| -> Vec<ContourPoint> {
             coords
                 .iter()
-                .map(|&(x, y)| {
-                    ContourPoint::new(x, y, PointType::Line, false, None, None)
-                })
+                .map(|&(x, y)| ContourPoint::new(x, y, PointType::Line, false, None, None))
                 .collect()
         };
         let mut glyph = norad::Glyph::new("messy");
@@ -25272,12 +12575,8 @@ unitsPerEm = 1000;
         assert_eq!(round_glyph_coordinates(&mut glyph), 1);
         assert_eq!(correct_path_directions(&mut glyph), 2);
         use kurbo::Shape as _;
-        let outer = runebender_core::glyph_paths::contour_to_bezpath(
-            &glyph.contours[0],
-        );
-        let hole = runebender_core::glyph_paths::contour_to_bezpath(
-            &glyph.contours[1],
-        );
+        let outer = runebender_core::glyph_paths::contour_to_bezpath(&glyph.contours[0]);
+        let hole = runebender_core::glyph_paths::contour_to_bezpath(&glyph.contours[1]);
         assert!(outer.area() > 0.0, "outer counter-clockwise");
         assert!(hole.area() < 0.0, "hole clockwise");
         // Running again changes nothing.
@@ -25291,9 +12590,7 @@ unitsPerEm = 1000;
         let square = Contour::new(
             [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
                 .iter()
-                .map(|&(x, y)| {
-                    ContourPoint::new(x, y, PointType::Line, false, None, None)
-                })
+                .map(|&(x, y)| ContourPoint::new(x, y, PointType::Line, false, None, None))
                 .collect(),
             None,
         );
@@ -25306,10 +12603,12 @@ unitsPerEm = 1000;
         assert_eq!((pts[0].x, pts[0].y), (100.0, 100.0));
         // Close again: the Move becomes a Line, same point count.
         assert!(toggle_contour_open(&mut glyph, 0, 0));
-        assert!(glyph.contours[0]
-            .points
-            .iter()
-            .all(|p| p.typ != PointType::Move));
+        assert!(
+            glyph.contours[0]
+                .points
+                .iter()
+                .all(|p| p.typ != PointType::Move)
+        );
         assert_eq!(glyph.contours[0].points.len(), 4);
         // Off-curve target refuses.
         assert!(!toggle_contour_open(&mut glyph, 0, 99));
@@ -25348,26 +12647,20 @@ unitsPerEm = 1000;
         let stroke = Contour::new(
             [(0.0, 40.0), (200.0, 40.0), (200.0, 120.0), (0.0, 120.0)]
                 .iter()
-                .map(|&(x, y)| {
-                    ContourPoint::new(x, y, PointType::Line, false, None, None)
-                })
+                .map(|&(x, y)| ContourPoint::new(x, y, PointType::Line, false, None, None))
                 .collect(),
             None,
         );
         let mut glyph = norad::Glyph::new("joined");
         glyph.contours = vec![stroke];
-        let path = runebender_core::glyph_paths::contour_to_bezpath(
-            &glyph.contours[0],
-        );
+        let path = runebender_core::glyph_paths::contour_to_bezpath(&glyph.contours[0]);
         assert_eq!(joining_band(&path, 200.0, true, 2.0), Some((40.0, 120.0)));
         assert_eq!(joining_band(&path, 200.0, false, 2.0), Some((40.0, 120.0)));
         // Pull the ink off the edge: no band.
         for p in glyph.contours[0].points.iter_mut() {
             p.x += 10.0;
         }
-        let moved = runebender_core::glyph_paths::contour_to_bezpath(
-            &glyph.contours[0],
-        );
+        let moved = runebender_core::glyph_paths::contour_to_bezpath(&glyph.contours[0]);
         assert_eq!(joining_band(&moved, 200.0, true, 2.0), None);
 
         // And the real Arabic set: a medial beh (a composite —
@@ -25377,9 +12670,7 @@ unitsPerEm = 1000;
         if let Some(g) = font.font.get_glyph("beh-ar.medi") {
             let i = font.name_map["beh-ar.medi"];
             let advance = font.glyphs[i].advance;
-            let outline = runebender_core::glyph_paths::glyph_to_bezpath(
-                g, &font.font,
-            );
+            let outline = runebender_core::glyph_paths::glyph_to_bezpath(g, &font.font);
             assert!(
                 joining_band(&outline, advance, true, 2.0).is_some(),
                 "medial joins left"
@@ -25398,9 +12689,7 @@ unitsPerEm = 1000;
             Contour::new(
                 [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
                     .iter()
-                    .map(|&(x, y)| {
-                        ContourPoint::new(x, y, PointType::Line, false, None, None)
-                    })
+                    .map(|&(x, y)| ContourPoint::new(x, y, PointType::Line, false, None, None))
                     .collect(),
                 None,
             )
@@ -25408,8 +12697,10 @@ unitsPerEm = 1000;
         let mut glyph = norad::Glyph::new("mask-test");
         // A big square with a smaller mask square overlapping its
         // right edge.
-        glyph.contours =
-            vec![square(0.0, 0.0, 100.0, 100.0), square(60.0, 20.0, 140.0, 80.0)];
+        glyph.contours = vec![
+            square(0.0, 0.0, 100.0, 100.0),
+            square(60.0, 20.0, 140.0, 80.0),
+        ];
         let mut masks = std::collections::HashSet::new();
         masks.insert(1usize);
         write_masks(&mut glyph, &masks);
@@ -25435,8 +12726,18 @@ unitsPerEm = 1000;
     fn annotations_roundtrip() {
         let mut glyph = norad::Glyph::new("anno");
         let notes = vec![
-            Annotation { kind: "arrow".into(), x: 10.0, y: 20.0, text: String::new() },
-            Annotation { kind: "note".into(), x: -5.0, y: 700.0, text: "fix this join".into() },
+            Annotation {
+                kind: "arrow".into(),
+                x: 10.0,
+                y: 20.0,
+                text: String::new(),
+            },
+            Annotation {
+                kind: "note".into(),
+                x: -5.0,
+                y: 700.0,
+                text: "fix this join".into(),
+            },
         ];
         write_annotations(&mut glyph, &notes);
         assert_eq!(read_annotations(&glyph), notes);
@@ -25455,20 +12756,23 @@ unitsPerEm = 1000;
         assert_eq!(contours.len(), 1);
         let ys: Vec<f64> = contours[0].points.iter().map(|p| p.y).collect();
         let xs: Vec<f64> = contours[0].points.iter().map(|p| p.x).collect();
-        let (min_y, max_y) =
-            ys.iter().fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
-        let (min_x, max_x) =
-            xs.iter().fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
+        let (min_y, max_y) = ys
+            .iter()
+            .fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
+        let (min_x, max_x) = xs
+            .iter()
+            .fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
         assert_eq!((min_y, max_y), (-200.0, 800.0), "fills the em");
         assert_eq!(min_x, 0.0);
         assert!((max_x - 500.0).abs() < 1.0, "aspect kept: {max_x}");
         // Curves survive.
         let curvy = r#"<path d="M0 0 C 10 0 20 10 20 20 L 0 20 Z"/>"#;
         let c = svg_to_contours(curvy, 800.0, -200.0).expect("parses curves");
-        assert!(c[0]
-            .points
-            .iter()
-            .any(|p| p.typ == norad::PointType::OffCurve));
+        assert!(
+            c[0].points
+                .iter()
+                .any(|p| p.typ == norad::PointType::OffCurve)
+        );
         // No path data errors cleanly.
         assert!(svg_to_contours("<svg></svg>", 800.0, -200.0).is_err());
     }
@@ -25493,11 +12797,7 @@ unitsPerEm = 1000;
         let mut glyph = norad::Glyph::new("quads");
         glyph.contours = vec![contour];
         assert!(quads_to_cubics(&mut glyph));
-        let types: Vec<PointType> = glyph.contours[0]
-            .points
-            .iter()
-            .map(|p| p.typ)
-            .collect();
+        let types: Vec<PointType> = glyph.contours[0].points.iter().map(|p| p.typ).collect();
         assert!(!types.contains(&PointType::QCurve), "{types:?}");
         // Two quads became two cubics: 2 on + 2 line + 4 off.
         assert_eq!(
@@ -25507,37 +12807,27 @@ unitsPerEm = 1000;
         // Exactness at the quad midpoint: the cubic passes through
         // the same point the quad did. Quad (100,0)-(75,50)-(50,60)
         // at t=.5: (75, 40).
-        let bez = runebender_core::glyph_paths::contour_to_bezpath(
-            &glyph.contours[0],
-        );
+        let bez = runebender_core::glyph_paths::contour_to_bezpath(&glyph.contours[0]);
         use kurbo::{ParamCurve as _, Shape as _};
         let close_to = |target: kurbo::Point| {
-            bez.segments().any(|seg| {
-                (0..=10).any(|i| {
-                    seg.eval(i as f64 / 10.0).distance(target) < 1.5
-                })
-            })
+            bez.segments()
+                .any(|seg| (0..=10).any(|i| seg.eval(i as f64 / 10.0).distance(target) < 1.5))
         };
         assert!(close_to(kurbo::Point::new(75.0, 40.0)));
 
         // And back: cubics to quads stays within tolerance.
         let mut back = glyph.clone();
         assert!(cubics_to_quads(&mut back, 1.0));
-        let types: Vec<PointType> =
-            back.contours[0].points.iter().map(|p| p.typ).collect();
+        let types: Vec<PointType> = back.contours[0].points.iter().map(|p| p.typ).collect();
         assert!(!types.contains(&PointType::Curve), "{types:?}");
-        let bez2 = runebender_core::glyph_paths::contour_to_bezpath(
-            &back.contours[0],
-        );
+        let bez2 = runebender_core::glyph_paths::contour_to_bezpath(&back.contours[0]);
         // Sample the round-tripped outline against the cubic one.
         for seg in bez.segments() {
             for i in 0..=4 {
                 let p = seg.eval(i as f64 / 4.0);
                 let nearest = bez2
                     .segments()
-                    .flat_map(|s2| {
-                        (0..=16).map(move |j| s2.eval(j as f64 / 16.0))
-                    })
+                    .flat_map(|s2| (0..=16).map(move |j| s2.eval(j as f64 / 16.0)))
                     .map(|q| p.distance(q))
                     .fold(f64::MAX, f64::min);
                 assert!(nearest < 2.5, "outline drifted {nearest}");
@@ -25563,9 +12853,7 @@ unitsPerEm = 1000;
         let square = Contour::new(
             [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
                 .iter()
-                .map(|&(x, y)| {
-                    ContourPoint::new(x, y, PointType::Line, false, None, None)
-                })
+                .map(|&(x, y)| ContourPoint::new(x, y, PointType::Line, false, None, None))
                 .collect(),
             None,
         );
@@ -25602,11 +12890,19 @@ unitsPerEm = 1000;
         assert_eq!(parse_metrics_key("=50"), Some(Constant(50.0)));
         assert_eq!(
             parse_metrics_key("=n"),
-            Some(Reference { glyph: "n".into(), mirror: false, op: None })
+            Some(Reference {
+                glyph: "n".into(),
+                mirror: false,
+                op: None
+            })
         );
         assert_eq!(
             parse_metrics_key("=|o"),
-            Some(Reference { glyph: "o".into(), mirror: true, op: None })
+            Some(Reference {
+                glyph: "o".into(),
+                mirror: true,
+                op: None
+            })
         );
         assert_eq!(
             parse_metrics_key("=n+10"),
@@ -25659,10 +12955,7 @@ unitsPerEm = 1000;
                 (lsb - target).abs() < 1.0,
                 "h LSB follows n+10: {lsb} vs {target}"
             );
-            let back = read_metrics_key(
-                master.font.get_glyph("h").unwrap(),
-                true,
-            );
+            let back = read_metrics_key(master.font.get_glyph("h").unwrap(), true);
             assert_eq!(back.as_deref(), Some("=n+10"));
         }
     }
@@ -25714,10 +13007,7 @@ unitsPerEm = 1000;
         };
         let q = ((a.0 + b.0) / 2.0 + 80.0, (a.1 + b.1) / 2.0 + 40.0);
         {
-            let g = project.masters[lo]
-                .font
-                .get_glyph_mut(name)
-                .unwrap();
+            let g = project.masters[lo].font.get_glyph_mut(name).unwrap();
             let mut map = std::collections::HashMap::new();
             map.insert((0usize, 0usize), q);
             write_hoi_intermediates(g, &map);
@@ -25727,7 +13017,10 @@ unitsPerEm = 1000;
             location.insert(
                 axis.name.clone(),
                 runebender_core::var_model::normalize_value(
-                    design, axis.min, axis.default, axis.max,
+                    design,
+                    axis.min,
+                    axis.default,
+                    axis.max,
                 ),
             );
             let g = project.interpolated_at(name, &location).unwrap();
@@ -25744,8 +13037,7 @@ unitsPerEm = 1000;
         let quarter = at(&project, quarter_design);
         let expected = hoi_quad_at(a, b, q, 0.25);
         assert!(
-            (quarter.0 - expected.0).abs() < 1e-6
-                && (quarter.1 - expected.1).abs() < 1e-6,
+            (quarter.0 - expected.0).abs() < 1e-6 && (quarter.1 - expected.1).abs() < 1e-6,
             "quarter-axis on the quadratic: {quarter:?} vs {expected:?}"
         );
     }
@@ -25767,8 +13059,7 @@ unitsPerEm = 1000;
         // Straight interpolation: the midpoint sample is the average
         // of the ends.
         let mid_linear = tracks[0][5].x;
-        let expected =
-            (tracks[0][0].x + tracks[0][10].x) / 2.0;
+        let expected = (tracks[0][0].x + tracks[0][10].x) / 2.0;
         assert!((mid_linear - expected).abs() < 1.0, "linear before braces");
         // A brace at wght 550 (the axis midpoint) pushing the point
         // +60 bends the track's middle away from the straight line.
@@ -25784,9 +13075,7 @@ unitsPerEm = 1000;
         let mut loc = runebender_core::var_model::Location::new();
         loc.insert(
             axis.name.clone(),
-            runebender_core::var_model::normalize_value(
-                550.0, axis.min, axis.default, axis.max,
-            ),
+            runebender_core::var_model::normalize_value(550.0, axis.min, axis.default, axis.max),
         );
         project.brace.push(BraceSource {
             master: 0,
@@ -25824,7 +13113,10 @@ unitsPerEm = 1000;
         let at = |project: &mut Project, design: f64| {
             let axis = &project.axes[0];
             let normalized = runebender_core::var_model::normalize_value(
-                design, axis.min, axis.default, axis.max,
+                design,
+                axis.min,
+                axis.default,
+                axis.max,
             );
             let name = axis.name.clone();
             project.location.insert(name, normalized);
@@ -25852,9 +13144,7 @@ unitsPerEm = 1000;
         let paths: Vec<runebender_core::path::Path> = g
             .contours
             .iter()
-            .map(|c| {
-                runebender_core::path::Path::from_contour(&WContour::from_norad(c))
-            })
+            .map(|c| runebender_core::path::Path::from_contour(&WContour::from_norad(c)))
             .collect();
         let stems: Vec<i64> = measure::glyph_measurements(&paths)
             .into_iter()
@@ -25880,14 +13170,18 @@ unitsPerEm = 1000;
         {
             let g = font.default_layer_mut().get_glyph_mut("beh").unwrap();
             g.anchors.push(norad::Anchor::new(
-                520.0, 0.0,
+                520.0,
+                0.0,
                 Some(norad::Name::new("exit").unwrap()),
-                None, None,
+                None,
+                None,
             ));
             g.anchors.push(norad::Anchor::new(
-                0.0, 12.0,
+                0.0,
+                12.0,
                 Some(norad::Name::new("entry").unwrap()),
-                None, None,
+                None,
+                None,
             ));
         }
         // A mark composition: aacute = a + acutecomb (a Mark).
@@ -25916,11 +13210,7 @@ unitsPerEm = 1000;
         // with _top, and a stacking mark carrying both.
         {
             let anchor = |x: f64, y: f64, name: &str| {
-                norad::Anchor::new(
-                    x, y,
-                    Some(norad::Name::new(name).unwrap()),
-                    None, None,
-                )
+                norad::Anchor::new(x, y, Some(norad::Name::new(name).unwrap()), None, None)
             };
             let g = font.default_layer_mut().get_glyph_mut("a").unwrap();
             g.anchors.push(anchor(250.0, 700.0, "top"));
@@ -25932,9 +13222,11 @@ unitsPerEm = 1000;
         {
             let g = font.default_layer_mut().get_glyph_mut("f_i").unwrap();
             g.anchors.push(norad::Anchor::new(
-                480.0, 0.0,
+                480.0,
+                0.0,
                 Some(norad::Name::new("caret_1").unwrap()),
-                None, None,
+                None,
+                None,
             ));
         }
         let blocks = Workspace::generated_feature_blocks(&font);
@@ -25942,7 +13234,10 @@ unitsPerEm = 1000;
         assert!(tags.contains(&"mark") && tags.contains(&"mkmk"), "{tags:?}");
         assert!(tags.contains(&"table GDEF"), "{tags:?}");
         let mark = &blocks.iter().find(|(t, _)| t == "mark").unwrap().1;
-        assert!(mark.contains("markClass acutecomb <anchor 0 0> @MC_top;"), "{mark}");
+        assert!(
+            mark.contains("markClass acutecomb <anchor 0 0> @MC_top;"),
+            "{mark}"
+        );
         assert!(mark.contains("pos base a <anchor 250 700> mark @MC_top;"));
         let mkmk = &blocks.iter().find(|(t, _)| t == "mkmk").unwrap().1;
         assert!(mkmk.contains("pos mark acutecomb <anchor 0 300> mark @MC_top;"));
@@ -25965,15 +13260,13 @@ unitsPerEm = 1000;
         }
         assert!(tags.contains(&"ccmp"), "{tags:?}");
         let ccmp = &blocks.iter().find(|(t, _)| t == "ccmp").unwrap().1;
-        assert!(
-            ccmp.contains("sub a acutecomb by aacute;"),
-            "{ccmp}"
-        );
+        assert!(ccmp.contains("sub a acutecomb by aacute;"), "{ccmp}");
         assert!(tags.contains(&"init") && tags.contains(&"medi"));
         let curs = &blocks.iter().find(|(t, _)| t == "curs").unwrap().1;
-        assert!(curs.contains(
-            "position cursive beh <anchor 0 12> <anchor 520 0>;"
-        ), "{curs}");
+        assert!(
+            curs.contains("position cursive beh <anchor 0 12> <anchor 520 0>;"),
+            "{curs}"
+        );
         assert!(curs.contains("lookupflag RightToLeft IgnoreMarks;"));
         assert!(!tags.contains(&"fina"), "no .fina names, no fina block");
         assert!(tags.contains(&"liga"));
@@ -26026,9 +13319,7 @@ unitsPerEm = 1000;
             Contour::new(
                 [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
                     .iter()
-                    .map(|&(x, y)| {
-                        ContourPoint::new(x, y, PointType::Line, false, None, None)
-                    })
+                    .map(|&(x, y)| ContourPoint::new(x, y, PointType::Line, false, None, None))
                     .collect(),
                 None,
             )
@@ -26065,8 +13356,16 @@ unitsPerEm = 1000;
         r2.contours = vec![square()];
         assert!(roughen_glyph_contours(&mut r2, &all, 10.0, 4.0, 4.0, 8));
         assert_ne!(
-            r.contours[0].points.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
-            r2.contours[0].points.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+            r.contours[0]
+                .points
+                .iter()
+                .map(|p| (p.x, p.y))
+                .collect::<Vec<_>>(),
+            r2.contours[0]
+                .points
+                .iter()
+                .map(|p| (p.x, p.y))
+                .collect::<Vec<_>>(),
         );
     }
 
@@ -26078,9 +13377,7 @@ unitsPerEm = 1000;
         let square = |pts: &[(f64, f64)]| {
             Contour::new(
                 pts.iter()
-                    .map(|&(x, y)| {
-                        ContourPoint::new(x, y, PointType::Line, false, None, None)
-                    })
+                    .map(|&(x, y)| ContourPoint::new(x, y, PointType::Line, false, None, None))
                     .collect(),
                 None,
             )
@@ -26098,12 +13395,18 @@ unitsPerEm = 1000;
             (max.0 - min.0, max.1 - min.1)
         };
         let (w, h) = bbox(&glyph);
-        assert!((w - 120.0).abs() <= 2.0 && (h - 120.0).abs() <= 2.0, "bolder grows: {w}x{h}");
+        assert!(
+            (w - 120.0).abs() <= 2.0 && (h - 120.0).abs() <= 2.0,
+            "bolder grows: {w}x{h}"
+        );
         let mut glyph2 = norad::Glyph::new("offset-test-2");
         glyph2.contours = vec![outer];
         assert!(offset_glyph_contours(&mut glyph2, -10.0));
         let (w2, h2) = bbox(&glyph2);
-        assert!((w2 - 80.0).abs() <= 2.0 && (h2 - 80.0).abs() <= 2.0, "lighter shrinks: {w2}x{h2}");
+        assert!(
+            (w2 - 80.0).abs() <= 2.0 && (h2 - 80.0).abs() <= 2.0,
+            "lighter shrinks: {w2}x{h2}"
+        );
     }
 
     #[test]
@@ -26126,14 +13429,17 @@ unitsPerEm = 1000;
         assert_eq!(glyph.contours.len(), 1);
         let ys: Vec<f64> = glyph.contours[0].points.iter().map(|p| p.y).collect();
         let xs: Vec<f64> = glyph.contours[0].points.iter().map(|p| p.x).collect();
-        let (min_y, max_y) = ys.iter().fold((f64::MAX, f64::MIN), |a, &v| {
-            (a.0.min(v), a.1.max(v))
-        });
-        let (min_x, max_x) = xs.iter().fold((f64::MAX, f64::MIN), |a, &v| {
-            (a.0.min(v), a.1.max(v))
-        });
+        let (min_y, max_y) = ys
+            .iter()
+            .fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
+        let (min_x, max_x) = xs
+            .iter()
+            .fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
         assert!((max_y - min_y - 40.0).abs() <= 2.0, "stroke height ~40");
-        assert!((max_x - min_x - 140.0).abs() <= 2.0, "length plus caps ~140");
+        assert!(
+            (max_x - min_x - 140.0).abs() <= 2.0,
+            "length plus caps ~140"
+        );
         // Width zero refuses.
         let mut untouched = norad::Glyph::new("no-op");
         assert!(!expand_stroke_contours(&mut untouched, &all, 40.0));
@@ -26171,7 +13477,10 @@ unitsPerEm = 1000;
         let before = model.glyphs[index].points[0];
         model.set_points(
             index,
-            &[((before.contour, before.index), (before.x + 10.0, before.y + 5.0))],
+            &[(
+                (before.contour, before.index),
+                (before.x + 10.0, before.y + 5.0),
+            )],
         );
         assert!(model.dirty);
         let after = model.glyphs[index].points[0];
@@ -26278,9 +13587,8 @@ unitsPerEm = 1000;
             true,
         );
         model.close_contour(index, c, None);
-        let count_points = |m: &FontModel| {
-            m.snapshot_contours(index).unwrap().contours[c].points.len()
-        };
+        let count_points =
+            |m: &FontModel| m.snapshot_contours(index).unwrap().contours[c].points.len();
         assert_eq!(count_points(&model), 6); // 4 on + 2 off
 
         // Toggle smooth on the curve's endpoint.
@@ -26306,10 +13614,12 @@ unitsPerEm = 1000;
         let snapshot = model.snapshot_contours(index).unwrap();
         let contour_data = &snapshot.contours[c];
         assert!(contour_data.is_closed());
-        assert!(contour_data
-            .points
-            .iter()
-            .all(|p| p.typ != norad::PointType::OffCurve));
+        assert!(
+            contour_data
+                .points
+                .iter()
+                .all(|p| p.typ != norad::PointType::OffCurve)
+        );
 
         // Delete an on-curve point: square becomes a triangle.
         let corner = model.glyphs[index]
@@ -26342,10 +13652,18 @@ unitsPerEm = 1000;
             .position(|g| g.name.as_ref() == "o")
             .unwrap();
         let none = std::collections::HashSet::new();
-        let before: Vec<(f64, f64)> = model.glyphs[index].points.iter().map(|p| (p.x, p.y)).collect();
+        let before: Vec<(f64, f64)> = model.glyphs[index]
+            .points
+            .iter()
+            .map(|p| (p.x, p.y))
+            .collect();
         // Balance evens handle tension; on a real glyph something moves.
         let changed = model.curve_op(index, &none, CurveOp::Balance);
-        let after: Vec<(f64, f64)> = model.glyphs[index].points.iter().map(|p| (p.x, p.y)).collect();
+        let after: Vec<(f64, f64)> = model.glyphs[index]
+            .points
+            .iter()
+            .map(|p| (p.x, p.y))
+            .collect();
         if changed {
             assert_ne!(before, after);
         }
@@ -26431,15 +13749,21 @@ unitsPerEm = 1000;
         // Drag the incoming handle downward; the outgoing must rotate
         // to stay collinear through (100,100).
         model.set_points(index, &[((c, incoming), (60.0, 80.0))]);
-        model.edit_glyph(index, |g| {
-            ops::constrain_smooth_neighbor(g, c, incoming)
-        });
+        model.edit_glyph(index, |g| ops::constrain_smooth_neighbor(g, c, incoming));
         let pts = &model.glyphs[index].points;
-        let out_pt = pts.iter().find(|p| p.contour == c && p.index == outgoing).unwrap();
+        let out_pt = pts
+            .iter()
+            .find(|p| p.contour == c && p.index == outgoing)
+            .unwrap();
         // Collinearity: cross product of (anchor-incoming) and
         // (outgoing-anchor) near zero (integer rounding allowed).
         let cross = (100.0 - 60.0) * (out_pt.y - 100.0) - (100.0 - 80.0) * (out_pt.x - 100.0);
-        assert!(cross.abs() <= 60.0, "not collinear enough: {cross} ({}, {})", out_pt.x, out_pt.y);
+        assert!(
+            cross.abs() <= 60.0,
+            "not collinear enough: {cross} ({}, {})",
+            out_pt.x,
+            out_pt.y
+        );
         // Length preserved (was 40).
         let len = ((out_pt.x - 100.0f64).powi(2) + (out_pt.y - 100.0f64).powi(2)).sqrt();
         assert!((len - 40.0).abs() < 2.0, "length changed: {len}");
@@ -26489,8 +13813,7 @@ unitsPerEm = 1000;
         let mut project = Project::load(&default_font_path()).expect("designspace");
         assert!(project.model.is_some(), "two masters, model expected");
         // Move every axis to its normalized midpoint toward max.
-        let axis_names: Vec<String> =
-            project.axes.iter().map(|a| a.name.clone()).collect();
+        let axis_names: Vec<String> = project.axes.iter().map(|a| a.name.clone()).collect();
         for name in &axis_names {
             project.location.insert(name.clone(), 0.5);
         }
@@ -26666,7 +13989,9 @@ fn bolden_contours(
         // Visit in pen order, starting where the reader started.
         for step in 0..n {
             let i = (start + step) % n;
-            let Some((dx, dy)) = next.next().copied() else { break };
+            let Some((dx, dy)) = next.next().copied() else {
+                break;
+            };
             moved[i].x += (dx + center.0) as f64;
             moved[i].y += (dy + center.1) as f64;
         }
