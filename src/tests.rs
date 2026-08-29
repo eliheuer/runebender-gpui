@@ -1934,6 +1934,19 @@ mod theme_geometry_tests {
     /// `_ => Box::new(SetThemeDark)` arm, so a theme added to the token
     /// file got a menu entry that switched to Dark. It looked wired up
     /// and was not.
+    /// The default is a name, and a name can be wrong. Without this a
+    /// typo would only show up as a window that came up in whatever
+    /// theme the fallback happened to reach.
+    #[test]
+    fn the_default_theme_exists() {
+        assert!(
+            t::THEMES.iter().any(|(id, _)| *id == t::DEFAULT_THEME),
+            "{} is not in THEMES",
+            t::DEFAULT_THEME
+        );
+        assert!(t::set_theme(t::DEFAULT_THEME), "the default must load");
+    }
+
     #[test]
     fn every_theme_has_its_own_action() {
         for (id, _) in t::THEMES {
@@ -1947,7 +1960,7 @@ mod theme_geometry_tests {
         for (id, _) in t::THEMES {
             assert!(t::set_theme(id), "theme {id} is not in the token file");
         }
-        t::set_theme("dark");
+        t::set_theme(t::DEFAULT_THEME);
     }
 
     /// Geometry has to actually follow the theme, or the tokens are
@@ -1963,7 +1976,7 @@ mod theme_geometry_tests {
         assert_ne!(dark_s, gray_s, "Gray should draw a heavier rule");
         assert_eq!(gray_r, gpui::px(0.0));
         assert_eq!(gray_s, gpui::px(2.0));
-        t::set_theme("dark");
+        t::set_theme(t::DEFAULT_THEME);
     }
 }
 
@@ -2001,7 +2014,7 @@ mod mark_paint_tests {
         assert_ne!(fill, gray.ink, "ink must not be the fill it sits on");
         assert_ne!(fill, gray.border, "the keyline must not be the fill");
 
-        t::set_theme("dark");
+        t::set_theme(t::DEFAULT_THEME);
     }
 }
 

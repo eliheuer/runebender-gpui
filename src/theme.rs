@@ -26,15 +26,21 @@ pub const THEMES: [(&str, &str); 4] = [
 /// accessor a `'static` reference with no per-call clone.
 static CURRENT: RwLock<Option<(&'static str, &'static Theme)>> = RwLock::new(None);
 
+/// The theme a fresh install starts in.
+///
+/// One name, so the fallback in `theme()` and the answer from
+/// `current_theme()` cannot disagree about what "no choice yet" means.
+pub const DEFAULT_THEME: &str = "gray";
+
 fn theme() -> &'static Theme {
     if let Some((_, theme)) = *CURRENT.read().expect("theme lock") {
         return theme;
     }
-    set_theme("dark");
+    set_theme(DEFAULT_THEME);
     CURRENT
         .read()
         .expect("theme lock")
-        .expect("dark theme in shared token file")
+        .expect("the default theme is in the shared token file")
         .1
 }
 
@@ -55,7 +61,11 @@ pub fn set_theme(id: &str) -> bool {
 /// The active theme's id.
 pub fn current_theme() -> &'static str {
     theme();
-    CURRENT.read().expect("theme lock").map(|(id, _)| id).unwrap_or("dark")
+    CURRENT
+        .read()
+        .expect("theme lock")
+        .map(|(id, _)| id)
+        .unwrap_or(DEFAULT_THEME)
 }
 
 fn c(color: ColorRgba) -> Rgba {
