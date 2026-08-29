@@ -8422,14 +8422,19 @@ impl Workspace {
     }
 
     /// Run the model over the open glyph and install what it predicts.
-    /// The stem weight the other master already carries, and the
-    /// height it was measured at.
+    /// How much weight the other master adds, learned from glyphs
+    /// drawn in both, and the height it was measured at.
     ///
-    /// Taken from letters that are mostly stem, and only from ones
-    /// actually drawn there, so a master part-way through still gives
-    /// a usable answer. `None` when there is one master, or when none
-    /// of the reference letters is drawn yet.
-    fn model_weight_target(&self) -> Option<(f64, f64)> {
+    /// This is the "draw the key glyphs and let them carry the rest"
+    /// workflow: draw n, o, H and O in the heavier master, and every
+    /// other glyph is asked to add what those added, from wherever it
+    /// already sits. A delta rather than one shared target, because
+    /// caps and lowercase are drawn to different weights and a single
+    /// target would flatten the difference.
+    ///
+    /// `None` with one master, or when none of the reference glyphs is
+    /// drawn in both yet.
+    fn model_weight_delta(&self) -> Option<(f64, f64)> {
         let project = self.project.as_ref()?;
         if project.masters.len() < 2 {
             return None;
@@ -8439,20 +8444,26 @@ impl Workspace {
         } else {
             0
         };
-        let font = &project.masters[other].font;
-        let height = font
+        let here = &project.active_font().font;
+        let there = &project.masters[other].font;
+        let height = there
             .font_info
             .x_height
             .map(|v| v / 2.0)
-            .or_else(|| font.font_info.units_per_em.map(|v| *v * 0.25))
+            .or_else(|| there.font_info.units_per_em.map(|v| *v * 0.25))
             .unwrap_or(256.0);
-        let paths: Vec<_> = ["n", "i", "l", "h", "m", "u", "H", "I", "E"]
+        let pairs: Vec<_> = ["n", "o", "H", "O", "i", "l", "h", "m", "u", "I", "E"]
             .iter()
-            .filter_map(|n| font.get_glyph(*n))
-            .filter_map(font_ml::ufo::glyph_ops)
-            .map(|ops| font_ml::stems::ops_to_path(&ops))
+            .filter_map(|name| {
+                let a = font_ml::ufo::glyph_ops(here.get_glyph(*name)?)?;
+                let b = font_ml::ufo::glyph_ops(there.get_glyph(*name)?)?;
+                Some((
+                    font_ml::stems::ops_to_path(&a),
+                    font_ml::stems::ops_to_path(&b),
+                ))
+            })
             .collect();
-        font_ml::stems::reference_stem(&paths, height).map(|stem| (stem, height))
+        font_ml::stems::reference_delta(&pairs, height).map(|d| (d, height))
     }
 
     fn apply_bolden(&mut self, index: usize, dir: &std::path::Path) {
@@ -8516,13 +8527,17 @@ impl Workspace {
         // Virtua this took stems from 46 units out to 40, and glyphs
         // at the right weight from 1 in 11 to 5.
         let mut fitted_to: Option<f64> = None;
-        if let Some((target, height)) = self.model_weight_target() {
-            let want = font_ml::stems::fit_strength(
-                &font_ml::stems::ops_to_path(&result.from),
-                &font_ml::stems::ops_to_path(&result.to),
-                target,
-                height,
-            );
+        if let Some((delta, height)) = self.model_weight_delta() {
+            let from_path = font_ml::stems::ops_to_path(&result.from);
+            let want = font_ml::stems::target_from_delta(&from_path, delta, height)
+                .and_then(|target| {
+                    font_ml::stems::fit_strength(
+                        &from_path,
+                        &font_ml::stems::ops_to_path(&result.to),
+                        target,
+                        height,
+                    )
+                });
             if let Some(want) = want.filter(|s| s.is_finite() && *s > 0.25 && *s < 4.0) {
                 if let Ok(refit) = predict(want) {
                     if refit.is_compatible() {

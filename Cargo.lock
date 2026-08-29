@@ -1952,7 +1952,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 [[package]]
 name = "font-ml"
 version = "0.1.0"
-source = "git+https://github.com/eliheuer/font-ml?rev=a9b03c6649aa469873c4d9e943f9557c2e7a3ce3#a9b03c6649aa469873c4d9e943f9557c2e7a3ce3"
+source = "git+https://github.com/eliheuer/font-ml?rev=2dc1898923271f46b9d1cbe9cba8c8b6bdaddb7e#2dc1898923271f46b9d1cbe9cba8c8b6bdaddb7e"
 dependencies = [
  "candle-core",
  "candle-nn",

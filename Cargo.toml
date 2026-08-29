@@ -63,7 +63,7 @@ toml = "0.8"
 
 [dependencies.font-ml]
 git = "https://github.com/eliheuer/font-ml"
-rev = "a9b03c6649aa469873c4d9e943f9557c2e7a3ce3"
+rev = "2dc1898923271f46b9d1cbe9cba8c8b6bdaddb7e"
 
 # Accelerate is Apple's BLAS and links a framework, so it can only be
 # asked for on Apple targets: naming it unconditionally breaks the
@@ -71,7 +71,7 @@ rev = "a9b03c6649aa469873c4d9e943f9557c2e7a3ce3"
 # seconds to under one.
 [target.'cfg(target_vendor = "apple")'.dependencies.font-ml]
 git = "https://github.com/eliheuer/font-ml"
-rev = "a9b03c6649aa469873c4d9e943f9557c2e7a3ce3"
+rev = "2dc1898923271f46b9d1cbe9cba8c8b6bdaddb7e"
 features = ["accelerate"]
 
 [dependencies.runebender-core]
