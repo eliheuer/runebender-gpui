@@ -5500,6 +5500,7 @@ dependencies = [
  "serde_json",
  "skrifa 0.44.0",
  "tiny-skia",
+ "toml 0.8.23",
  "unicode_names2",
  "web-sys",
  "web-time",

@@ -30,8 +30,15 @@ pub struct Entry<'a> {
 }
 
 /// Where the log is written, if anywhere.
+///
+/// `$RUNEBENDER_JOURNAL`, then the config file. Unset in both means no
+/// journal: a tool that logs where it was not asked to is a tool
+/// people turn off entirely.
 pub fn path() -> Option<PathBuf> {
-    std::env::var_os("RUNEBENDER_JOURNAL").map(PathBuf::from)
+    if let Some(p) = std::env::var_os("RUNEBENDER_JOURNAL") {
+        return Some(PathBuf::from(p));
+    }
+    crate::CONFIG.get().and_then(|c| c.journal.clone())
 }
 
 /// Escape the few characters that would break a JSON string.

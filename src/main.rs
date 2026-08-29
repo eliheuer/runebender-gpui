@@ -7,6 +7,7 @@
 
 mod blur;
 mod canvas;
+mod config;
 mod journal;
 #[cfg(test)]
 mod tests;
@@ -8358,12 +8359,19 @@ impl Workspace {
     /// Read a model directory and cache the weights.
     /// Where a model is looked for when nobody points at one.
     ///
+    /// `$RUNEBENDER_MODELS`, then the config file, then
+    /// `~/.runebender/models`. The variable wins because a setting for
+    /// one run has to beat a setting meant for every run.
+    ///
     /// `$RUNEBENDER_MODELS`, else `~/.runebender/models`. A model is a
     /// directory holding `config.json`, so dropping one in is the whole
     /// installation step: no rebuild, no account, no file picker.
     pub(crate) fn models_dir() -> Option<PathBuf> {
         if let Some(dir) = std::env::var_os("RUNEBENDER_MODELS") {
             return Some(PathBuf::from(dir));
+        }
+        if let Some(dir) = CONFIG.get().and_then(|c| c.models.clone()) {
+            return Some(dir);
         }
         std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".runebender/models"))
     }
@@ -10819,9 +10827,32 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// The config file's contents, read once before the window opens.
+///
+/// A `OnceLock` rather than a re-read per call: the file is read at
+/// startup and changing it means restarting, which is the same promise
+/// the theme menu makes.
+static CONFIG: std::sync::OnceLock<config::Config> = std::sync::OnceLock::new();
+
 fn main() {
     #[cfg(target_family = "wasm")]
     gpui_platform::web_init();
+
+    // Settings before anything draws, so the first frame is already in
+    // the chosen theme rather than flashing the default first.
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let config = config::load();
+        if let Some(theme) = config.theme.as_deref() {
+            if !t::set_theme(theme) {
+                eprintln!(
+                    "runebender: config names theme {theme:?}, which does not exist; \
+                     using the default"
+                );
+            }
+        }
+        CONFIG.set(config).ok();
+    }
 
     // `runebender-gpui --fonts` lists the families gpui can resolve
     // and exits without opening a window. A family it cannot resolve

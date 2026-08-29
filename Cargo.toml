@@ -59,6 +59,8 @@ parley = { version = "0.8", default-features = false, features = ["std", "system
 # Local model inference: outline models over font sources. Pinned like
 # every other git dependency so a fresh resolve lands on the same
 # graph.
+toml = "0.8"
+
 [dependencies.font-ml]
 git = "https://github.com/eliheuer/font-ml"
 rev = "8b89ef0"
