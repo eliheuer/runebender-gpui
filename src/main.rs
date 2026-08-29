@@ -7,6 +7,7 @@
 
 mod blur;
 mod canvas;
+mod journal;
 #[cfg(test)]
 mod tests;
 mod commands;
@@ -8499,6 +8500,17 @@ impl Workspace {
             })
         });
         self.editor.selected.clear();
+        // A model's output is the edit most worth having a record of:
+        // it is the one nobody watched being made.
+        self.journal(
+            "bolden with model",
+            Some(index),
+            Some(format!(
+                "{moved}/{} points moved, advance {:+}",
+                result.deltas.len(),
+                result.advance_delta
+            )),
+        );
         self.status_note = Some(
             format!(
                 "Boldened {name}: {moved}/{} points moved, advance {:+}. Undo to reject.",
@@ -8686,6 +8698,20 @@ impl Workspace {
         *MEASURE_MENU.lock().expect("measure menu") = self.measure_opts;
         cx.set_menus(app_menus());
         cx.notify();
+    }
+
+    /// Note an edit in the session journal, if one is configured.
+    ///
+    /// Resolving the glyph name here rather than at each call site
+    /// keeps the callers to one line, which is the only way a log like
+    /// this stays in step with the code.
+    pub(crate) fn journal(&self, op: &str, index: Option<usize>, detail: Option<String>) {
+        let name = index.and_then(|i| self.font().map(|f| f.glyphs[i].name.to_string()));
+        journal::record(journal::Entry {
+            op,
+            glyph: name.as_deref(),
+            detail,
+        });
     }
 
     fn push_undo_snapshot(&mut self, index: usize) {

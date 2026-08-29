@@ -2474,6 +2474,7 @@ impl Workspace {
         if !changed {
             self.editor.undo.pop();
         } else {
+            self.journal("remove overlap", Some(index), None);
             self.editor.selected.clear();
         }
     }
@@ -2797,6 +2798,8 @@ impl Workspace {
         let changed = self.font_mut().is_some_and(|f| f.decompose(index));
         if !changed {
             self.editor.undo.pop();
+        } else {
+            self.journal("decompose", Some(index), None);
         }
     }
 
