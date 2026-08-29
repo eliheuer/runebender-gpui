@@ -86,11 +86,55 @@ keeping `coi-serviceworker.min.js` and adding its script tag to the
 top of `<head>` — GitHub Pages cannot send the COOP/COEP headers
 that shared memory requires, so the worker sets them client-side.
 
+## Unix-shaped
+
+Font editors are usually one program that owns everything: the
+drawing, the scripting, the automation, and lately the assistant.
+Runebender is built the other way round, as separable parts that talk
+through files.
+
+```
+runebender-core   every operation that changes a font, no interface
+runebender        the same operations from a shell, --json, exit codes
+runebender-gpui   a window that draws them
+font-ml           local models over the same sources
+```
+
+The interface between them is the UFO on disk. The editor reloads what
+changes. A script, a build, or an agent can work on a font while you
+have it open, and you watch the edits land.
+
+Three consequences follow, and they are the whole argument:
+
+- **Everything you already have keeps working.** git, fontTools,
+  fontc, your CI, your own scripts. Nothing has to be ported inside.
+- **The shell reaches what the window reaches**, because both call
+  the same crate. A check in a build and a check in a window cannot
+  disagree.
+- **Exit codes mean something.** 0 ok, 1 findings, 2 usage, 4 failed,
+  so a pipeline can branch without parsing prose.
+
+```sh
+runebender check --a Light.ufo --b Bold.ufo || echo "masters drifted"
+runebender --json color Font.ufo | jq '.findings[] | select(.reads=="darker")'
+```
+
+Being exact about the claim: `runebender` takes paths rather than
+stdin, and writes reports rather than fonts. You cannot pipe one
+invocation into the next. A font source is a directory, not a stream.
+And a window is not a filter. What holds is that the parts are
+separable, the interface is a file, and nothing is trapped inside the
+application.
+
 ## Working with AI
+
+This is also the AI story, and it is the same story.
 
 Runebender stores no credentials, calls no model service, and has no
 assistant in the window. That is deliberate, and it is what makes
-agents easy to use with it: the seam is the filesystem.
+agents easy to use with it: the seam is the filesystem. An agent is
+just another program that edits files, which is what agents are good
+at.
 
 An agent edits the UFO and designspace files on disk. The editor
 reloads what changed. Nothing has to be integrated, and you keep
