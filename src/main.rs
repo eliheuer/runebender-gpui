@@ -8422,6 +8422,39 @@ impl Workspace {
     }
 
     /// Run the model over the open glyph and install what it predicts.
+    /// The stem weight the other master already carries, and the
+    /// height it was measured at.
+    ///
+    /// Taken from letters that are mostly stem, and only from ones
+    /// actually drawn there, so a master part-way through still gives
+    /// a usable answer. `None` when there is one master, or when none
+    /// of the reference letters is drawn yet.
+    fn model_weight_target(&self) -> Option<(f64, f64)> {
+        let project = self.project.as_ref()?;
+        if project.masters.len() < 2 {
+            return None;
+        }
+        let other = if project.active == 0 {
+            project.masters.len() - 1
+        } else {
+            0
+        };
+        let font = &project.masters[other].font;
+        let height = font
+            .font_info
+            .x_height
+            .map(|v| v / 2.0)
+            .or_else(|| font.font_info.units_per_em.map(|v| *v * 0.25))
+            .unwrap_or(256.0);
+        let paths: Vec<_> = ["n", "i", "l", "h", "m", "u", "H", "I", "E"]
+            .iter()
+            .filter_map(|n| font.get_glyph(*n))
+            .filter_map(font_ml::ufo::glyph_ops)
+            .map(|ops| font_ml::stems::ops_to_path(&ops))
+            .collect();
+        font_ml::stems::reference_stem(&paths, height).map(|stem| (stem, height))
+    }
+
     fn apply_bolden(&mut self, index: usize, dir: &std::path::Path) {
         let checkpoint = match font_ml::Checkpoint::open(dir) {
             Ok(c) => c,
@@ -8457,22 +8490,49 @@ impl Workspace {
             .delta_center
             .map(|c| (c[0], c[1]))
             .unwrap_or((0, 0));
-        let result = match font_ml::bolden::bolden(
-            model.as_ref(),
-            &name,
-            unicode,
-            advance,
-            &ops,
-            center,
-            checkpoint.config.trim_close,
-            self.model_strength,
-        ) {
+        let mut result_override = None;
+        let predict = |strength: f64| {
+            font_ml::bolden::bolden(
+                model.as_ref(),
+                &name,
+                unicode,
+                advance,
+                &ops,
+                center,
+                checkpoint.config.trim_close,
+                strength,
+            )
+        };
+        let result = match predict(self.model_strength) {
             Ok(r) => r,
             Err(e) => {
                 self.status_note = Some(format!("Bolden: {e}").into());
                 return;
             }
         };
+        // The model is better at shape than at weight, so where the
+        // other master is drawn far enough to say what weight it
+        // carries, land on that instead of on the slider. Measured on
+        // Virtua this took stems from 46 units out to 40, and glyphs
+        // at the right weight from 1 in 11 to 5.
+        let mut fitted_to: Option<f64> = None;
+        if let Some((target, height)) = self.model_weight_target() {
+            let want = font_ml::stems::fit_strength(
+                &font_ml::stems::ops_to_path(&result.from),
+                &font_ml::stems::ops_to_path(&result.to),
+                target,
+                height,
+            );
+            if let Some(want) = want.filter(|s| s.is_finite() && *s > 0.25 && *s < 4.0) {
+                if let Ok(refit) = predict(want) {
+                    if refit.is_compatible() {
+                        fitted_to = Some(want);
+                        result_override = Some(refit);
+                    }
+                }
+            }
+        }
+        let result = result_override.unwrap_or(result);
         // The encoding guarantees this; assert it before writing to a
         // font rather than take it on trust.
         if !result.is_compatible() {
@@ -8514,16 +8574,25 @@ impl Workspace {
             "bolden with model",
             Some(index),
             Some(format!(
-                "{moved}/{} points moved, advance {:+}",
+                "{moved}/{} points moved, advance {:+}{}",
                 result.deltas.len(),
-                result.advance_delta
+                result.advance_delta,
+                match fitted_to {
+                    Some(s) => format!(", strength fitted to {s:.2}"),
+                    None => String::new(),
+                }
             )),
         );
         self.status_note = Some(
             format!(
-                "Boldened {name}: {moved}/{} points moved, advance {:+}. Undo to reject.",
+                "Boldened {name}: {moved}/{} points moved, advance {:+}{}. \
+                 Undo to reject.",
                 result.deltas.len(),
-                result.advance_delta
+                result.advance_delta,
+                match fitted_to {
+                    Some(s) => format!(", fitted to {s:.2}x"),
+                    None => String::new(),
+                }
             )
             .into(),
         );
