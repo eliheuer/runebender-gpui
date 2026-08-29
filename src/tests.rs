@@ -1969,13 +1969,16 @@ mod theme_geometry_tests {
     fn geometry_changes_with_the_theme() {
         let _guard = THEME.lock().unwrap_or_else(|e| e.into_inner());
         t::set_theme("dark");
-        let (dark_r, dark_s) = (t::radius(), t::stroke());
+        let dark_r = t::radius();
         t::set_theme("gray");
-        let (gray_r, gray_s) = (t::radius(), t::stroke());
-        assert_ne!(dark_r, gray_r, "Gray should be square");
-        assert_ne!(dark_s, gray_s, "Gray should draw a heavier rule");
-        assert_eq!(gray_r, gpui::px(0.0));
-        assert_eq!(gray_s, gpui::px(2.0));
+        assert_ne!(dark_r, t::radius(), "Gray should be square");
+        assert_eq!(t::radius(), gpui::px(0.0));
+        assert_eq!(t::radius_control(), gpui::px(0.0));
+        // Gray changes the corners and not the rule weight. A theme
+        // naming only part of the geometry is the case the optional
+        // fields exist for, so it is worth pinning.
+        assert_eq!(t::stroke(), gpui::px(1.0), "an editor rule is a hairline");
+        assert_eq!(t::stroke_emphasis(), gpui::px(2.0));
         t::set_theme(t::DEFAULT_THEME);
     }
 }
