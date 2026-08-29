@@ -179,15 +179,32 @@ fn ui_font_family(cx: &gpui::App) -> gpui::SharedString {
 
 /// The uncached lookup. Runs once.
 fn resolve_ui_font_family(cx: &gpui::App) -> gpui::SharedString {
+    // Each platform's own interface font first, then the families that
+    // are actually installed on that platform, then a last-resort
+    // shared one. Ordered per platform rather than in one list, or a
+    // Linux session walks past four macOS families it will never have
+    // before reaching anything it does.
+    #[cfg(target_os = "macos")]
     const PREFERRED: &[&str] = &[
         ".SystemUIFont",
         "SF Pro Text",
         "SF Pro Display",
         "Helvetica Neue",
         "Helvetica",
-        "Segoe UI",
+        "Arial",
+    ];
+    #[cfg(target_os = "windows")]
+    const PREFERRED: &[&str] = &["Segoe UI Variable Text", "Segoe UI", "Inter", "Arial"];
+    // Cantarell ships with GNOME, Noto Sans with most distributions,
+    // DejaVu Sans is the long-standing fallback, and Liberation Sans
+    // is the metric-compatible stand-in for Arial.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    const PREFERRED: &[&str] = &[
         "Inter",
+        "Cantarell",
+        "Noto Sans",
         "DejaVu Sans",
+        "Liberation Sans",
         "Arial",
     ];
     let available = cx.text_system().all_font_names();
