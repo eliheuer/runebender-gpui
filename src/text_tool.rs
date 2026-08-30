@@ -89,8 +89,8 @@ impl Workspace {
         let Some(font) = self.project.as_ref().map(|p| p.active_font()) else {
             return;
         };
-        let inventory = runebender_core::text::TextGlyphInventory::from_font(&font.font);
-        let kerning = runebender_core::text::TextKerningModel::from_font(&font.font);
+        let inventory = runebender_core::text::buffer::TextGlyphInventory::from_font(&font.font);
+        let kerning = runebender_core::text::buffer::TextKerningModel::from_font(&font.font);
         let edit_widths: Vec<(usize, String, Option<char>, f64)> = (0..self.edit_buffer.len())
             .filter_map(|i| {
                 let sort = self.edit_buffer.sort(i)?;
@@ -199,7 +199,7 @@ impl Workspace {
             .font
             .get_glyph(font.glyphs[index].name.as_ref())
             .and_then(|g| {
-                runebender_core::segment_ops::nearest_segment_with_t(
+                runebender_core::outline::segment_ops::nearest_segment_with_t(
                     g,
                     kurbo::Point::new(dx, dy),
                     tolerance,
@@ -223,8 +223,12 @@ impl Workspace {
             .font
             .get_glyph(font.glyphs[index].name.as_ref())
             .and_then(|g| {
-                runebender_core::glyph_ops::component_at(&font.font, g, kurbo::Point::new(dx, dy))
-                    .map(|ci| g.components[ci].base.to_string())
+                runebender_core::outline::glyph_ops::component_at(
+                    &font.font,
+                    g,
+                    kurbo::Point::new(dx, dy),
+                )
+                .map(|ci| g.components[ci].base.to_string())
             });
         if let Some(base_name) = base
             && let Some(&target) = font.name_map.get(&base_name)

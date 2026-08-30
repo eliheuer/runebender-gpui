@@ -111,7 +111,7 @@ impl Workspace {
     }
 
     pub(crate) fn category_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        use runebender_core::sidebar as sb;
+        use runebender_core::ui::sidebar as sb;
         let counts = self.sidebar_counts.as_ref();
 
         // Categories: expandable rows with the web's subfilters.
@@ -1294,7 +1294,7 @@ impl Workspace {
     /// to cross-highlight its cluster; double-click a glyph chip to
     /// open that glyph for editing inside the shaped run.
     pub(crate) fn shaping_section(&self, cx: &mut Context<Self>) -> gpui::Div {
-        use runebender_core::text::{TextDirection, TextSortKind};
+        use runebender_core::text::buffer::{TextDirection, TextSortKind};
         let count = self.edit_buffer.len();
         if count < 2 {
             return self.section(
@@ -1751,7 +1751,7 @@ impl Workspace {
                                         .font_mut()
                                         .and_then(|f| {
                                             f.edit_glyph(index, |g| {
-                                                runebender_core::glyph_ops::reverse_contours(
+                                                runebender_core::outline::glyph_ops::reverse_contours(
                                                     g, &selected,
                                                 )
                                             })
@@ -2522,11 +2522,12 @@ impl Workspace {
             .map(|c| format!("{:04X}", c as u32))
             .unwrap_or_default()
             .into();
-        let group_l = runebender_core::glyph_ops::kern_group(&font.font, entry.name.as_ref(), true)
-            .map(|g| g.as_str().replace("public.kern1.", ""))
-            .unwrap_or_default();
+        let group_l =
+            runebender_core::outline::glyph_ops::kern_group(&font.font, entry.name.as_ref(), true)
+                .map(|g| g.as_str().replace("public.kern1.", ""))
+                .unwrap_or_default();
         let group_r =
-            runebender_core::glyph_ops::kern_group(&font.font, entry.name.as_ref(), false)
+            runebender_core::outline::glyph_ops::kern_group(&font.font, entry.name.as_ref(), false)
                 .map(|g| g.as_str().replace("public.kern2.", ""))
                 .unwrap_or_default();
 
@@ -3484,7 +3485,7 @@ impl Workspace {
         // choose before selecting, and an empty panel that appears and
         // disappears makes the sidebar jump.
         {
-            use runebender_core::path::Quadrant;
+            use runebender_core::outline::path::Quadrant;
             let field = |label: &'static str, input: &gpui::Entity<widgets::input::InputState>| {
                 div()
                     .flex()
@@ -3594,7 +3595,7 @@ impl Workspace {
                 .map(|c| {
                     (
                         c.base.to_string(),
-                        !runebender_core::composites::component_alignment_disabled(c),
+                        !runebender_core::document::composites::component_alignment_disabled(c),
                     )
                 });
             if let Some((base, aligned)) = info {
@@ -3864,45 +3865,46 @@ impl Workspace {
         };
         // Each session tab reads like Glyphs: the buffer's text, with
         // /name for unencoded glyphs, trimmed to fit.
-        let session_label =
-            |buffer: &runebender_core::text::TextBuffer, fallback: &str| -> SharedString {
-                let mut label = String::new();
-                for i in 0..buffer.len() {
-                    let Some(sort) = buffer.sort(i) else {
-                        continue;
-                    };
-                    if sort.is_absorbed() {
-                        continue;
-                    }
-                    match &sort.kind {
-                        runebender_core::text::TextSortKind::Glyph {
-                            codepoint, name, ..
-                        } => match codepoint {
-                            Some(c) => label.push(*c),
-                            None => {
-                                label.push('/');
-                                label.push_str(name);
-                            }
-                        },
-                        _ => label.push(' '),
-                    }
-                    if label.chars().count() > 24 {
-                        label.truncate(
-                            label
-                                .char_indices()
-                                .nth(24)
-                                .map(|(i, _)| i)
-                                .unwrap_or(label.len()),
-                        );
-                        label.push('…');
-                        break;
-                    }
+        let session_label = |buffer: &runebender_core::text::buffer::TextBuffer,
+                             fallback: &str|
+         -> SharedString {
+            let mut label = String::new();
+            for i in 0..buffer.len() {
+                let Some(sort) = buffer.sort(i) else {
+                    continue;
+                };
+                if sort.is_absorbed() {
+                    continue;
                 }
-                if label.is_empty() {
-                    label = fallback.to_string();
+                match &sort.kind {
+                    runebender_core::text::buffer::TextSortKind::Glyph {
+                        codepoint, name, ..
+                    } => match codepoint {
+                        Some(c) => label.push(*c),
+                        None => {
+                            label.push('/');
+                            label.push_str(name);
+                        }
+                    },
+                    _ => label.push(' '),
                 }
-                label.into()
-            };
+                if label.chars().count() > 24 {
+                    label.truncate(
+                        label
+                            .char_indices()
+                            .nth(24)
+                            .map(|(i, _)| i)
+                            .unwrap_or(label.len()),
+                    );
+                    label.push('…');
+                    break;
+                }
+            }
+            if label.is_empty() {
+                label = fallback.to_string();
+            }
+            label.into()
+        };
         let labels: Vec<SharedString> = self
             .sessions
             .iter()

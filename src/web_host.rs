@@ -233,8 +233,9 @@ pub fn project_from_fetched(fetched: &FetchedWorkspace) -> Result<(Project, Vec<
         if files.is_empty() {
             return Err(format!("no files under {prefix}"));
         }
-        let ufo =
-            runebender_core::font_memory::ufo_from_files(files.iter().map(|(p, b)| (*p, *b)))?;
+        let ufo = runebender_core::document::font_memory::ufo_from_files(
+            files.iter().map(|(p, b)| (*p, *b)),
+        )?;
         let mut model = Master::from_font(ufo.font, PathBuf::from(prefix.trim_end_matches('/')));
         model.glif_paths = ufo.glif_paths;
         prefixes.borrow_mut().push(prefix);
@@ -242,7 +243,7 @@ pub fn project_from_fetched(fetched: &FetchedWorkspace) -> Result<(Project, Vec<
     };
 
     let project = if let Some(ds_text) = &fetched.designspace_text {
-        let doc = runebender_core::font_memory::designspace_from_str(ds_text)?;
+        let doc = runebender_core::document::font_memory::designspace_from_str(ds_text)?;
         let ds_dir = match fetched.entry.rfind('/') {
             Some(i) => &fetched.entry[..=i],
             None => "",
@@ -289,7 +290,7 @@ pub fn demo_project() -> Result<Project, String> {
         .get_file("VirtuaGrotesk.designspace")
         .and_then(|f| f.contents_utf8())
         .ok_or("embedded designspace missing")?;
-    let doc = runebender_core::font_memory::designspace_from_str(ds_text)?;
+    let doc = runebender_core::document::font_memory::designspace_from_str(ds_text)?;
     let mut project = Project::from_designspace(doc, |filename| {
         let ufo = DEMO
             .get_dir(filename)
@@ -310,7 +311,7 @@ pub fn demo_project() -> Result<Project, String> {
             }
         }
         walk(ufo, "", &mut files);
-        let font = runebender_core::font_memory::font_from_files(
+        let font = runebender_core::document::font_memory::font_from_files(
             files.iter().map(|(p, b)| (p.as_str(), *b)),
         )?;
         Ok(Master::from_font(font, PathBuf::from(filename)))

@@ -229,7 +229,7 @@ impl Workspace {
                 let Some(rel) = master.glif_paths.get(name) else {
                     continue;
                 };
-                match runebender_core::font_memory::glif_bytes(glyph) {
+                match runebender_core::document::font_memory::glif_bytes(glyph) {
                     Ok(bytes) => to_save.push(web_host::SaveFile {
                         path: format!("{prefix}{rel}"),
                         bytes,
@@ -241,7 +241,7 @@ impl Workspace {
                 }
             }
             if master.kerning_dirty {
-                match runebender_core::font_memory::kerning_plist_bytes(&master.font) {
+                match runebender_core::document::font_memory::kerning_plist_bytes(&master.font) {
                     Ok(bytes) => to_save.push(web_host::SaveFile {
                         path: format!("{prefix}kerning.plist"),
                         bytes,

@@ -594,7 +594,7 @@ impl Workspace {
             cell_slider: None,
             mode: start_mode,
             editor: EditorState::new(),
-            edit_buffer: runebender_core::text::TextBuffer::new(),
+            edit_buffer: runebender_core::text::buffer::TextBuffer::new(),
             collapsed_sections: std::collections::HashSet::new(),
             reference_layers: std::collections::HashSet::new(),
             show_all_masters: false,

@@ -111,7 +111,7 @@ impl Workspace {
                 .get(project.active)
                 .and_then(|loc| loc.get(&axis.name).copied())
                 .map(|normalized| {
-                    runebender_core::var_model::denormalize_value(
+                    runebender_core::document::var_model::denormalize_value(
                         normalized,
                         axis.min,
                         axis.default,
@@ -137,7 +137,7 @@ impl Workspace {
                         };
                         project.location.insert(
                             axis_info.name.clone(),
-                            runebender_core::var_model::normalize_value(
+                            runebender_core::document::var_model::normalize_value(
                                 raw,
                                 axis_info.min,
                                 axis_info.default,
@@ -164,7 +164,7 @@ impl Workspace {
     /// as dragging a slider there.
     pub(crate) fn go_to_location(
         &mut self,
-        target: &runebender_core::var_model::Location,
+        target: &runebender_core::document::var_model::Location,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -185,7 +185,7 @@ impl Workspace {
                 .filter_map(|(axis_index, slider)| {
                     let axis = project.axes.get(*axis_index)?;
                     let normalized = target.get(&axis.name).copied().unwrap_or(0.0);
-                    let raw = runebender_core::var_model::denormalize_value(
+                    let raw = runebender_core::document::var_model::denormalize_value(
                         normalized,
                         axis.min,
                         axis.default,

@@ -9,8 +9,8 @@
 use std::sync::RwLock;
 
 use gpui::Rgba;
-use runebender_core::theme::ColorRgba;
-use runebender_core::theme_oklch::{self, Theme};
+use runebender_core::ui::theme::ColorRgba;
+use runebender_core::ui::theme_oklch::{self, Theme};
 
 /// The themes in the shared token file, in menu order.
 pub const THEMES: [(&str, &str); 4] = [
@@ -97,12 +97,12 @@ pub fn mark_paint(label: Option<&str>) -> Option<MarkPaint> {
     let color = mark_color(label?)?;
     let theme = theme();
     Some(match theme.mark_style {
-        runebender_core::theme_oklch::MarkStyle::Fill => MarkPaint {
+        runebender_core::ui::theme_oklch::MarkStyle::Fill => MarkPaint {
             bg: Some(color),
             border: theme.mark_outline.map(c).unwrap_or_else(cell_border),
             ink: theme.mark_ink.map(c).unwrap_or_else(text),
         },
-        runebender_core::theme_oklch::MarkStyle::Border => MarkPaint {
+        runebender_core::ui::theme_oklch::MarkStyle::Border => MarkPaint {
             bg: None,
             border: color,
             ink: color,
@@ -224,12 +224,12 @@ pub fn ghost() -> Rgba {
 /// Zoom-dependent design grid, faded by the level's ramp-in alpha
 /// (the web's DESIGN_GRID_FINE/COARSE, shared constants in core).
 pub fn design_grid_fine(alpha: f32) -> Rgba {
-    let mut rgba = c(runebender_core::theme::design_grid::FINE);
+    let mut rgba = c(runebender_core::ui::theme::design_grid::FINE);
     rgba.a *= alpha;
     rgba
 }
 pub fn design_grid_coarse(alpha: f32) -> Rgba {
-    let mut rgba = c(runebender_core::theme::design_grid::COARSE);
+    let mut rgba = c(runebender_core::ui::theme::design_grid::COARSE);
     rgba.a *= alpha;
     rgba
 }

@@ -175,7 +175,8 @@ impl Workspace {
         };
         let mut renamed = false;
         for master in project.masters.iter_mut() {
-            if runebender_core::glyph_ops::rename_glyph(&mut master.font, &old, &new_name) {
+            if runebender_core::outline::glyph_ops::rename_glyph(&mut master.font, &old, &new_name)
+            {
                 master.dirty = true;
                 master.kerning_dirty = true;
                 master.modified_glyphs.remove(&old);
@@ -237,7 +238,7 @@ impl Workspace {
             if let Some(glyph_index) = master.name_map.get(&name).copied() {
                 let changed = master
                     .edit_glyph(glyph_index, |g| {
-                        runebender_core::glyph_ops::set_glyph_unicode(g, text)
+                        runebender_core::outline::glyph_ops::set_glyph_unicode(g, text)
                     })
                     .unwrap_or(false);
                 if changed {
@@ -266,8 +267,12 @@ impl Workspace {
             return;
         };
         for master in project.masters.iter_mut() {
-            if runebender_core::glyph_ops::set_kern_group(&mut master.font, &name, first_side, text)
-            {
+            if runebender_core::outline::glyph_ops::set_kern_group(
+                &mut master.font,
+                &name,
+                first_side,
+                text,
+            ) {
                 master.dirty = true;
                 master.kerning_dirty = true;
             }
@@ -296,10 +301,10 @@ impl Workspace {
             .codepoint
             .map(|c| format!("{:04X}", c as u32))
             .unwrap_or_default();
-        let group_l = runebender_core::glyph_ops::kern_group(&font.font, &name, true)
+        let group_l = runebender_core::outline::glyph_ops::kern_group(&font.font, &name, true)
             .map(|g| g.as_str().replace("public.kern1.", ""))
             .unwrap_or_default();
-        let group_r = runebender_core::glyph_ops::kern_group(&font.font, &name, false)
+        let group_r = runebender_core::outline::glyph_ops::kern_group(&font.font, &name, false)
             .map(|g| g.as_str().replace("public.kern2.", ""))
             .unwrap_or_default();
         let set = |entity: &gpui::Entity<widgets::input::InputState>,
@@ -495,8 +500,8 @@ impl Workspace {
                     .and_then(|g| g.codepoints.iter().next())
                     .is_some_and(|c| {
                         matches!(
-                            runebender_core::category::GlyphCategory::from_codepoint(c),
-                            runebender_core::category::GlyphCategory::Mark
+                            runebender_core::analysis::category::GlyphCategory::from_codepoint(c),
+                            runebender_core::analysis::category::GlyphCategory::Mark
                         )
                     })
             };
@@ -638,7 +643,7 @@ impl Workspace {
     /// Compile-check a features.fea against the active master's
     /// glyph set, the same build the text engine shapes with.
     pub(crate) fn check_features_compile(font: &Master, fea: &str) -> Result<(), String> {
-        use runebender_core::shape::{ShapingFont, ShapingGlyph, ShapingSource};
+        use runebender_core::text::shape::{ShapingFont, ShapingGlyph, ShapingSource};
         let glyphs: Vec<ShapingGlyph> = std::iter::once(ShapingGlyph {
             name: ".notdef".into(),
             advance: 0.0,
@@ -972,8 +977,8 @@ impl Workspace {
     /// keeps only ink.)
     pub(crate) fn measured_dimensions(&self, name: &str) -> (Option<i64>, Option<i64>) {
         use kurbo::Shape as _;
-        use runebender_core::measure::{self, MeasureKind};
-        use runebender_core::model::workspace::Contour as WContour;
+        use runebender_core::analysis::measure::{self, MeasureKind};
+        use runebender_core::outline::path::hyper_model::Contour as WContour;
         let Some(font) = self.font() else {
             return (None, None);
         };
@@ -983,12 +988,12 @@ impl Workspace {
         if g.contours.is_empty() {
             return (None, None);
         }
-        let paths: Vec<runebender_core::path::Path> = g
+        let paths: Vec<runebender_core::outline::path::Path> = g
             .contours
             .iter()
-            .map(|c| runebender_core::path::Path::from_contour(&WContour::from_norad(c)))
+            .map(|c| runebender_core::outline::path::Path::from_contour(&WContour::from_norad(c)))
             .collect();
-        let filled = runebender_core::glyph_paths::glyph_to_bezpath(g, &font.font);
+        let filled = runebender_core::outline::glyph_paths::glyph_to_bezpath(g, &font.font);
         let black = |m: &measure::Measurement| {
             let mid = kurbo::Point::new((m.a.x + m.b.x) / 2.0, (m.a.y + m.b.y) / 2.0);
             filled.contains(mid)

@@ -39,7 +39,8 @@ impl Workspace {
                 let category = entry
                     .codepoint
                     .map(|c| {
-                        runebender_core::category::GlyphCategory::from_codepoint(c).display_name()
+                        runebender_core::analysis::category::GlyphCategory::from_codepoint(c)
+                            .display_name()
                     })
                     .unwrap_or("Unencoded");
                 format!("{category} · {:.0}", entry.advance).into()
@@ -244,7 +245,7 @@ impl Workspace {
                 None => (String::new(), String::new()),
             };
             let group = |left: bool| {
-                runebender_core::glyph_ops::kern_group(&font.font, name.as_ref(), left)
+                runebender_core::outline::glyph_ops::kern_group(&font.font, name.as_ref(), left)
                     .map(|g| {
                         g.as_str()
                             .replace("public.kern1.", "")
@@ -255,7 +256,7 @@ impl Workspace {
             let category = entry
                 .codepoint
                 .map(|c| {
-                    runebender_core::category::GlyphCategory::from_codepoint(c)
+                    runebender_core::analysis::category::GlyphCategory::from_codepoint(c)
                         .display_name()
                         .to_string()
                 })
@@ -733,9 +734,9 @@ impl Workspace {
                 read_masks(g)
                     .into_iter()
                     .filter_map(|ci| {
-                        g.contours
-                            .get(ci)
-                            .map(|c| Arc::new(runebender_core::glyph_paths::contour_to_bezpath(c)))
+                        g.contours.get(ci).map(|c| {
+                            Arc::new(runebender_core::outline::glyph_paths::contour_to_bezpath(c))
+                        })
                     })
                     .collect()
             })
@@ -831,18 +832,18 @@ impl Workspace {
         };
         // Curve overlays: comb strips and continuity rings, computed
         // in design space from the shared analyses in core.
-        let comb_strips: Vec<Vec<runebender_core::curve::CombSample>> =
+        let comb_strips: Vec<Vec<runebender_core::analysis::curve::CombSample>> =
             if self.curve_comb && self.editor.tool != Tool::Preview {
                 font.font
                     .get_glyph(entry.name.as_ref())
                     .map(|g| {
-                        let cubics = runebender_core::curve::cubics_from_norad(g);
-                        let maxk = runebender_core::curve::max_curvature(&cubics);
+                        let cubics = runebender_core::analysis::curve::cubics_from_norad(g);
+                        let maxk = runebender_core::analysis::curve::max_curvature(&cubics);
                         if maxk <= 1e-12 {
                             (Vec::new(), 0.0)
                         } else {
                             (
-                                runebender_core::curve::curvature_comb(
+                                runebender_core::analysis::curve::curvature_comb(
                                     &cubics,
                                     1.0,
                                     74.0 / maxk,
@@ -868,11 +869,11 @@ impl Workspace {
                 font.font
                     .get_glyph(entry.name.as_ref())
                     .map(|g| {
-                        let cubics = runebender_core::curve::cubics_from_norad(g);
-                        runebender_core::curve::node_continuity(&cubics)
+                        let cubics = runebender_core::analysis::curve::cubics_from_norad(g);
+                        runebender_core::analysis::curve::node_continuity(&cubics)
                             .into_iter()
                             .filter_map(|nc| {
-                                use runebender_core::curve::GLevel;
+                                use runebender_core::analysis::curve::GLevel;
                                 let color = match nc.level {
                                     GLevel::Corner => return None,
                                     GLevel::G2 | GLevel::G3 => t::continuity_g2(),
@@ -899,7 +900,7 @@ impl Workspace {
             font.font
                 .get_glyph(entry.name.as_ref())
                 .map(|g| {
-                    runebender_core::segment_ops::segments(g)
+                    runebender_core::outline::segment_ops::segments(g)
                         .into_iter()
                         .map(|hit| hit.seg.bounding_box())
                         .filter(|b| b.width() >= 1.0 || b.height() >= 1.0)
@@ -910,17 +911,19 @@ impl Workspace {
             Vec::new()
         };
         let measure_hud: Option<(
-            Vec<runebender_core::measure::ColoredStroke>,
-            Vec<runebender_core::measure::Measurement>,
-            Option<runebender_core::measure::SideBearings>,
+            Vec<runebender_core::analysis::measure::ColoredStroke>,
+            Vec<runebender_core::analysis::measure::Measurement>,
+            Option<runebender_core::analysis::measure::SideBearings>,
         )> = if measure_opts.any() && self.editor.tool != Tool::Preview {
             font.font.get_glyph(entry.name.as_ref()).map(|g| {
-                use runebender_core::measure;
-                use runebender_core::model::workspace::Contour as WContour;
-                let paths: Vec<runebender_core::path::Path> = g
+                use runebender_core::analysis::measure;
+                use runebender_core::outline::path::hyper_model::Contour as WContour;
+                let paths: Vec<runebender_core::outline::path::Path> = g
                     .contours
                     .iter()
-                    .map(|c| runebender_core::path::Path::from_contour(&WContour::from_norad(c)))
+                    .map(|c| {
+                        runebender_core::outline::path::Path::from_contour(&WContour::from_norad(c))
+                    })
                     .collect();
                 let strokes = if measure_opts.colorize {
                     measure::colored_strokes(&paths)
@@ -950,7 +953,11 @@ impl Workspace {
                         .layers
                         .get(&layer)
                         .and_then(|l| l.get_glyph(entry.name.as_ref()))
-                        .map(|g| Arc::new(runebender_core::glyph_paths::contours_to_bezpath(g)))
+                        .map(|g| {
+                            Arc::new(runebender_core::outline::glyph_paths::contours_to_bezpath(
+                                g,
+                            ))
+                        })
                 })
             })
             .flatten();
@@ -969,7 +976,9 @@ impl Workspace {
                         .get(&layer)?
                         .get_glyph(entry.name.as_ref())?;
                     Some((
-                        Arc::new(runebender_core::glyph_paths::contours_to_bezpath(glyph)),
+                        Arc::new(runebender_core::outline::glyph_paths::contours_to_bezpath(
+                            glyph,
+                        )),
                         gpui::Rgba {
                             r: c[0] as f32,
                             g: c[1] as f32,
@@ -989,7 +998,11 @@ impl Workspace {
             .iter()
             .filter(|l| !l.is_default() && self.visible_glyph_layers.contains(l.name().as_str()))
             .filter_map(|l| l.get_glyph(entry.name.as_ref()))
-            .map(|g| Arc::new(runebender_core::glyph_paths::contours_to_bezpath(g)))
+            .map(|g| {
+                Arc::new(runebender_core::outline::glyph_paths::contours_to_bezpath(
+                    g,
+                ))
+            })
             .collect();
         let reference_path: Option<Arc<BezPath>> = self
             .reference_glyph
@@ -1037,7 +1050,7 @@ impl Workspace {
                     .font
                     .get_glyph(entry.name.as_ref())
                     .map(|g| {
-                        runebender_core::knife::knife_hit_points(
+                        runebender_core::outline::knife::knife_hit_points(
                             g,
                             kurbo::Point::new(start.0, start.1),
                             kurbo::Point::new(current.0, current.1),
@@ -2444,7 +2457,7 @@ impl Workspace {
                                 // with outward arrowheads, and labels that
                                 // dodge each other. Fades in with zoom.
                                 if let Some((strokes, measurements, sb)) = &measure_hud {
-                                    use runebender_core::measure::{self, MeasureKind};
+                                    use runebender_core::analysis::measure::{self, MeasureKind};
                                     let t32 = (((zoom - 0.30) / 0.40).clamp(0.0, 1.0)) as f32;
                                     if t32 > 0.0 {
                                         let fade = |mut c: gpui::Rgba, mul: f32| {

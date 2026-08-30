@@ -102,7 +102,7 @@ impl Workspace {
                 .font()
                 .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
                 .and_then(|g| {
-                    runebender_core::segment_ops::nearest_segment_with_t(
+                    runebender_core::outline::segment_ops::nearest_segment_with_t(
                         g,
                         kurbo::Point::new(adx, ady),
                         radius,
@@ -115,7 +115,9 @@ impl Workspace {
                     .font_mut()
                     .and_then(|f| {
                         f.edit_glyph(index, |g| {
-                            runebender_core::segment_ops::convert_line_to_curve(g, &seg_hit)
+                            runebender_core::outline::segment_ops::convert_line_to_curve(
+                                g, &seg_hit,
+                            )
                         })
                     })
                     .flatten();
@@ -368,7 +370,7 @@ impl Workspace {
                     .font()
                     .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
                     .and_then(|g| {
-                        runebender_core::segment_ops::nearest_segment_with_t(
+                        runebender_core::outline::segment_ops::nearest_segment_with_t(
                             g,
                             kurbo::Point::new(dx, dy),
                             tolerance,
@@ -403,11 +405,15 @@ impl Workspace {
                 }
                 let component_hit = self.font().and_then(|f| {
                     let g = f.font.get_glyph(f.glyphs[index].name.as_ref())?;
-                    runebender_core::glyph_ops::component_at(&f.font, g, kurbo::Point::new(dx, dy))
-                        .map(|ci| {
-                            let t = &g.components[ci].transform;
-                            (ci, (t.x_offset, t.y_offset))
-                        })
+                    runebender_core::outline::glyph_ops::component_at(
+                        &f.font,
+                        g,
+                        kurbo::Point::new(dx, dy),
+                    )
+                    .map(|ci| {
+                        let t = &g.components[ci].transform;
+                        (ci, (t.x_offset, t.y_offset))
+                    })
                 });
                 if let Some((ci, orig)) = component_hit {
                     self.editor.selected_component = Some(ci);
@@ -421,7 +427,7 @@ impl Workspace {
                         .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
                         .and_then(|g| g.components.get(ci))
                         .is_some_and(|c| {
-                            !runebender_core::composites::component_alignment_disabled(c)
+                            !runebender_core::document::composites::component_alignment_disabled(c)
                         });
                     if aligned {
                         self.status_note = Some(
@@ -538,13 +544,13 @@ impl Workspace {
                 };
                 let mut changed = font
                     .edit_glyph(index, |g| {
-                        runebender_core::point_ops::translate_points(
+                        runebender_core::outline::point_ops::translate_points(
                             g, &selected, &originals, delta, alt,
                         )
                     })
                     .unwrap_or(false);
                 for (ai, (ox, oy)) in anchor {
-                    use runebender_core::point_ops::snap_coord;
+                    use runebender_core::outline::point_ops::snap_coord;
                     font.set_anchor(
                         index,
                         ai,
@@ -743,7 +749,7 @@ impl Workspace {
                             if g.width - step < 0.0 {
                                 return false;
                             }
-                            runebender_core::glyph_ops::shift_ink(g, -step);
+                            runebender_core::outline::glyph_ops::shift_ink(g, -step);
                             g.width -= step;
                             true
                         })
@@ -898,7 +904,7 @@ impl Workspace {
             let crossings = self
                 .font()
                 .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
-                .map(|g| runebender_core::knife::knife_hit_points(g, p0, p1).len())
+                .map(|g| runebender_core::outline::knife::knife_hit_points(g, p0, p1).len())
                 .unwrap_or(0);
             if p0.distance(p1) >= 2.0 && crossings >= 2 {
                 self.push_undo_snapshot(index);
@@ -906,7 +912,7 @@ impl Workspace {
                     .font_mut()
                     .and_then(|f| {
                         f.edit_glyph(index, |g| {
-                            runebender_core::knife::knife_cut_glyph(g, p0, p1)
+                            runebender_core::outline::knife::knife_cut_glyph(g, p0, p1)
                         })
                     })
                     .unwrap_or(false);
@@ -925,7 +931,7 @@ impl Workspace {
             let selected = self.editor.selected.clone();
             if let Some(font) = self.font_mut() {
                 font.edit_glyph(index, |g| {
-                    runebender_core::point_ops::snap_selected_offcurves(g, &selected)
+                    runebender_core::outline::point_ops::snap_selected_offcurves(g, &selected)
                 });
             }
             self.editor.drag = None;
@@ -961,7 +967,7 @@ impl Workspace {
                 .font()
                 .and_then(|f| f.font.get_glyph(f.glyphs[index].name.as_ref()))
                 .and_then(|g| {
-                    runebender_core::segment_ops::nearest_segment_with_t(
+                    runebender_core::outline::segment_ops::nearest_segment_with_t(
                         g,
                         kurbo::Point::new(dx, dy),
                         snap_radius,
@@ -972,10 +978,14 @@ impl Workspace {
                 let result = self.font_mut().and_then(|f| {
                     f.edit_glyph(index, |g| {
                         if alt {
-                            runebender_core::segment_ops::convert_line_to_curve(g, &seg_hit)
-                                .map(|ids| ids[0])
+                            runebender_core::outline::segment_ops::convert_line_to_curve(
+                                g, &seg_hit,
+                            )
+                            .map(|ids| ids[0])
                         } else {
-                            runebender_core::segment_ops::insert_point_on_segment(g, &seg_hit, t)
+                            runebender_core::outline::segment_ops::insert_point_on_segment(
+                                g, &seg_hit, t,
+                            )
                         }
                     })
                 });
@@ -1188,9 +1198,10 @@ impl Workspace {
                         .active_sort()
                         .and_then(|i| self.edit_buffer.sort(i))
                         .and_then(|sort| match &sort.kind {
-                            runebender_core::text::TextSortKind::Glyph { codepoint, .. } => {
-                                *codepoint
-                            }
+                            runebender_core::text::buffer::TextSortKind::Glyph {
+                                codepoint,
+                                ..
+                            } => *codepoint,
                             _ => None,
                         })
                         .filter(|active_char| *active_char == c)
@@ -1353,7 +1364,7 @@ impl Workspace {
                     .font_mut()
                     .and_then(|f| {
                         f.edit_glyph(index, |g| {
-                            runebender_core::segment_ops::delete_last_pen_point(g, contour)
+                            runebender_core::outline::segment_ops::delete_last_pen_point(g, contour)
                         })
                     })
                     .flatten();
@@ -1378,7 +1389,7 @@ impl Workspace {
                     .font_mut()
                     .and_then(|f| {
                         f.edit_glyph(index, |g| {
-                            runebender_core::glyph_ops::delete_component(g, ci)
+                            runebender_core::outline::glyph_ops::delete_component(g, ci)
                         })
                     })
                     .unwrap_or(false);

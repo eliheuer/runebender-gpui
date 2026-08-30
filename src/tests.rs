@@ -104,7 +104,7 @@ unitsPerEm = 1000;
     fn glyph_image_roundtrips_through_save() {
         // A 2x2 png in the images store plus a glyph image reference
         // must survive a save and reload (norad owns the images dir).
-        let mut font = runebender_core::new_font::new_font("Img", "Regular", 400);
+        let mut font = runebender_core::document::new_font::new_font("Img", "Regular", 400);
         let png: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         // Not a decodable png, but the store does not care; the
         // editor validates before writing, the test only checks the
@@ -246,7 +246,7 @@ unitsPerEm = 1000;
 
     #[test]
     fn generates_positional_and_liga_features() {
-        let mut font = runebender_core::new_font::new_font("Gen", "Regular", 400);
+        let mut font = runebender_core::document::new_font::new_font("Gen", "Regular", 400);
         for name in ["beh", "beh.init", "beh.medi", "f", "i", "f_i"] {
             font.default_layer_mut()
                 .insert_glyph(norad::Glyph::new(name));

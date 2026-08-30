@@ -66,7 +66,7 @@ impl Workspace {
         slot.editor = std::mem::replace(&mut self.editor, EditorState::new());
         slot.buffer = std::mem::replace(
             &mut self.edit_buffer,
-            runebender_core::text::TextBuffer::new(),
+            runebender_core::text::buffer::TextBuffer::new(),
         );
     }
 
@@ -81,8 +81,10 @@ impl Workspace {
             self.park_active_session();
             let slot = &mut self.sessions[target];
             self.editor = std::mem::replace(&mut slot.editor, EditorState::new());
-            self.edit_buffer =
-                std::mem::replace(&mut slot.buffer, runebender_core::text::TextBuffer::new());
+            self.edit_buffer = std::mem::replace(
+                &mut slot.buffer,
+                runebender_core::text::buffer::TextBuffer::new(),
+            );
             self.active_session = target;
         }
         let name = self.sessions[target].glyph_name.clone();
@@ -108,7 +110,7 @@ impl Workspace {
         if self.sessions.is_empty() {
             self.active_session = 0;
             self.editor = EditorState::new();
-            self.edit_buffer = runebender_core::text::TextBuffer::new();
+            self.edit_buffer = runebender_core::text::buffer::TextBuffer::new();
             self.last_editor = None;
             self.mode = Mode::Grid;
             return;
@@ -121,8 +123,10 @@ impl Workspace {
                 let next = target.min(self.sessions.len() - 1);
                 let slot = &mut self.sessions[next];
                 self.editor = std::mem::replace(&mut slot.editor, EditorState::new());
-                self.edit_buffer =
-                    std::mem::replace(&mut slot.buffer, runebender_core::text::TextBuffer::new());
+                self.edit_buffer = std::mem::replace(
+                    &mut slot.buffer,
+                    runebender_core::text::buffer::TextBuffer::new(),
+                );
                 self.active_session = next;
                 let name = self.sessions[next].glyph_name.clone();
                 match self
@@ -151,7 +155,7 @@ impl Workspace {
             self.sessions.push(EditSession {
                 glyph_name: String::new(),
                 editor: EditorState::new(),
-                buffer: runebender_core::text::TextBuffer::new(),
+                buffer: runebender_core::text::buffer::TextBuffer::new(),
             });
             self.active_session = 0;
         }

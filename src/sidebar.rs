@@ -28,8 +28,8 @@ impl Workspace {
         codepoint: Option<char>,
         filter: &SidebarFilter,
     ) -> bool {
-        use runebender_core::category::GlyphCategory as GC;
-        use runebender_core::sidebar as sb;
+        use runebender_core::analysis::category::GlyphCategory as GC;
+        use runebender_core::ui::sidebar as sb;
         let category = codepoint.map(GC::from_codepoint).unwrap_or(GC::Other);
         match filter {
             SidebarFilter::All => true,
@@ -91,8 +91,8 @@ impl Workspace {
     /// Rebuild the per-row counts and the current filter's match set.
     /// Called lazily from render after anything font-shaped changes.
     pub(crate) fn rebuild_sidebar_cache(&mut self) {
-        use runebender_core::category::GlyphCategory as GC;
-        use runebender_core::sidebar as sb;
+        use runebender_core::analysis::category::GlyphCategory as GC;
+        use runebender_core::ui::sidebar as sb;
         let Some(font) = self.font() else {
             self.sidebar_counts = None;
             self.sidebar_matches = None;
@@ -268,7 +268,7 @@ impl Workspace {
             }
             SearchPred::Category(want) => codepoint
                 .map(|c| {
-                    runebender_core::category::GlyphCategory::from_codepoint(c)
+                    runebender_core::analysis::category::GlyphCategory::from_codepoint(c)
                         .display_name()
                         .to_lowercase()
                         .starts_with(want.as_str())
@@ -545,7 +545,7 @@ impl Workspace {
         for name in names {
             if let Some(&index) = font.name_map.get(&name) {
                 font.edit_glyph(index, |glyph| {
-                    runebender_core::theme_oklch::set_glyph_mark(glyph, label.as_deref());
+                    runebender_core::ui::theme_oklch::set_glyph_mark(glyph, label.as_deref());
                 });
             }
         }
@@ -843,7 +843,7 @@ impl Workspace {
     /// Text direction control (text tool): LTR / RTL / Auto, like
     /// the web editor's TextDirectionToolbar.
     pub(crate) fn direction_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        use runebender_core::text::TextDirection;
+        use runebender_core::text::buffer::TextDirection;
         let auto = self.edit_buffer.direction_is_auto();
         let dir = self.edit_buffer.direction();
         let button = |id: &'static str, label: &'static str, active: bool| {
@@ -870,8 +870,9 @@ impl Workspace {
             .child(
                 button("dir-ltr", "LTR", !auto && dir == TextDirection::LeftToRight).on_click(
                     cx.listener(|this, _, _, cx| {
-                        this.edit_buffer
-                            .set_direction(runebender_core::text::TextDirection::LeftToRight);
+                        this.edit_buffer.set_direction(
+                            runebender_core::text::buffer::TextDirection::LeftToRight,
+                        );
                         this.edit_buffer.shape_arabic_if_rtl();
                         this.sync_sort_offset();
                         cx.notify();
@@ -881,8 +882,9 @@ impl Workspace {
             .child(
                 button("dir-rtl", "RTL", !auto && dir == TextDirection::RightToLeft).on_click(
                     cx.listener(|this, _, _, cx| {
-                        this.edit_buffer
-                            .set_direction(runebender_core::text::TextDirection::RightToLeft);
+                        this.edit_buffer.set_direction(
+                            runebender_core::text::buffer::TextDirection::RightToLeft,
+                        );
                         this.edit_buffer.shape_arabic_if_rtl();
                         this.sync_sort_offset();
                         cx.notify();

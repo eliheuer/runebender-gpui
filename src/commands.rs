@@ -29,7 +29,7 @@ impl Workspace {
         self.sessions.push(EditSession {
             glyph_name: name,
             editor: EditorState::new(),
-            buffer: runebender_core::text::TextBuffer::new(),
+            buffer: runebender_core::text::buffer::TextBuffer::new(),
         });
         self.active_session = self.sessions.len() - 1;
         self.open_editor(glyph);
@@ -135,7 +135,7 @@ impl Workspace {
     /// (web generateMissing): empty glyphs named and encoded from the
     /// filter's targets, in every master.
     pub(crate) fn command_generate_missing(&mut self, group: usize, filter_index: usize) {
-        use runebender_core::sidebar as sb;
+        use runebender_core::ui::sidebar as sb;
         let Some(filter) = sb::language_groups()
             .get(group)
             .and_then(|g| g.filters.get(filter_index))
@@ -370,7 +370,7 @@ impl Workspace {
                 let normalized = project.location.get(&axis.name).copied().unwrap_or(0.0);
                 (
                     axis.name.clone(),
-                    runebender_core::var_model::denormalize_value(
+                    runebender_core::document::var_model::denormalize_value(
                         normalized,
                         axis.min,
                         axis.default,
@@ -474,7 +474,8 @@ impl Workspace {
             let Some(glyph) = font.font.get_glyph(name) else {
                 continue;
             };
-            let outline = runebender_core::glyph_paths::glyph_to_bezpath(glyph, &font.font);
+            let outline =
+                runebender_core::outline::glyph_paths::glyph_to_bezpath(glyph, &font.font);
             for left in [true, false] {
                 let should = if left { joins_left } else { joins_right };
                 if !should {
@@ -797,7 +798,7 @@ impl Workspace {
             let Some(glyph) = font.font.get_glyph(name.as_str()) else {
                 return;
             };
-            let path = runebender_core::glyph_paths::glyph_to_bezpath(glyph, &font.font);
+            let path = runebender_core::outline::glyph_paths::glyph_to_bezpath(glyph, &font.font);
             let ascender = font.font.font_info.ascender.unwrap_or(800.0);
             let descender = font.font.font_info.descender.unwrap_or(-200.0);
             let svg = glyph_svg(&path, glyph.width, ascender, descender);
@@ -927,7 +928,7 @@ impl Workspace {
         let name = project.active_font().glyphs[index].name.to_string();
         // Where the preview sits along the axis, 0..1.
         let normalized = project.location.get(&axis.name).copied().unwrap_or(0.0);
-        let design = runebender_core::var_model::denormalize_value(
+        let design = runebender_core::document::var_model::denormalize_value(
             normalized,
             axis.min,
             axis.default,
@@ -940,7 +941,7 @@ impl Workspace {
         let mut eased_location = project.location.clone();
         eased_location.insert(
             axis.name.clone(),
-            runebender_core::var_model::normalize_value(
+            runebender_core::document::var_model::normalize_value(
                 eased_design,
                 axis.min,
                 axis.default,
@@ -1026,7 +1027,7 @@ impl Workspace {
             copy.anchors = source.anchors.clone();
             // Unencoded, and red: a placeholder awaiting its design
             // (the repo's lane-2 convention).
-            runebender_core::theme_oklch::set_glyph_mark(&mut copy, Some("red"));
+            runebender_core::ui::theme_oklch::set_glyph_mark(&mut copy, Some("red"));
             master.font.default_layer_mut().insert_glyph(copy);
             master.dirty = true;
             master.modified_glyphs.insert(alt.clone());
@@ -1550,7 +1551,7 @@ impl Workspace {
             .font_mut()
             .and_then(|f| {
                 f.edit_glyph(index, |g| {
-                    runebender_core::glyph_ops::round_selected_corners(g, &selected)
+                    runebender_core::outline::glyph_ops::round_selected_corners(g, &selected)
                 })
             })
             .flatten();
@@ -2112,7 +2113,7 @@ impl Workspace {
                 .font_mut()
                 .and_then(|f| {
                     f.edit_glyph(index, |g| {
-                        runebender_core::glyph_ops::duplicate_component(g, ci)
+                        runebender_core::outline::glyph_ops::duplicate_component(g, ci)
                     })
                 })
                 .flatten();
@@ -2125,7 +2126,7 @@ impl Workspace {
                 .font_mut()
                 .and_then(|f| {
                     f.edit_glyph(index, |g| {
-                        runebender_core::glyph_ops::duplicate_anchor(g, ai)
+                        runebender_core::outline::glyph_ops::duplicate_anchor(g, ai)
                     })
                 })
                 .flatten();
@@ -2139,7 +2140,7 @@ impl Workspace {
                 .font_mut()
                 .and_then(|f| {
                     f.edit_glyph(index, |g| {
-                        runebender_core::glyph_ops::duplicate_selection(g, &selected)
+                        runebender_core::outline::glyph_ops::duplicate_selection(g, &selected)
                     })
                 })
                 .flatten();
@@ -2171,7 +2172,9 @@ impl Workspace {
             let selected = self.editor.selected.clone();
             self.font_mut().and_then(|f| {
                 f.edit_glyph(index, |g| {
-                    runebender_core::glyph_ops::transform_selection(g, &selected, transform)
+                    runebender_core::outline::glyph_ops::transform_selection(
+                        g, &selected, transform,
+                    )
                 })
             });
         }
@@ -2665,21 +2668,20 @@ impl Workspace {
             return;
         };
         self.push_undo_snapshot(index);
-        let changed = self
-            .font_mut()
-            .and_then(|f| {
-                f.edit_glyph(
-                    index,
-                    |g| match runebender_core::glyph_ops::boolean_contours(g, op) {
-                        Some(contours) => {
-                            g.contours = contours;
-                            true
+        let changed =
+            self.font_mut()
+                .and_then(|f| {
+                    f.edit_glyph(index, |g| {
+                        match runebender_core::outline::glyph_ops::boolean_contours(g, op) {
+                            Some(contours) => {
+                                g.contours = contours;
+                                true
+                            }
+                            None => false,
                         }
-                        None => false,
-                    },
-                )
-            })
-            .unwrap_or(false);
+                    })
+                })
+                .unwrap_or(false);
         if !changed {
             self.editor.undo.pop();
         } else {
@@ -2701,7 +2703,7 @@ impl Workspace {
             .font_mut()
             .and_then(|f| {
                 f.edit_glyph(index, |g| {
-                    runebender_core::glyph_ops::set_contour_start(g, contour, point)
+                    runebender_core::outline::glyph_ops::set_contour_start(g, contour, point)
                 })
             })
             .unwrap_or(false);
@@ -2762,7 +2764,7 @@ impl Workspace {
             .font_mut()
             .and_then(|f| {
                 f.edit_glyph(index, |g| {
-                    runebender_core::glyph_ops::reverse_contours(g, &selected)
+                    runebender_core::outline::glyph_ops::reverse_contours(g, &selected)
                 })
             })
             .unwrap_or(false);
@@ -2865,7 +2867,7 @@ impl Workspace {
             .iter()
             .map(|axis| {
                 let normalized = project.location.get(&axis.name).copied().unwrap_or(0.0);
-                let raw = runebender_core::var_model::denormalize_value(
+                let raw = runebender_core::document::var_model::denormalize_value(
                     normalized,
                     axis.min,
                     axis.default,

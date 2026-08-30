@@ -38,34 +38,34 @@ use gpui::{
 };
 use kurbo::{Affine, BezPath, PathEl};
 
-use runebender_core::cleanup::{
-    add_extreme_points, correct_path_directions, fit_curve_handles, round_glyph_coordinates,
-    tidy_contours, toggle_contour_open,
-};
-use runebender_core::color_font::{
+use runebender_core::analysis::measure::joining_band;
+use runebender_core::analysis::search::{SearchPred, parse_search_predicates};
+use runebender_core::document::project::{BraceSource, GlyphPoint, Master, Project};
+use runebender_core::formats::color_font::{
     COLOR_LAYERS_EXPLICIT_KEY, has_v1_entry, linear_gradient_paint, paint_glyph_layer, paint_solid,
     parse_hex_color, read_color_mapping, read_color_palette, write_color_mapping,
     write_color_palette,
 };
-use runebender_core::convert::{cubics_to_quads, quads_to_cubics};
-use runebender_core::editing::ViewPort;
-use runebender_core::effects::{
-    apply_corner_at, bolden_contours, expand_stroke_contours, extrude_glyph_contours,
-    offset_glyph_contours, roughen_glyph_contours,
-};
-use runebender_core::glyph_ops::{CurveOp, GlyphSnapshot};
-use runebender_core::lib_keys::{
+use runebender_core::formats::lib_keys::{
     Annotation, bake_masks, hoi_quad_at, read_annotations, read_hoi_intermediates, read_masks,
     read_production_name, read_saved_filters, write_annotations, write_hoi_intermediates,
     write_masks, write_production_name, write_saved_filters,
 };
-use runebender_core::measure::joining_band;
-use runebender_core::metrics_keys::{
+use runebender_core::formats::metrics_keys::{
     MetricsFormula, parse_metrics_key, read_metrics_key, write_metrics_key,
 };
-use runebender_core::project::{BraceSource, GlyphPoint, Master, Project};
-use runebender_core::search::{SearchPred, parse_search_predicates};
-use runebender_core::svg::{glyph_svg, svg_to_contours};
+use runebender_core::formats::svg::{glyph_svg, svg_to_contours};
+use runebender_core::outline::cleanup::{
+    add_extreme_points, correct_path_directions, fit_curve_handles, round_glyph_coordinates,
+    tidy_contours, toggle_contour_open,
+};
+use runebender_core::outline::convert::{cubics_to_quads, quads_to_cubics};
+use runebender_core::outline::effects::{
+    apply_corner_at, bolden_contours, expand_stroke_contours, extrude_glyph_contours,
+    offset_glyph_contours, roughen_glyph_contours,
+};
+use runebender_core::outline::glyph_ops::{CurveOp, GlyphSnapshot};
+use runebender_core::ui::editing::ViewPort;
 
 use startup::keymap;
 #[cfg(not(target_family = "wasm"))]
@@ -513,7 +513,7 @@ fn icon_svg(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
     canvas(
         move |bounds, _, _| bounds,
         move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-            let Some(icon) = runebender_core::theme_oklch::toolbar_icons().get(name) else {
+            let Some(icon) = runebender_core::ui::theme_oklch::toolbar_icons().get(name) else {
                 return;
             };
             let w: f32 = bounds.size.width.into();
@@ -884,8 +884,8 @@ enum Mode {
 
 /// The category rows, in web order. Labels double as the keys for
 /// core's category_subfilters.
-const SIDEBAR_CATEGORIES: [(runebender_core::category::GlyphCategory, &str); 8] = {
-    use runebender_core::category::GlyphCategory as GC;
+const SIDEBAR_CATEGORIES: [(runebender_core::analysis::category::GlyphCategory, &str); 8] = {
+    use runebender_core::analysis::category::GlyphCategory as GC;
     [
         (GC::All, "All"),
         (GC::Letter, "Letter"),
@@ -902,8 +902,11 @@ const SIDEBAR_CATEGORIES: [(runebender_core::category::GlyphCategory, &str); 8] 
 #[derive(Clone, PartialEq, Eq)]
 enum SidebarFilter {
     All,
-    Category(runebender_core::category::GlyphCategory),
-    Subfilter(runebender_core::category::GlyphCategory, &'static str),
+    Category(runebender_core::analysis::category::GlyphCategory),
+    Subfilter(
+        runebender_core::analysis::category::GlyphCategory,
+        &'static str,
+    ),
     LanguageGroup(usize),
     Language(usize, usize),
     Builtin(usize),
@@ -934,7 +937,7 @@ struct SidebarCounts {
 struct EditSession {
     glyph_name: String,
     editor: EditorState,
-    buffer: runebender_core::text::TextBuffer,
+    buffer: runebender_core::text::buffer::TextBuffer,
 }
 
 /// Every glyph carrying one anchor name: marks (name, x, y), bases,
@@ -1018,7 +1021,7 @@ struct Workspace {
     /// The editor's text buffer (the text tool): the open glyph is
     /// the active sort; other sorts render as filled context around
     /// it, exactly the web and xilem model.
-    edit_buffer: runebender_core::text::TextBuffer,
+    edit_buffer: runebender_core::text::buffer::TextBuffer,
     /// Keys route to the preview buffer (click the strip to focus,
     /// Escape to leave).
     /// Folded sidebar sections (by title).
@@ -1123,7 +1126,7 @@ struct Workspace {
     context_menu: Option<ContextMenu>,
     /// The Selection panel's 9-point reference for numeric move and
     /// scale (web coordinate quadrant).
-    coord_quadrant: runebender_core::path::Quadrant,
+    coord_quadrant: runebender_core::outline::path::Quadrant,
     /// Curve overlays (web CurvePanel).
     curve_comb: bool,
     curve_continuity: bool,
@@ -1234,7 +1237,7 @@ impl MeasureOpts {
 
     fn label(&self, value: i64) -> String {
         if self.popcount {
-            runebender_core::measure::label(value)
+            runebender_core::analysis::measure::label(value)
         } else {
             value.to_string()
         }
@@ -2303,7 +2306,9 @@ impl Render for Workspace {
                         .font_mut()
                         .and_then(|f| {
                             f.edit_glyph(index, |g| {
-                                runebender_core::glyph_ops::convert_hyper_to_cubic(g, &selected)
+                                runebender_core::outline::glyph_ops::convert_hyper_to_cubic(
+                                    g, &selected,
+                                )
                             })
                         })
                         .unwrap_or(false);
