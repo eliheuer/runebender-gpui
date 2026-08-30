@@ -6,7 +6,7 @@
 //! Each `ensure_*` creates a control once and keeps it in step with
 //! the workspace on later renders.
 
-use super::*;
+use crate::*;
 
 impl Workspace {
     pub(crate) fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {

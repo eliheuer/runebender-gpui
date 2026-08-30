@@ -7,7 +7,7 @@
 //! holding state of its own, so a panel can be moved or removed
 //! without untangling it from the editing model.
 
-use super::*;
+use crate::*;
 
 /// A master thumbnail: outline, advance, ascender, descender.
 pub(crate) type Thumb = (Arc<BezPath>, f64, f64, f64);

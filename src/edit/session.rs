@@ -6,7 +6,7 @@
 //! Switching masters, parking and resuming a glyph's edit session, undo
 //! and redo snapshots, and the operation journal.
 
-use super::*;
+use crate::*;
 
 impl Workspace {
     pub(crate) fn font(&self) -> Option<&Master> {

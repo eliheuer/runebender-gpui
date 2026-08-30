@@ -6,7 +6,7 @@
 //! Cell sizes, the visible window of rows, the glyph order the grid
 //! shows, and multi-selection across cells.
 
-use super::*;
+use crate::*;
 
 impl Workspace {
     /// Solve the grid's cell size against the measured viewport, the
@@ -219,4 +219,217 @@ impl Workspace {
     pub(crate) fn glyph_order(&self) -> Arc<Vec<usize>> {
         self.glyph_order.clone().unwrap_or_default()
     }
+}
+
+// ---- cell placement, shared by the grid and the sidebar's mini grid ----
+
+/// One cell placed by the packer: which glyph, and the rectangle it
+/// occupies inside the grid's viewport.
+#[derive(Clone, Copy)]
+pub(crate) struct PlacedCell {
+    pub(crate) glyph: usize,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) w: f32,
+    pub(crate) h: f32,
+}
+
+/// Lay the packed rows out exactly as the wrapping flex will: the
+/// block is centred, cells run left to right with one gap between,
+/// and rows stack by the cell height.
+///
+/// `viewport` has to be the box the cells are actually being laid out
+/// in, measured this frame — not the probe's stored size. The probe
+/// lags the layout by a frame (longer, if the browser coalesces the
+/// redraw), and a viewport a column narrower than the real one puts
+/// every outline a column away from its cell.
+pub(crate) fn place_cells(
+    packed: &[Vec<(usize, usize)>],
+    fit: GridFit,
+    viewport: gpui::Size<gpui::Pixels>,
+    start_row: usize,
+) -> Vec<PlacedCell> {
+    let rows: Vec<&Vec<(usize, usize)>> = packed.iter().skip(start_row).take(fit.rows).collect();
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let content_w = fit.content_w();
+    let block_h = fit.cell_h * rows.len() as f32 + GRID_GAP * (rows.len() - 1) as f32;
+    let vw: f32 = viewport.width.into();
+    let vh: f32 = viewport.height.into();
+    let x0 = ((vw - content_w) / 2.0).max(0.0);
+    let y0 = ((vh - block_h) / 2.0).max(0.0);
+    let mut out = Vec::new();
+    for (r, row) in rows.iter().enumerate() {
+        let mut x = x0;
+        let y = y0 + r as f32 * (fit.cell_h + GRID_GAP);
+        for &(glyph, span) in row.iter() {
+            let w = fit.cell_w * span as f32 + GRID_GAP * (span - 1) as f32;
+            out.push(PlacedCell {
+                glyph,
+                x,
+                y,
+                w,
+                h: fit.cell_h,
+            });
+            x += w + GRID_GAP;
+        }
+    }
+    out
+}
+
+/// Where a glyph's outline sits inside a cell, as an affine from
+/// design space to the cell's local pixels. Ported from the web's
+/// grid thumbnail box (`glyph_svg.rs`): one vertical scale for every
+/// glyph so a period stays a dot and an M stays tall, each centred on
+/// its own ink, and the em window grows rather than cropping ink that
+/// runs past it.
+pub(crate) fn cell_glyph_transform(
+    ink: kurbo::Rect,
+    empty: bool,
+    advance: f64,
+    upm: f64,
+    w: f64,
+    h: f64,
+) -> Affine {
+    const EM_FILL: f64 = 0.65;
+    const BASELINE_FROM_TOP: f64 = 0.8;
+    let (ink_x0, ink_w) = if empty || ink.width() <= 0.0 {
+        (0.0, advance.max(1.0))
+    } else {
+        (ink.x0, ink.width())
+    };
+    let em_height = upm.max(1.0) / EM_FILL;
+    let em_top = -BASELINE_FROM_TOP * em_height;
+    let (top, bottom) = if empty {
+        (em_top, em_top + em_height)
+    } else {
+        (em_top.min(-ink.y1), (em_top + em_height).max(-ink.y0))
+    };
+    let box_h = (bottom - top).max(1.0);
+    let scale = (w / ink_w).min(h / box_h);
+    let x_offset = (w - ink_w * scale) / 2.0 - ink_x0 * scale;
+    let baseline = (h - box_h * scale) / 2.0 - top * scale;
+    Affine::translate((x_offset, baseline)) * Affine::scale_non_uniform(scale, -scale)
+}
+
+/// A cell's label block: whether it shows at all, its type size, and
+/// the height it takes. Mirrors the web's cell-labels box — 8px sides
+/// and bottom, a 2px gap, both lines the same size.
+pub(crate) fn cell_label_metrics(cell_w: f32) -> CellLabels {
+    // gpui's default line box is much taller than the type size, which
+    // clipped the first line and pushed the two apart. The line height
+    // is stated here and the block's height is derived from it, so the
+    // box always holds exactly what it draws.
+    const PAD_TOP: f32 = 4.0;
+    const PAD_BOTTOM: f32 = 8.0;
+    const GAP: f32 = 2.0;
+    let build = |size: f32, lines: usize| {
+        let line = (size * 1.25).ceil();
+        CellLabels {
+            show: true,
+            size,
+            line,
+            height: PAD_TOP
+                + line * lines as f32
+                + GAP * (lines.saturating_sub(1)) as f32
+                + PAD_BOTTOM,
+        }
+    };
+    if cell_w < 34.0 {
+        // Too small to carry text: a pure thumbnail.
+        CellLabels {
+            show: false,
+            size: 0.0,
+            line: 0.0,
+            height: 0.0,
+        }
+    } else if cell_w < 90.0 {
+        // Name only.
+        build(10.0, 1)
+    } else {
+        build(12.0, 2)
+    }
+}
+
+/// Everything that decides which glyphs show and in what order. When
+/// this is unchanged, the order is too.
+#[derive(Clone, PartialEq)]
+pub(crate) struct OrderKey {
+    pub(crate) query: String,
+    pub(crate) mode: u8,
+    pub(crate) regex: bool,
+    pub(crate) case: bool,
+    pub(crate) sort_unicode: bool,
+    pub(crate) filter: SidebarFilter,
+    /// Structural changes to the font (a glyph added, removed or
+    /// renamed) bump this.
+    pub(crate) revision: u64,
+    /// Masters can differ in what they contain.
+    pub(crate) master: usize,
+}
+
+/// The label block's type size, line height and total height.
+#[derive(Clone, Copy)]
+pub(crate) struct CellLabels {
+    pub(crate) show: bool,
+    pub(crate) size: f32,
+    pub(crate) line: f32,
+    pub(crate) height: f32,
+}
+
+/// How many columns a glyph should take, ported from the web's
+/// `computeGlyphColumnSpan`: a long name or a wide advance gets more
+/// room instead of being cut off.
+pub(crate) fn glyph_column_span(name: &str, advance: f64, upm: f64) -> usize {
+    let name_span = match name.chars().count() {
+        0..=14 => 1,
+        15..=26 => 2,
+        _ => 3,
+    };
+    let ratio = if upm > 0.0 { advance / upm } else { 0.0 };
+    let width_span = if ratio <= 1.5 {
+        1
+    } else if ratio <= 2.8 {
+        2
+    } else if ratio <= 4.0 {
+        3
+    } else {
+        4
+    };
+    name_span.max(width_span)
+}
+
+/// Pack spanned cells into rows that each fill the width exactly: when
+/// the next cell will not fit, the last one on the row grows into the
+/// gap (the web's `gridGlyphItems`). Returns one vector per row of
+/// (item index, span).
+pub(crate) fn pack_spans(spans: &[(usize, usize)], cols: usize) -> Vec<Vec<(usize, usize)>> {
+    let cols = cols.max(1);
+    let mut rows: Vec<Vec<(usize, usize)>> = Vec::new();
+    let mut row: Vec<(usize, usize)> = Vec::new();
+    let mut used = 0usize;
+    for &(item, span) in spans {
+        let span = span.clamp(1, cols);
+        if used + span > cols && !row.is_empty() {
+            if let Some(last) = row.last_mut() {
+                last.1 += cols - used;
+            }
+            rows.push(std::mem::take(&mut row));
+            used = 0;
+        }
+        row.push((item, span));
+        used += span;
+        if used == cols {
+            rows.push(std::mem::take(&mut row));
+            used = 0;
+        }
+    }
+    if !row.is_empty() {
+        if let Some(last) = row.last_mut() {
+            last.1 += cols - used;
+        }
+        rows.push(row);
+    }
+    rows
 }

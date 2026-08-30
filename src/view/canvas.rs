@@ -8,7 +8,7 @@
 //! one per cell, because gpui ends its render pass at every run of
 //! paths and a canvas per cell meant a pass switch per cell.
 
-use super::*;
+use crate::*;
 
 /// A contour start marker: the point, the direction, and whether the
 /// contour is closed.

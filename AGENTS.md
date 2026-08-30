@@ -18,22 +18,20 @@ making does font work with no GPUI in it, it belongs in core.
 
 The editor is one `Workspace` struct. Its methods are split across
 files by concern, each an `impl Workspace` block with a module
-comment that says what the file is for. Read those comments first.
+comment that says what the file is for. Each directory has a
+`mod.rs` that says what belongs in it. Read those first.
 
-| File | Holds |
+| Path | Holds |
 |---|---|
-| `main.rs` | the `Workspace` state, the actions, the menus, the render tree, `main()` |
-| `startup.rs` | `Workspace::new`: every input widget and its subscription, the keymap |
-| `commands.rs` | one method per user-facing command |
-| `canvas.rs`, `input.rs` | the grid and the editing view; pointer and keyboard on them |
-| `panels/` | one file per panel region |
-| `chrome.rs` | header, status bar, sliders |
-| `session.rs`, `grid.rs`, `sidebar.rs` | master switching and undo; grid geometry; filters and search |
-| `editing.rs`, `inspector.rs`, `text_tool.rs` | selection and its operations; the right panel's fields; the text tool |
-| `local_ai.rs`, `host.rs` | models on disk; files, watching, the browser host |
-| `theme.rs`, `config.rs`, `journal.rs` | theme accessors; the config file; the operation log |
+| `main.rs` | `main()` and the module list |
+| `workspace.rs` | the `Workspace` struct and the types it is made of |
+| `actions.rs` | the action list and the menus |
+| `startup.rs` | `Workspace::new`: every input widget and its subscription, the keymap, argument handling |
+| `view/` | what the window shows: `canvas`, `grid`, `chrome`, `panels/` (one file per region), `render`, `paint`, `blur`, `theme` |
+| `edit/` | what the user does: `commands`, `editing`, `input`, `inspector`, `session`, `sidebar`, `text_tool`, `local_ai` |
+| `platform/` | the world outside the window: `config`, `journal`, `host`, `web_host` |
 | `widgets/` | text input, slider, resizable split, in-window menu bar |
-| `web_host.rs`, `tests.rs` | what the browser build needs; tests of the shell |
+| `tests.rs` | tests of the shell itself |
 
 The `use runebender_core::...` list at the top of `main.rs` is the
 seam between the two crates.

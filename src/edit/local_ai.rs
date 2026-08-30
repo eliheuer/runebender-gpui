@@ -7,7 +7,7 @@
 //! weight delta from the font's own reference pairs, and applying the
 //! bolden model to a glyph.
 
-use super::*;
+use crate::*;
 
 impl Workspace {
     /// Read a model directory and cache the weights.

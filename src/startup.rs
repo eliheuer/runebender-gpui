@@ -949,3 +949,81 @@ pub(crate) fn print_font_families(cx: &mut App) {
         cx.text_system().advance(id, gpui::px(13.0), 'A'),
     );
 }
+
+/// The interface font, resolved once against what the platform
+/// actually has. A name gpui cannot resolve shapes to nothing and no
+/// text draws at all, so the preferences are tried in order and the
+/// first family the text system reports wins.
+pub(crate) fn ui_font_family(cx: &gpui::App) -> gpui::SharedString {
+    // Cached: asking the platform for its font list takes about 140ms,
+    // and this is read once per frame. Uncached it capped the whole
+    // editor at roughly seven frames a second.
+    static RESOLVED: std::sync::OnceLock<gpui::SharedString> = std::sync::OnceLock::new();
+    if let Some(name) = RESOLVED.get() {
+        return name.clone();
+    }
+    let name = resolve_ui_font_family(cx);
+    RESOLVED.set(name.clone()).ok();
+    name
+}
+
+/// The uncached lookup. Runs once.
+pub(crate) fn resolve_ui_font_family(cx: &gpui::App) -> gpui::SharedString {
+    // Each platform's own interface font first, then the families that
+    // are actually installed on that platform, then a last-resort
+    // shared one. Ordered per platform rather than in one list, or a
+    // Linux session walks past four macOS families it will never have
+    // before reaching anything it does.
+    #[cfg(target_os = "macos")]
+    const PREFERRED: &[&str] = &[
+        ".SystemUIFont",
+        "SF Pro Text",
+        "SF Pro Display",
+        "Helvetica Neue",
+        "Helvetica",
+        "Arial",
+    ];
+    #[cfg(target_os = "windows")]
+    const PREFERRED: &[&str] = &["Segoe UI Variable Text", "Segoe UI", "Inter", "Arial"];
+    // Cantarell ships with GNOME, Noto Sans with most distributions,
+    // DejaVu Sans is the long-standing fallback, and Liberation Sans
+    // is the metric-compatible stand-in for Arial.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    const PREFERRED: &[&str] = &[
+        "Inter",
+        "Cantarell",
+        "Noto Sans",
+        "DejaVu Sans",
+        "Liberation Sans",
+        "Arial",
+    ];
+    let available = cx.text_system().all_font_names();
+    // A handful of families means gpui is on its embedded fallback
+    // list rather than the platform's fonts, which is what happens if
+    // gpui_platform loses the font-kit feature. Text then shapes and
+    // paints without ever reaching the screen, so say so here rather
+    // than leave a wordless window to be puzzled over.
+    static REPORTED: std::sync::Once = std::sync::Once::new();
+    if available.len() < 50 {
+        REPORTED.call_once(|| {
+            eprintln!(
+                "warning: only {} font families visible, so text may not \
+                 render. Check that gpui_platform still has the font-kit \
+                 feature; --fonts lists what it can see.",
+                available.len()
+            );
+        });
+    }
+    for name in PREFERRED {
+        if available.iter().any(|f| f == name) {
+            return (*name).into();
+        }
+    }
+    // Nothing preferred is installed: take whatever there is rather
+    // than render an empty window.
+    available
+        .into_iter()
+        .next()
+        .map(Into::into)
+        .unwrap_or_else(|| "Helvetica".into())
+}

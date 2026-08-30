@@ -6,7 +6,7 @@
 //! Sort geometry, the models behind each sort, kerning edits made by
 //! dragging sorts, and pasting into the buffer.
 
-use super::*;
+use crate::*;
 
 impl Workspace {
     /// Paste the system clipboard's text into the editor's buffer,

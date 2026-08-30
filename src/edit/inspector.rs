@@ -7,7 +7,7 @@
 //! `refresh_*` per group reads the font back into the fields, so a
 //! field never holds state the font does not.
 
-use super::*;
+use crate::*;
 
 impl Workspace {
     /// Non-default, non-background layers of the active master that

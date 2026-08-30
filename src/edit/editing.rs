@@ -7,7 +7,7 @@
 //! pen contour, moving and transforming the selection, and the
 //! context menu that offers those operations.
 
-use super::*;
+use crate::*;
 
 impl Workspace {
     /// Commit a dragged intermediate point: store it in the glyph's

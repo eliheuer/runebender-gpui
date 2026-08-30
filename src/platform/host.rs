@@ -6,7 +6,7 @@
 //! Build scripts and export paths, watching sources for changes made
 //! by other tools, reloading, and the web host's fetch and save.
 
-use super::*;
+use crate::*;
 
 impl Workspace {
     /// The repo's own Google Fonts build script above the source
@@ -353,4 +353,26 @@ impl Workspace {
         })
         .detach();
     }
+}
+
+/// Find the fontc compiler: PATH first, then the default cargo
+/// install location, because an app launched from the Dock does not
+/// inherit a shell PATH.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn fontc_binary() -> Option<PathBuf> {
+    if std::process::Command::new("fontc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+    {
+        return Some(PathBuf::from("fontc"));
+    }
+    let home = std::env::var_os("HOME")?;
+    let cargo_bin = PathBuf::from(home).join(".cargo/bin/fontc");
+    cargo_bin.exists().then_some(cargo_bin)
+}
+
+pub(crate) fn default_font_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../runebender-web/assets/test-fonts/VirtuaGrotesk.designspace")
 }

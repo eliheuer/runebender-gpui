@@ -8,7 +8,7 @@
 //! same function. They are the layer between an intent ("remove the
 //! overlap") and the operation in runebender-core that performs it.
 
-use super::*;
+use crate::*;
 
 impl Workspace {
     /// The tab strip's "+": a fresh session on the current glyph.

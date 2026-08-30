@@ -6,7 +6,7 @@
 //! The filter and search caches, saved filters, and the rows and tiles
 //! the sidebar is built from.
 
-use super::*;
+use crate::*;
 
 impl Workspace {
     /// Left sidebar tile: search plus the category filter list,

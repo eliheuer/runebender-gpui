@@ -8,7 +8,7 @@
 //! then call a command or a core operation to carry it out. Geometry
 //! belongs in runebender-core, not here.
 
-use super::*;
+use crate::*;
 
 /// The nearest master-pair point to the pointer: distance, point id,
 /// and its position in each master.
