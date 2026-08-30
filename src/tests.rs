@@ -171,11 +171,30 @@ unitsPerEm = 1000;
         assert!(plain.trim_end().ends_with("} liga;"));
     }
 
+    /// The demo designspace the two feature tests compile against. Same
+    /// rule as core's `test_fonts`: `RUNEBENDER_TEST_FONTS`, else the
+    /// runebender-web checkout beside this one.
+    fn fixture_designspace() -> PathBuf {
+        let dir = match std::env::var_os("RUNEBENDER_TEST_FONTS") {
+            Some(dir) => PathBuf::from(dir),
+            None => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../runebender-web/assets/test-fonts"),
+        };
+        let path = dir.join("VirtuaGrotesk.designspace");
+        assert!(
+            path.is_file(),
+            "fixture fonts not found at {}: clone eliheuer/runebender-web next to this \
+             repository, or set RUNEBENDER_TEST_FONTS",
+            dir.display()
+        );
+        path
+    }
+
     #[test]
     fn stylistic_set_names_compile() {
         // featureNames inside an ss block is plain fea; the editor's
         // Features pane plus fea-rs carry it end to end.
-        let project = Project::load(&default_font_path()).expect("loads");
+        let project = Project::load(&fixture_designspace()).expect("loads");
         let font = project.active_font();
         let fea = "feature ss01 {\n\
                    featureNames {\n  name \"Bold a\";\n};\n\
@@ -354,7 +373,7 @@ unitsPerEm = 1000;
 
     #[test]
     fn features_compile_check() {
-        let project = Project::load(&default_font_path()).expect("designspace loads");
+        let project = Project::load(&fixture_designspace()).expect("designspace loads");
         let font = project.active_font();
         // The font's own features.fea compiles.
         let own = font.font.features.clone();

@@ -1,7 +1,9 @@
 # The gate every change passes: formatted, clippy-clean, documented,
 # and built and tested on Linux and macOS. The Linux job installs the
 # system libraries gpui's Wayland and X11 backends link against, so a
-# build that cannot open a window there fails here first.
+# build that cannot open a window there fails here first. Two tests
+# compile feature code against Virtua Grotesk, checked out from
+# runebender-web beside this repository, the layout tests.rs expects.
 name: CI
 
 on:
@@ -24,6 +26,14 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: runebender-gpui
+      - name: Fixture fonts
+        uses: actions/checkout@v4
+        with:
+          repository: eliheuer/runebender-web
+          path: runebender-web
+          sparse-checkout: assets/test-fonts
       - name: Linux system libraries
         if: runner.os == 'Linux'
         run: |
@@ -32,19 +42,26 @@ jobs:
             libasound2-dev libfontconfig-dev libwayland-dev \
             libx11-xcb-dev libxkbcommon-x11-dev libssl-dev \
             libzstd-dev libvulkan1 libgit2-dev
-      # The toolchain comes from rust-toolchain.toml.
+      # rust-toolchain.toml pins stable; this only adds the components.
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runebender-gpui
       - name: fmt
+        working-directory: runebender-gpui
         run: cargo fmt --check
       - name: clippy
+        working-directory: runebender-gpui
         run: cargo clippy --all-targets
       - name: doc
+        working-directory: runebender-gpui
         run: cargo doc --no-deps
       - name: test
+        working-directory: runebender-gpui
         run: cargo test
       - name: build
+        working-directory: runebender-gpui
         run: cargo build --release

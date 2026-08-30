@@ -106,5 +106,5 @@ glyphslib = "0.2.7"
 # X11 under Xorg or XWayland.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.gpui_platform]
 git = "https://github.com/zed-industries/zed"
-rev = "3624a5bfda8a4610bf9926499517a776c7028321"
+rev = "1ee4862b4a61742d49fdc02fbef67b494d7ecb14"
 features = ["wayland", "x11"]
