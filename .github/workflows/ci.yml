@@ -76,6 +76,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: runebender-gpui
+      # The browser build embeds the demo font from the runebender-web
+      # checkout at compile time (web_host.rs, include_dir!).
+      - name: Demo font
+        uses: actions/checkout@v4
+        with:
+          repository: eliheuer/runebender-web
+          path: runebender-web
+          sparse-checkout: assets/test-fonts
       # The browser build needs wasm atomics and shared memory, which the
       # prebuilt standard library lacks, so std is rebuilt on a nightly.
       # This checks that the wasm-only code still compiles; the bundle
