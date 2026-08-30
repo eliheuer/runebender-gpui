@@ -7,12 +7,13 @@
 
 mod actions;
 mod edit;
+mod launch;
 mod platform;
-mod startup;
 #[cfg(test)]
 mod tests;
 mod view;
 mod widgets;
+mod wiring;
 mod workspace;
 
 use std::path::PathBuf;
@@ -56,13 +57,13 @@ use runebender_core::outline::glyph_ops::{CurveOp, GlyphSnapshot};
 use runebender_core::ui::editing::ViewPort;
 
 use actions::*;
+use launch::keymap;
+use launch::*;
+#[cfg(not(target_family = "wasm"))]
+use launch::{open_from_args, print_font_families};
 #[cfg(not(target_family = "wasm"))]
 use platform::host::*;
 use platform::*;
-use startup::keymap;
-use startup::*;
-#[cfg(not(target_family = "wasm"))]
-use startup::{open_from_args, print_font_families};
 use view::grid::*;
 use view::paint::*;
 use view::render::TabTooltip;

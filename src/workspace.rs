@@ -5,7 +5,7 @@
 //!
 //! Everything the window shows comes from here. The methods live in
 //! `view/`, `edit/`, and `platform/`, one file per concern, and
-//! `startup.rs` builds the first value.
+//! `wiring.rs` builds the first value.
 
 use crate::*;
 

@@ -26,7 +26,8 @@ comment that says what the file is for. Each directory has a
 | `main.rs` | `main()` and the module list |
 | `workspace.rs` | the `Workspace` struct and the types it is made of |
 | `actions.rs` | the action list and the menus |
-| `startup.rs` | `Workspace::new`: every input widget and its subscription, the keymap, argument handling |
+| `wiring.rs` | `Workspace::new`: every input widget and the subscription that writes it to the font |
+| `launch.rs` | the keymap, the keystroke router, argument handling, the interface font |
 | `view/` | what the window shows: `canvas`, `grid`, `chrome`, `panels/` (one file per region), `render`, `paint`, `blur`, `theme` |
 | `edit/` | what the user does: `commands`, `editing`, `input`, `inspector`, `session`, `sidebar`, `text_tool`, `local_ai` |
 | `platform/` | the world outside the window: `config`, `journal`, `host`, `web_host` |
