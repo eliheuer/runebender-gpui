@@ -10,6 +10,10 @@
 
 use super::*;
 
+/// The nearest master-pair point to the pointer: distance, point id,
+/// and its position in each master.
+type NearestPair = (f64, (usize, usize), (f64, f64), (f64, f64));
+
 impl Workspace {
     pub(crate) fn editor_mouse_down(
         &mut self,
@@ -154,8 +158,8 @@ impl Workspace {
         let point_near = all_points
             .iter()
             .any(|(_, (x, y))| ((x - dx).powi(2) + (y - dy).powi(2)).sqrt() <= point_tolerance);
-        if self.editor.tool == Tool::Select && !shift && !point_near {
-            if let Some(bbox) = self.selection_bbox(index) {
+        if self.editor.tool == Tool::Select && !shift && !point_near
+            && let Some(bbox) = self.selection_bbox(index) {
                 let zoom = self.editor.zoom().max(1e-6);
                 let grab = 7.0 / zoom;
                 let ring = 22.0 / zoom;
@@ -210,12 +214,11 @@ impl Workspace {
                     return;
                 }
             }
-        }
         // HOI knobs (trajectory intermediate points) come first while
         // the trajectory view is up: each node's knob sits at its
         // intermediate point, or the linear middle.
-        if self.editor.tool == Tool::Select && self.show_trajectories {
-            if let Some((lo, hi, curves)) = self.project.as_ref().and_then(|p| {
+        if self.editor.tool == Tool::Select && self.show_trajectories
+            && let Some((lo, hi, curves)) = self.project.as_ref().and_then(|p| {
                 let (lo, hi) = p.axis_end_masters()?;
                 let name = p.active_font().glyphs[index].name.clone();
                 let canon = p.masters[lo].font.get_glyph(name.as_ref())?;
@@ -226,7 +229,7 @@ impl Workspace {
                 ))
             }) {
                 let grab = 7.0 / self.editor.zoom().max(1e-6);
-                let mut best: Option<(f64, (usize, usize), (f64, f64), (f64, f64))> = None;
+                let mut best: Option<NearestPair> = None;
                 for (ci, (ca, cb)) in lo.contours.iter().zip(hi.contours.iter()).enumerate() {
                     for (pi, (pa, pb)) in ca.points.iter().zip(cb.points.iter()).enumerate() {
                         let a = (pa.x, pa.y);
@@ -247,7 +250,6 @@ impl Workspace {
                     return;
                 }
             }
-        }
         // Anchors take priority over points.
         let anchor_hit = font.glyphs[index]
             .anchors
@@ -840,11 +842,10 @@ impl Workspace {
         if let Some(Drag::HoiKnob { id, .. }) = self.editor.drag.as_ref() {
             let id = *id;
             self.editor.drag = None;
-            if let Some((live_id, q)) = self.hoi_live.take() {
-                if live_id == id {
+            if let Some((live_id, q)) = self.hoi_live.take()
+                && live_id == id {
                     self.commit_hoi_intermediate(id, q);
                 }
-            }
             return;
         }
         if self.editor.tool == Tool::Pen {

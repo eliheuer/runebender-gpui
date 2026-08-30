@@ -924,6 +924,17 @@ struct EditSession {
     buffer: runebender_core::text::TextBuffer,
 }
 
+/// Every glyph carrying one anchor name: marks (name, x, y), bases,
+/// and mark carriers.
+type AnchorFamily = (
+    Vec<(String, f64, f64)>,
+    Vec<(String, f64, f64)>,
+    Vec<(String, f64, f64)>,
+);
+
+/// A blurred preview frame with the key it was rendered for.
+type BlurFrame = (u64, Arc<gpui::RenderImage>);
+
 struct Workspace {
     project: Option<Project>,
     load_error: Option<SharedString>,
@@ -953,7 +964,7 @@ struct Workspace {
     preview_blur: f32,
     /// The last blurred frame, kept so dragging a point does not
     /// re-rasterize the preview on every mouse move.
-    preview_blur_cache: Arc<Mutex<Option<(u64, Arc<gpui::RenderImage>)>>>,
+    preview_blur_cache: Arc<Mutex<Option<BlurFrame>>>,
     /// Decoded glyph background images from the UFO images store,
     /// keyed by file name; None caches a failed decode. Behind a
     /// mutex because rendering (which fills it) holds &self.
@@ -1973,11 +1984,9 @@ impl Workspace {
             .font()
             .and_then(|f| f.glyphs.get(index))
             .map(|g| g.name.to_string())
-        {
-            if let Some(slot) = self.sessions.get_mut(self.active_session) {
+            && let Some(slot) = self.sessions.get_mut(self.active_session) {
                 slot.glyph_name = name;
             }
-        }
         self.mode = Mode::Editor(index);
         // The info and colors sections follow the open glyph.
         self.selected = Some(index);
@@ -2329,11 +2338,10 @@ impl Workspace {
         let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string()) else {
             return;
         };
-        if let Some(primary) = self.selected {
-            if let Some(primary_name) = self.font().map(|f| f.glyphs[primary].name.to_string()) {
+        if let Some(primary) = self.selected
+            && let Some(primary_name) = self.font().map(|f| f.glyphs[primary].name.to_string()) {
                 self.multi_selected.insert(primary_name);
             }
-        }
         if !self.multi_selected.remove(&name) {
             self.multi_selected.insert(name);
         }
@@ -3317,9 +3325,6 @@ impl Workspace {
         None
     }
 
-    /// Measure-tool HUD layer toggles (web SelectPanel): only shown
-    /// while the Measure tool is active.
-
     fn ensure_editor_fit(&mut self) {
         if self.editor.initialized {
             return;
@@ -3439,23 +3444,19 @@ impl Workspace {
                 if let Some((local, gi)) = menu.guide {
                     if local {
                         let name = self.font().map(|f| f.glyphs[index].name.to_string());
-                        if let (Some(name), Some(f)) = (name, self.font_mut()) {
-                            if let Some(g) = f.font.get_glyph_mut(name.as_str()) {
-                                if gi < g.guidelines.len() {
+                        if let (Some(name), Some(f)) = (name, self.font_mut())
+                            && let Some(g) = f.font.get_glyph_mut(name.as_str())
+                                && gi < g.guidelines.len() {
                                     g.guidelines.remove(gi);
                                     f.dirty = true;
                                     f.modified_glyphs.insert(name);
                                 }
-                            }
-                        }
-                    } else if let Some(f) = self.font_mut() {
-                        if let Some(gs) = f.font.font_info.guidelines.as_mut() {
-                            if gi < gs.len() {
+                    } else if let Some(f) = self.font_mut()
+                        && let Some(gs) = f.font.font_info.guidelines.as_mut()
+                            && gi < gs.len() {
                                 gs.remove(gi);
                                 f.dirty = true;
                             }
-                        }
-                    }
                 }
             }
             "guide-add-h" | "guide-add-v" | "guide-add-local-h" | "guide-add-local-v" => {
@@ -3470,13 +3471,12 @@ impl Workspace {
                 if action.contains("local") {
                     // A local guide belongs to the open glyph.
                     let name = self.font().map(|f| f.glyphs[index].name.to_string());
-                    if let (Some(name), Some(f)) = (name, self.font_mut()) {
-                        if let Some(g) = f.font.get_glyph_mut(name.as_str()) {
+                    if let (Some(name), Some(f)) = (name, self.font_mut())
+                        && let Some(g) = f.font.get_glyph_mut(name.as_str()) {
                             g.guidelines.push(guide);
                             f.dirty = true;
                             f.modified_glyphs.insert(name);
                         }
-                    }
                 } else if let Some(f) = self.font_mut() {
                     f.font
                         .font_info
@@ -3600,12 +3600,11 @@ impl Workspace {
                 }
             }
             "node-lock" => {
-                if let Some(node) = menu.start_point {
-                    if !self.editor.locked_points.remove(&node) {
+                if let Some(node) = menu.start_point
+                    && !self.editor.locked_points.remove(&node) {
                         self.editor.locked_points.insert(node);
                         self.editor.selected.remove(&node);
                     }
-                }
             }
             "node-unlock-all" => {
                 self.editor.locked_points.clear();
@@ -4285,14 +4284,7 @@ impl Workspace {
             use std::collections::BTreeMap;
             // anchor name -> (marks: name, _X pos), (bases: name, X pos),
             // (mark carriers: name, X pos).
-            let mut families: BTreeMap<
-                String,
-                (
-                    Vec<(String, f64, f64)>,
-                    Vec<(String, f64, f64)>,
-                    Vec<(String, f64, f64)>,
-                ),
-            > = BTreeMap::new();
+            let mut families: BTreeMap<String, AnchorFamily> = BTreeMap::new();
             for glyph in font.default_layer().iter() {
                 let is_mark_glyph = glyph
                     .anchors
@@ -4405,7 +4397,7 @@ impl Workspace {
             .filter_map(|name| {
                 let parts: Vec<&str> = name.split('_').collect();
                 (parts.len() >= 2 && parts.iter().all(|part| names.contains(part)))
-                    .then(|| (*name, parts))
+                    .then_some((*name, parts))
             })
             .collect();
         ligatures.sort_by_key(|(_, parts)| std::cmp::Reverse(parts.len()));
@@ -4471,15 +4463,14 @@ impl Workspace {
                 format!("feature {tag} {{\n{body}}} {tag};\n"),
             ),
         };
-        if let (Some(start), Some(end)) = (fea.find(&open), fea.find(&close)) {
-            if end > start {
+        if let (Some(start), Some(end)) = (fea.find(&open), fea.find(&close))
+            && end > start {
                 let mut out = String::with_capacity(fea.len());
                 out.push_str(&fea[..start]);
                 out.push_str(block.trim_end());
                 out.push_str(&fea[end + close.len()..]);
                 return out;
             }
-        }
         // New block. An insertion marker (Fontra's convention, one
         // line reading "# Automatic Code") controls where generated
         // code lands among hand-written blocks: each new block goes
@@ -5123,12 +5114,11 @@ impl Workspace {
                     .get(ai)
                     .map(|(_, x, y)| (x + delta.x, y + delta.y))
             });
-            if let Some((x, y)) = target {
-                if let Some(font) = self.font_mut() {
+            if let Some((x, y)) = target
+                && let Some(font) = self.font_mut() {
                     font.set_anchor(index, ai, x.round(), y.round());
                     return true;
                 }
-            }
             return false;
         }
         let selected = self.editor.selected.clone();
@@ -5183,12 +5173,11 @@ impl Workspace {
                     (p.x, p.y)
                 })
             });
-            if let Some((x, y)) = target {
-                if let Some(font) = self.font_mut() {
+            if let Some((x, y)) = target
+                && let Some(font) = self.font_mut() {
                     font.set_anchor(index, ai, x.round(), y.round());
                     return true;
                 }
-            }
             return false;
         }
         let selected = self.editor.selected.clone();
@@ -5371,8 +5360,8 @@ impl Workspace {
         let pairs: Vec<_> = ["n", "o", "H", "O", "i", "l", "h", "m", "u", "I", "E"]
             .iter()
             .filter_map(|name| {
-                let a = font_ml::ufo::glyph_ops(here.get_glyph(*name)?)?;
-                let b = font_ml::ufo::glyph_ops(there.get_glyph(*name)?)?;
+                let a = font_ml::ufo::glyph_ops(here.get_glyph(name)?)?;
+                let b = font_ml::ufo::glyph_ops(there.get_glyph(name)?)?;
                 Some((
                     font_ml::stems::ops_to_path(&a),
                     font_ml::stems::ops_to_path(&b),
@@ -5454,14 +5443,12 @@ impl Workspace {
                         height,
                     )
                 });
-            if let Some(want) = want.filter(|s| s.is_finite() && *s > 0.25 && *s < 4.0) {
-                if let Ok(refit) = predict(want) {
-                    if refit.is_compatible() {
+            if let Some(want) = want.filter(|s| s.is_finite() && *s > 0.25 && *s < 4.0)
+                && let Ok(refit) = predict(want)
+                    && refit.is_compatible() {
                         fitted_to = Some(want);
                         result_override = Some(refit);
                     }
-                }
-            }
         }
         let result = result_override.unwrap_or(result);
         // The encoding guarantees this; assert it before writing to a
@@ -6078,9 +6065,7 @@ impl Workspace {
             let axis_info = axis.clone();
             let sub = cx.subscribe_in(&slider, window, {
                 move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
-                    let widgets::slider::SliderEvent::Change(value) = event else {
-                        return;
-                    };
+                    let widgets::slider::SliderEvent::Change(value) = event;
                     let raw = *value as f64;
                     let landed = {
                         let Some(project) = this.project.as_mut() else {
@@ -6265,13 +6250,12 @@ impl Workspace {
         let by = dy + self.editor.sort_offset.1;
         if shift {
             let hit = self.edit_buffer.hit_test(bx, by, line_height, top, bottom);
-            if let Some(index) = hit.active_sort {
-                if self.edit_buffer.begin_manual_kerning(index, bx) {
+            if let Some(index) = hit.active_sort
+                && self.edit_buffer.begin_manual_kerning(index, bx) {
                     self.editor.drag = Some(Drag::TextKern);
                     self.sync_sort_offset();
                     return;
                 }
-            }
         }
         self.edit_buffer
             .place_cursor_at(bx, by, line_height, top, bottom);
@@ -6388,8 +6372,8 @@ impl Workspace {
             .and_then(|s| s.glyph_name())
             .map(str::to_string);
         let target = name.and_then(|n| self.font().and_then(|f| f.name_map.get(&n).copied()));
-        if let Some(glyph) = target {
-            if !matches!(self.mode, Mode::Editor(i) if i == glyph) {
+        if let Some(glyph) = target
+            && !matches!(self.mode, Mode::Editor(i) if i == glyph) {
                 self.mode = Mode::Editor(glyph);
                 self.selected = Some(glyph);
                 self.editor.selected.clear();
@@ -6398,7 +6382,6 @@ impl Workspace {
                 self.editor.undo.clear();
                 self.editor.redo.clear();
             }
-        }
         self.sync_sort_offset();
         true
     }
@@ -6421,12 +6404,6 @@ impl Workspace {
                             .collect(),
                     )
                 })
-                .filter_map(
-                    |(first, seconds): (
-                        norad::Name,
-                        std::collections::BTreeMap<norad::Name, f64>,
-                    )| { Some((first, seconds)) },
-                )
                 .collect();
             font.kerning_dirty = true;
             font.dirty = true;
@@ -6539,9 +6516,7 @@ impl Workspace {
         });
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
-                let widgets::slider::SliderEvent::Change(value) = event else {
-                    return;
-                };
+                let widgets::slider::SliderEvent::Change(value) = event;
                 this.preview_blur = *value;
                 cx.notify();
             }
@@ -6564,9 +6539,7 @@ impl Workspace {
         });
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
-                let widgets::slider::SliderEvent::Change(value) = event else {
-                    return;
-                };
+                let widgets::slider::SliderEvent::Change(value) = event;
                 this.model_strength = *value as f64;
                 // The last judgement was made at the old strength.
                 this.model_score = None;
@@ -6590,9 +6563,7 @@ impl Workspace {
         });
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
-                let widgets::slider::SliderEvent::Change(value) = event else {
-                    return;
-                };
+                let widgets::slider::SliderEvent::Change(value) = event;
                 this.sidebar_cell_size = *value;
                 this.sidebar_scroll_row = 0;
                 cx.notify();
@@ -6615,9 +6586,7 @@ impl Workspace {
         });
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
-                let widgets::slider::SliderEvent::Change(value) = event else {
-                    return;
-                };
+                let widgets::slider::SliderEvent::Change(value) = event;
                 this.grid_cell_size = *value;
                 cx.notify();
             }
@@ -7843,14 +7812,13 @@ fn main() {
     #[cfg(not(target_family = "wasm"))]
     {
         let config = config::load();
-        if let Some(theme) = config.theme.as_deref() {
-            if !t::set_theme(theme) {
+        if let Some(theme) = config.theme.as_deref()
+            && !t::set_theme(theme) {
                 eprintln!(
                     "runebender: config names theme {theme:?}, which does not exist; \
                      using the default"
                 );
             }
-        }
         CONFIG.set(config).ok();
     }
 
@@ -8026,7 +7994,7 @@ fn main() {
                                   cx| {
                                 if matches!(
                                     ev,
-                                    widgets::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter
                                 ) {
                                     let text = state.read(cx).value().to_string();
                                     this.apply_font_info(which, &text);
@@ -8149,7 +8117,7 @@ fn main() {
                                   cx| {
                                 if matches!(
                                     ev,
-                                    widgets::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter
                                 ) {
                                     let first = this
                                         .kern_inputs
@@ -8202,9 +8170,9 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
-                            ) {
-                                if let Ok(width) = state
+                                widgets::input::InputEvent::PressEnter
+                            )
+                                && let Ok(width) = state
                                     .read(cx)
                                     .value()
                                     .trim()
@@ -8213,7 +8181,6 @@ fn main() {
                                     this.command_expand_stroke(width);
                                     cx.notify();
                                 }
-                            }
                         }
                     });
                     let offset_input = cx.new(|cx| {
@@ -8229,9 +8196,9 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
-                            ) {
-                                if let Ok(delta) = state
+                                widgets::input::InputEvent::PressEnter
+                            )
+                                && let Ok(delta) = state
                                     .read(cx)
                                     .value()
                                     .trim()
@@ -8240,7 +8207,6 @@ fn main() {
                                     this.command_offset(delta);
                                     cx.notify();
                                 }
-                            }
                         }
                     });
                     let fit_input = cx.new(|cx| {
@@ -8256,9 +8222,9 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
-                            ) {
-                                if let Ok(pct) = state
+                                widgets::input::InputEvent::PressEnter
+                            )
+                                && let Ok(pct) = state
                                     .read(cx)
                                     .value()
                                     .trim()
@@ -8268,7 +8234,6 @@ fn main() {
                                     this.command_fit_curve(pct / 100.0);
                                     cx.notify();
                                 }
-                            }
                         }
                     });
                     let color_hex_input = cx.new(|cx| {
@@ -8284,7 +8249,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 if this.command_add_palette_color(&text) {
@@ -8309,9 +8274,9 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
-                            ) {
-                                if let Ok(ease) = state
+                                widgets::input::InputEvent::PressEnter
+                            )
+                                && let Ok(ease) = state
                                     .read(cx)
                                     .value()
                                     .trim()
@@ -8320,7 +8285,6 @@ fn main() {
                                     this.command_ease_interpolation(ease);
                                     cx.notify();
                                 }
-                            }
                         }
                     });
                     let extrude_input = cx.new(|cx| {
@@ -8336,7 +8300,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 this.command_extrude(&text);
@@ -8357,7 +8321,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 this.command_roughen(&text);
@@ -8381,7 +8345,7 @@ fn main() {
                                   cx| {
                                 if matches!(
                                     ev,
-                                    widgets::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter
                                 ) {
                                     let name = state.read(cx).value().to_string();
                                     this.command_instance_upsert(&name);
@@ -8422,7 +8386,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let Ok(angle) = state
                                     .read(cx)
@@ -8459,7 +8423,7 @@ fn main() {
                                   cx| {
                                 if matches!(
                                     ev,
-                                    widgets::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter
                                 ) {
                                     let text = state.read(cx).value().to_string();
                                     if let Ok(v) = text.trim().parse::<f64>() {
@@ -8489,7 +8453,7 @@ fn main() {
                                   cx| {
                                 if matches!(
                                     ev,
-                                    widgets::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter
                                 ) {
                                     let text = state.read(cx).value().to_string();
                                     if let Ok(v) = text.trim().parse::<f64>() {
@@ -8519,7 +8483,7 @@ fn main() {
                                   cx| {
                                 if matches!(
                                     ev,
-                                    widgets::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter
                                 ) {
                                     let text = state.read(cx).value().to_string();
                                     if let Ok(v) = text.trim().parse::<f64>() {
@@ -8554,7 +8518,7 @@ fn main() {
                                   cx| {
                                 if matches!(
                                     ev,
-                                    widgets::input::InputEvent::PressEnter { .. }
+                                    widgets::input::InputEvent::PressEnter
                                 ) {
                                     let text =
                                         state.read(cx).value().to_string();
@@ -8598,7 +8562,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text =
                                     state.read(cx).value().trim().to_string();
@@ -8621,7 +8585,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 this.apply_anchor_name(&text);
@@ -8642,7 +8606,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 let node = this
@@ -8673,7 +8637,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 this.command_make_smart_axis(&text);
@@ -8694,7 +8658,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 let trimmed = text.trim();
@@ -8728,7 +8692,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 let mut parts =
@@ -8761,7 +8725,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text =
                                     state.read(cx).value().trim().to_string();
@@ -8785,7 +8749,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 let at = this
@@ -8818,7 +8782,7 @@ fn main() {
                               cx| {
                             if matches!(
                                 ev,
-                                widgets::input::InputEvent::PressEnter { .. }
+                                widgets::input::InputEvent::PressEnter
                             ) {
                                 let text = state.read(cx).value().to_string();
                                 this.commit_add_component(&text);

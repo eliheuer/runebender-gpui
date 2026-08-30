@@ -45,11 +45,6 @@ impl MenuBar {
         }
     }
 
-    /// Replace the menus, for when a tick has to move.
-    pub fn set_menus(&mut self, menus: Vec<Menu>, cx: &mut Context<Self>) {
-        self.menus = menus.into_iter().map(convert).collect();
-        cx.notify();
-    }
 }
 
 fn convert(menu: Menu) -> MenuEntry {

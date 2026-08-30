@@ -138,18 +138,6 @@ impl ResizableGroup {
         self
     }
 
-    /// Which panel a divider resizes: the one before it when that one
-    /// has a size, otherwise the one after.
-    fn resized_by(&self, divider: usize) -> Option<usize> {
-        if self.panels.get(divider).is_some_and(|p| p.size.is_some()) {
-            return Some(divider);
-        }
-        let after = divider + 1;
-        self.panels
-            .get(after)
-            .is_some_and(|p| p.size.is_some())
-            .then_some(after)
-    }
 
     fn build(self, cx: &mut App) -> AnyElement {
         let horizontal = matches!(self.axis, Axis::Horizontal);
@@ -237,6 +225,20 @@ impl ResizableGroup {
         }
 
         container.into_any_element()
+    }
+
+    #[cfg(test)]
+    /// Which panel a divider resizes: the one before it when that one
+    /// has a size, otherwise the one after.
+    fn resized_by(&self, divider: usize) -> Option<usize> {
+        if self.panels.get(divider).is_some_and(|p| p.size.is_some()) {
+            return Some(divider);
+        }
+        let after = divider + 1;
+        self.panels
+            .get(after)
+            .is_some_and(|p| p.size.is_some())
+            .then_some(after)
     }
 }
 

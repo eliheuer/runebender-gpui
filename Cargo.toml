@@ -15,6 +15,9 @@ lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
 
+[lints.rust]
+unsafe_code = "deny"
+
 [dependencies]
 regex = "1"
 chrono = "0.4"

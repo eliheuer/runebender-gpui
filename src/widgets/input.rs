@@ -125,13 +125,7 @@ impl InputState {
         self
     }
 
-    pub fn is_multi_line(&self) -> bool {
-        self.multi_line
-    }
 
-    pub fn placeholder_text(&self) -> &SharedString {
-        &self.placeholder
-    }
 
     pub fn value(&self) -> &str {
         &self.text
@@ -485,9 +479,6 @@ impl InputState {
         cx.notify();
     }
 
-    pub fn editor_mut(&mut self) -> &mut PlainEditor<[u8; 4]> {
-        &mut self.editor
-    }
 
     pub fn contexts(&self) -> Arc<std::sync::Mutex<TextContexts>> {
         self.contexts.clone()
@@ -610,7 +601,7 @@ fn glyph_outline(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
 
     #[test]
     fn a_cut_is_a_copy_then_a_delete() {
@@ -811,8 +802,8 @@ fn paint_field(
         input.paint_glyphs(inner, t::text(), window);
     });
 
-    if focused {
-        if let Some(caret) = state.update(cx, |input, _| input.caret_rect()) {
+    if focused
+        && let Some(caret) = state.update(cx, |input, _| input.caret_rect()) {
             window.paint_quad(gpui::fill(
                 Bounds {
                     origin: Point {
@@ -824,7 +815,6 @@ fn paint_field(
                 t::text(),
             ));
         }
-    }
 }
 
 /// Lay out a plain string and paint it, for the placeholder.

@@ -9,6 +9,9 @@
 
 use super::*;
 
+/// A master thumbnail: outline, advance, ascender, descender.
+type Thumb = (Arc<BezPath>, f64, f64, f64);
+
 impl Workspace {
     /// One canvas for every glyph in a grid, batched by colour. The
     /// cells themselves are plain divs: gpui breaks its render pass at
@@ -154,11 +157,10 @@ impl Workspace {
                         cx,
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if selected {
-                            if !this.expanded_categories.remove(&ci) {
+                        if selected
+                            && !this.expanded_categories.remove(&ci) {
                                 this.expanded_categories.insert(ci);
                             }
-                        }
                         this.set_sidebar_filter(SidebarFilter::Category(category));
                         cx.notify();
                     }))
@@ -1373,14 +1375,13 @@ impl Workspace {
         };
         // Characters, logical order.
         let mut chars_row = div().flex().flex_wrap().gap_1();
-        for i in 0..count {
+        for (i, &carrier) in carrier_of.iter().enumerate().take(count) {
             let Some(sort) = self.edit_buffer.sort(i) else {
                 continue;
             };
             let TextSortKind::Glyph { codepoint, .. } = &sort.kind else {
                 continue;
             };
-            let carrier = carrier_of[i];
             let lit = focus == Some(carrier);
             let (label, sub): (SharedString, SharedString) = match codepoint {
                 Some(c) => (c.to_string().into(), format!("{:04X}", *c as u32).into()),
@@ -1993,8 +1994,7 @@ impl Workspace {
         let glyph_name: Option<String> = self
             .selected
             .and_then(|i| self.font().map(|f| f.glyphs[i].name.to_string()));
-        let thumbs: Vec<Option<(Arc<BezPath>, f64, f64, f64)>> = match (&self.project, &glyph_name)
-        {
+        let thumbs: Vec<Option<Thumb>> = match (&self.project, &glyph_name) {
             (Some(p), Some(name)) => p
                 .masters
                 .iter()
@@ -2315,8 +2315,7 @@ impl Workspace {
         }
         if let Some((ci, _)) = menu.start_point {
             let open_contour = self
-                .current_glyph_index()
-                .and_then(|i| self.font().map(|f| (i, f)))
+                .current_glyph_index().zip(self.font())
                 .and_then(|(i, f)| {
                     f.font
                         .get_glyph(f.glyphs[i].name.as_ref())?
@@ -3817,7 +3816,8 @@ impl Workspace {
                 })),
         );
 
-        let body = match &self.model_score {
+        
+        match &self.model_score {
             Some((glyph, model, baseline)) => {
                 let better = model < baseline;
                 body.child(
@@ -3830,8 +3830,7 @@ impl Workspace {
                 )
             }
             None => body,
-        };
-        body
+        }
     }
 
     /// The Glyphs-style tab strip under the header: a Font tab that
@@ -4082,8 +4081,8 @@ impl Workspace {
         // Axis mappings (avar): user → design pairs on the first
         // axis, the Glyphs Axis Mappings story. "400,430" adds or
         // replaces the pair at that input; × removes.
-        if let Some(doc) = project.ds_doc.as_ref() {
-            if let Some(axis) = doc.axes.first() {
+        if let Some(doc) = project.ds_doc.as_ref()
+            && let Some(axis) = doc.axes.first() {
                 body = body.child(
                     div()
                         .text_xs()
@@ -4118,7 +4117,6 @@ impl Workspace {
                         .child(widgets::input::Input::new(&self.axis_map_input)),
                 );
             }
-        }
         // HOI: the trajectory view and the timing ease, the
         // higher-order interpolation corner of the panel.
         body = body.child(
@@ -4280,7 +4278,7 @@ impl Workspace {
                         let transform =
                             Affine::translate((origin_x + x * scale, baseline - y * scale))
                                 * Affine::scale_non_uniform(scale, -scale);
-                        line.extend((transform * path.as_ref().clone()).into_iter());
+                        line.extend(transform * path.as_ref().clone());
                     }
                     if blur > 0.05 {
                         // Rasterized and blurred for real: gpui has no

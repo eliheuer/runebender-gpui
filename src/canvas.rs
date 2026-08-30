@@ -10,6 +10,16 @@
 
 use super::*;
 
+
+/// A contour start marker: the point, the direction, and whether the
+/// contour is closed.
+type StartMarker = ((f64, f64), (f64, f64), bool);
+/// The pen tool's preview: last on-curve point, pointer, and the ring
+/// on the start point when closing would land.
+type PenPreview = ((f64, f64), (f64, f64), Option<(f64, f64)>);
+/// The knife drag: its two ends and the contour intersections.
+type KnifeLine = ((f64, f64), (f64, f64), Vec<kurbo::Point>);
+
 impl Workspace {
     pub(crate) fn glyph_cell_sized(
         &self,
@@ -182,7 +192,7 @@ impl Workspace {
                 .text_color(t::text_muted())
                 .child(label)
         };
-        let mut list = div()
+        let list = div()
             .flex_1()
             .min_h(px(0.0))
             .flex()
@@ -572,7 +582,7 @@ impl Workspace {
                     })
                 })
                 .collect();
-            let caret = text_mode.then(|| (layout.cursor_x - off.0, layout.cursor_y - off.1));
+            let caret = text_mode.then_some((layout.cursor_x - off.0, layout.cursor_y - off.1));
             (paints, caret)
         };
         let (sort_top, sort_bottom) = self.text_sort_bounds();
@@ -620,7 +630,7 @@ impl Workspace {
         // Where each closed contour starts and which way it runs, for
         // the start arrow. Open contours (pen paths in progress) get
         // none, like the web.
-        let start_markers: Vec<((f64, f64), (f64, f64), bool)> = font
+        let start_markers: Vec<StartMarker> = font
             .font
             .get_glyph(entry.name.as_ref())
             .map(|g| {
@@ -996,7 +1006,7 @@ impl Workspace {
         // Pen rubber band: last on-curve of the open contour to the
         // pointer, with a ring on the start point when close would
         // land (web PenPreview).
-        let pen_preview: Option<((f64, f64), (f64, f64), Option<(f64, f64)>)> = (|| {
+        let pen_preview: Option<PenPreview> = (|| {
             let contour = self
                 .editor
                 .pen
@@ -1020,7 +1030,7 @@ impl Workspace {
         })();
 
         // Knife drag: the cut line plus its contour intersections.
-        let knife_line: Option<((f64, f64), (f64, f64), Vec<kurbo::Point>)> =
+        let knife_line: Option<KnifeLine> =
             match &self.editor.drag {
                 Some(Drag::Knife { start, current }) => {
                     let hits = font
@@ -1304,8 +1314,7 @@ impl Workspace {
                                         // anchor: its stored point, or the
                                         // origin axis for plain H/V lines
                                         // (UFO stores only the offset).
-                                        let knob;
-                                        match *line {
+                                        let knob = match *line {
                                             norad::Line::Horizontal(y) => {
                                                 let p = to_screen(0.0, y);
                                                 window.paint_quad(gpui::fill(
@@ -1318,7 +1327,7 @@ impl Workspace {
                                                     ),
                                                     color,
                                                 ));
-                                                knob = p;
+                                                p
                                             }
                                             norad::Line::Vertical(x) => {
                                                 let p = to_screen(x, 0.0);
@@ -1332,7 +1341,7 @@ impl Workspace {
                                                     ),
                                                     color,
                                                 ));
-                                                knob = p;
+                                                p
                                             }
                                             norad::Line::Angle { x, y, degrees } => {
                                                 // A segment far longer than
@@ -1348,9 +1357,9 @@ impl Workspace {
                                                 if let Ok(path) = pb.build() {
                                                     window.paint_path(path, color);
                                                 }
-                                                knob = to_screen(x, y);
+                                                to_screen(x, y)
                                             }
-                                        }
+                                        };
                                         // The grab knob, Glyphs-style.
                                         let r = if hot { 5.0 } else { 4.0 };
                                         let circle = {
@@ -2768,7 +2777,7 @@ impl Workspace {
                                 // Continuity rings around on-curve nodes.
                                 if !continuity_rings.is_empty() {
                                     use kurbo::Shape as _;
-                                    let r = (4.5 * 1.9) as f64;
+                                    let r = 4.5 * 1.9;
                                     for (at, color) in &continuity_rings {
                                         let c = transform * *at;
                                         let circle = kurbo::Circle::new(c, r).to_path(0.25);

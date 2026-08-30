@@ -66,9 +66,6 @@ impl SliderState {
         self
     }
 
-    pub fn value(&self) -> f32 {
-        self.value
-    }
 
     /// Where the thumb sits, 0.0 at the minimum and 1.0 at the maximum.
     pub fn percentage(&self) -> f32 {
@@ -117,6 +114,11 @@ impl SliderState {
             cx.emit(SliderEvent::Change(self.value));
         }
         cx.notify();
+    }
+
+    #[cfg(test)]
+    pub fn value(&self) -> f32 {
+        self.value
     }
 }
 

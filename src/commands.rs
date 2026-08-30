@@ -244,11 +244,10 @@ impl Workspace {
                     .and_then(|l| l.get_glyph(name.as_str()))
                     .map(|g| g.contours.clone());
                 if let (Some(fg), Some(bg)) = (fg, bg) {
-                    if let Some(layer) = font.font.layers.get_mut(&background) {
-                        if let Some(g) = layer.get_glyph_mut(name.as_str()) {
+                    if let Some(layer) = font.font.layers.get_mut(&background)
+                        && let Some(g) = layer.get_glyph_mut(name.as_str()) {
                             g.contours = fg;
                         }
-                    }
                     font.edit_glyph(index, |g| {
                         g.contours = bg;
                     });
@@ -400,8 +399,8 @@ impl Workspace {
             .file_name()
             .map(|f| f.to_string_lossy().to_string());
         let Some(filename) = filename else { return };
-        if let Some(font) = self.font_mut() {
-            if let Ok(layer) = font.font.layers.get_or_create_layer(&layer_name) {
+        if let Some(font) = self.font_mut()
+            && let Ok(layer) = font.font.layers.get_or_create_layer(&layer_name) {
                 let mut copy = norad::Glyph::new(name.as_str());
                 copy.width = frozen.width;
                 copy.contours = frozen.contours.clone();
@@ -411,7 +410,6 @@ impl Workspace {
                 font.dirty = true;
                 font.modified_glyphs.insert(name.clone());
             }
-        }
         let Some(project) = self.project.as_mut() else {
             return;
         };
@@ -657,7 +655,7 @@ impl Workspace {
         self.push_undo_snapshot(index);
         let removed = self
             .font_mut()
-            .and_then(|f| f.edit_glyph(index, |g| tidy_contours(g)))
+            .and_then(|f| f.edit_glyph(index, tidy_contours))
             .unwrap_or(0);
         if removed == 0 {
             self.editor.undo.pop();
@@ -673,7 +671,7 @@ impl Workspace {
         self.push_undo_snapshot(index);
         let flipped = self
             .font_mut()
-            .and_then(|f| f.edit_glyph(index, |g| correct_path_directions(g)))
+            .and_then(|f| f.edit_glyph(index, correct_path_directions))
             .unwrap_or(0);
         if flipped == 0 {
             self.editor.undo.pop();
@@ -690,7 +688,7 @@ impl Workspace {
         self.push_undo_snapshot(index);
         let moved = self
             .font_mut()
-            .and_then(|f| f.edit_glyph(index, |g| round_glyph_coordinates(g)))
+            .and_then(|f| f.edit_glyph(index, round_glyph_coordinates))
             .unwrap_or(0);
         if moved == 0 {
             self.editor.undo.pop();
@@ -780,7 +778,7 @@ impl Workspace {
         self.status_note = Some(format!("Duplicated {base} as {name}").into());
     }
 
-    /// Glyph > Export Glyph as SVG: writes <name>.svg beside the
+    /// Glyph > Export Glyph as SVG: writes `<name>.svg` beside the
     /// project source (or the home directory before Save As).
     pub(crate) fn command_export_glyph_svg(&mut self) {
         #[cfg(target_family = "wasm")]
@@ -863,8 +861,8 @@ impl Workspace {
                             }
                         }
                     };
-                    if let Some(formula) = left.as_deref().and_then(parse_metrics_key) {
-                        if let (Some(target), Some(ink)) =
+                    if let Some(formula) = left.as_deref().and_then(parse_metrics_key)
+                        && let (Some(target), Some(ink)) =
                             (resolve(master, &formula, true), master.ink_bounds(index))
                         {
                             let delta = (target - ink.x0).round();
@@ -874,9 +872,8 @@ impl Workspace {
                                 adjusted += 1;
                             }
                         }
-                    }
-                    if let Some(formula) = right.as_deref().and_then(parse_metrics_key) {
-                        if let (Some(target), Some(ink)) =
+                    if let Some(formula) = right.as_deref().and_then(parse_metrics_key)
+                        && let (Some(target), Some(ink)) =
                             (resolve(master, &formula, false), master.ink_bounds(index))
                         {
                             let advance = master.glyphs[index].advance;
@@ -887,7 +884,6 @@ impl Workspace {
                                 adjusted += 1;
                             }
                         }
-                    }
                 }
             }
             if !moved {
@@ -1120,11 +1116,10 @@ impl Workspace {
                 .and_then(|l| l.get_glyph(name.as_str()))
                 .map(|g| g.contours.clone());
             if let (Some(fg), Some(other)) = (fg, other) {
-                if let Some(layer) = font.font.layers.get_mut(layer_name) {
-                    if let Some(g) = layer.get_glyph_mut(name.as_str()) {
+                if let Some(layer) = font.font.layers.get_mut(layer_name)
+                    && let Some(g) = layer.get_glyph_mut(name.as_str()) {
                         g.contours = fg;
                     }
-                }
                 font.edit_glyph(index, |g| {
                     g.contours = other;
                 });
@@ -1241,12 +1236,11 @@ impl Workspace {
         for master in project.masters.iter_mut() {
             let members = master.font.groups.entry(group_name.clone()).or_default();
             for name in &names {
-                if let Ok(member) = norad::Name::new(name) {
-                    if !members.contains(&member) {
+                if let Ok(member) = norad::Name::new(name)
+                    && !members.contains(&member) {
                         members.push(member);
                         added += 1;
                     }
-                }
             }
             master.dirty = true;
         }
@@ -1930,8 +1924,8 @@ impl Workspace {
         let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string()) else {
             return;
         };
-        if let Some(font) = self.font_mut() {
-            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
+        if let Some(font) = self.font_mut()
+            && let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
                 let mut masks = read_masks(glyph);
                 if !masks.remove(&ci) {
                     masks.insert(ci);
@@ -1940,7 +1934,6 @@ impl Workspace {
                 font.dirty = true;
                 font.modified_glyphs.insert(name);
             }
-        }
     }
 
     /// Glyph > Bake Masks: make the subtraction real in every
@@ -1987,8 +1980,8 @@ impl Workspace {
         let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string()) else {
             return;
         };
-        if let Some(font) = self.font_mut() {
-            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
+        if let Some(font) = self.font_mut()
+            && let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
                 let mut notes = read_annotations(glyph);
                 notes.push(Annotation {
                     kind: kind.to_string(),
@@ -2000,7 +1993,6 @@ impl Workspace {
                 font.dirty = true;
                 font.modified_glyphs.insert(name);
             }
-        }
     }
 
     pub(crate) fn command_delete_annotation(&mut self, i: usize) {
@@ -2010,8 +2002,8 @@ impl Workspace {
         let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string()) else {
             return;
         };
-        if let Some(font) = self.font_mut() {
-            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
+        if let Some(font) = self.font_mut()
+            && let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
                 let mut notes = read_annotations(glyph);
                 if i < notes.len() {
                     notes.remove(i);
@@ -2020,7 +2012,6 @@ impl Workspace {
                     font.modified_glyphs.insert(name);
                 }
             }
-        }
     }
 
     /// Glyph > Import SVG…: parse the file's path outlines and add
@@ -2092,14 +2083,12 @@ impl Workspace {
         let Some(name) = self.font().map(|f| f.glyphs[index].name.to_string()) else {
             return;
         };
-        if let Some(font) = self.font_mut() {
-            if let Some(glyph) = font.font.get_glyph_mut(name.as_str()) {
-                if glyph.image.take().is_some() {
+        if let Some(font) = self.font_mut()
+            && let Some(glyph) = font.font.get_glyph_mut(name.as_str())
+                && glyph.image.take().is_some() {
                     font.dirty = true;
                     font.modified_glyphs.insert(name);
                 }
-            }
-        }
     }
 
     /// Duplicate the selection: contours holding selected points, or
@@ -2491,7 +2480,7 @@ impl Workspace {
         let Mode::Editor(index) = self.mode else {
             return;
         };
-        if !(width > 0.0) {
+        if width.is_nan() || width <= 0.0 {
             return;
         }
         self.push_undo_snapshot(index);
@@ -2835,15 +2824,14 @@ impl Workspace {
         let Some(axis) = doc.axes.first_mut() else {
             return;
         };
-        if let Some(map) = axis.map.as_mut() {
-            if index < map.len() {
+        if let Some(map) = axis.map.as_mut()
+            && index < map.len() {
                 map.remove(index);
                 if map.is_empty() {
                     axis.map = None;
                 }
                 project.ds_dirty = true;
             }
-        }
     }
 
     /// Enter in the Instances field: rename the instance sitting at

@@ -7,7 +7,7 @@
 //! instead. What is left here is the shell's own behaviour.
 
 #[cfg(test)]
-mod tests {
+mod shell_tests {
     /// A two-master Glyphs 3 source, used by the import tests.
     const MINIMAL_GLYPHS_SOURCE: &str = r#"{
 .appVersion = "3300";
@@ -516,6 +516,7 @@ mod model_discovery_tests {
     /// A directory only counts as a model if it holds a config.json.
     /// Without that check, every stray folder becomes a broken entry.
     #[test]
+    #[allow(unsafe_code)]
     fn a_folder_without_a_config_is_not_a_model() {
         let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join("rb-model-discovery-test");
@@ -534,6 +535,7 @@ mod model_discovery_tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn a_missing_folder_is_not_an_error() {
         let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("RUNEBENDER_MODELS", "/nope/does/not/exist") };
