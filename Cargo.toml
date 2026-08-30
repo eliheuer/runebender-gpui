@@ -80,7 +80,7 @@ features = ["accelerate"]
 
 [dependencies.runebender-core]
 git = "https://github.com/eliheuer/runebender-core"
-rev = "33bdb63e5d2af8a3c211e590c3a3c037c5a54130"
+rev = "1ee4862b4a61742d49fdc02fbef67b494d7ecb14"
 
 [dependencies.serde]
 version = "1.0"
@@ -106,5 +106,5 @@ glyphslib = "0.2.7"
 # X11 under Xorg or XWayland.
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.gpui_platform]
 git = "https://github.com/zed-industries/zed"
-rev = "1ee4862b4a61742d49fdc02fbef67b494d7ecb14"
+rev = "3624a5bfda8a4610bf9926499517a776c7028321"
 features = ["wayland", "x11"]
