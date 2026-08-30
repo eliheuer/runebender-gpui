@@ -1,0 +1,50 @@
+# The gate every change passes: formatted, clippy-clean, documented,
+# and built and tested on Linux and macOS. The Linux job installs the
+# system libraries gpui's Wayland and X11 backends link against, so a
+# build that cannot open a window there fails here first.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libfontconfig-dev libwayland-dev \
+            libx11-xcb-dev libxkbcommon-x11-dev libssl-dev \
+            libzstd-dev libvulkan1 libgit2-dev
+      # The toolchain comes from rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --all-targets
+      - name: doc
+        run: cargo doc --no-deps
+      - name: test
+        run: cargo test
+      - name: build
+        run: cargo build --release

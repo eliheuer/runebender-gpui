@@ -1984,9 +1984,10 @@ impl Workspace {
             .font()
             .and_then(|f| f.glyphs.get(index))
             .map(|g| g.name.to_string())
-            && let Some(slot) = self.sessions.get_mut(self.active_session) {
-                slot.glyph_name = name;
-            }
+            && let Some(slot) = self.sessions.get_mut(self.active_session)
+        {
+            slot.glyph_name = name;
+        }
         self.mode = Mode::Editor(index);
         // The info and colors sections follow the open glyph.
         self.selected = Some(index);
@@ -2339,9 +2340,10 @@ impl Workspace {
             return;
         };
         if let Some(primary) = self.selected
-            && let Some(primary_name) = self.font().map(|f| f.glyphs[primary].name.to_string()) {
-                self.multi_selected.insert(primary_name);
-            }
+            && let Some(primary_name) = self.font().map(|f| f.glyphs[primary].name.to_string())
+        {
+            self.multi_selected.insert(primary_name);
+        }
         if !self.multi_selected.remove(&name) {
             self.multi_selected.insert(name);
         }
@@ -3446,17 +3448,19 @@ impl Workspace {
                         let name = self.font().map(|f| f.glyphs[index].name.to_string());
                         if let (Some(name), Some(f)) = (name, self.font_mut())
                             && let Some(g) = f.font.get_glyph_mut(name.as_str())
-                                && gi < g.guidelines.len() {
-                                    g.guidelines.remove(gi);
-                                    f.dirty = true;
-                                    f.modified_glyphs.insert(name);
-                                }
+                            && gi < g.guidelines.len()
+                        {
+                            g.guidelines.remove(gi);
+                            f.dirty = true;
+                            f.modified_glyphs.insert(name);
+                        }
                     } else if let Some(f) = self.font_mut()
                         && let Some(gs) = f.font.font_info.guidelines.as_mut()
-                            && gi < gs.len() {
-                                gs.remove(gi);
-                                f.dirty = true;
-                            }
+                        && gi < gs.len()
+                    {
+                        gs.remove(gi);
+                        f.dirty = true;
+                    }
                 }
             }
             "guide-add-h" | "guide-add-v" | "guide-add-local-h" | "guide-add-local-v" => {
@@ -3472,11 +3476,12 @@ impl Workspace {
                     // A local guide belongs to the open glyph.
                     let name = self.font().map(|f| f.glyphs[index].name.to_string());
                     if let (Some(name), Some(f)) = (name, self.font_mut())
-                        && let Some(g) = f.font.get_glyph_mut(name.as_str()) {
-                            g.guidelines.push(guide);
-                            f.dirty = true;
-                            f.modified_glyphs.insert(name);
-                        }
+                        && let Some(g) = f.font.get_glyph_mut(name.as_str())
+                    {
+                        g.guidelines.push(guide);
+                        f.dirty = true;
+                        f.modified_glyphs.insert(name);
+                    }
                 } else if let Some(f) = self.font_mut() {
                     f.font
                         .font_info
@@ -3601,10 +3606,11 @@ impl Workspace {
             }
             "node-lock" => {
                 if let Some(node) = menu.start_point
-                    && !self.editor.locked_points.remove(&node) {
-                        self.editor.locked_points.insert(node);
-                        self.editor.selected.remove(&node);
-                    }
+                    && !self.editor.locked_points.remove(&node)
+                {
+                    self.editor.locked_points.insert(node);
+                    self.editor.selected.remove(&node);
+                }
             }
             "node-unlock-all" => {
                 self.editor.locked_points.clear();
@@ -4464,13 +4470,14 @@ impl Workspace {
             ),
         };
         if let (Some(start), Some(end)) = (fea.find(&open), fea.find(&close))
-            && end > start {
-                let mut out = String::with_capacity(fea.len());
-                out.push_str(&fea[..start]);
-                out.push_str(block.trim_end());
-                out.push_str(&fea[end + close.len()..]);
-                return out;
-            }
+            && end > start
+        {
+            let mut out = String::with_capacity(fea.len());
+            out.push_str(&fea[..start]);
+            out.push_str(block.trim_end());
+            out.push_str(&fea[end + close.len()..]);
+            return out;
+        }
         // New block. An insertion marker (Fontra's convention, one
         // line reading "# Automatic Code") controls where generated
         // code lands among hand-written blocks: each new block goes
@@ -5115,10 +5122,11 @@ impl Workspace {
                     .map(|(_, x, y)| (x + delta.x, y + delta.y))
             });
             if let Some((x, y)) = target
-                && let Some(font) = self.font_mut() {
-                    font.set_anchor(index, ai, x.round(), y.round());
-                    return true;
-                }
+                && let Some(font) = self.font_mut()
+            {
+                font.set_anchor(index, ai, x.round(), y.round());
+                return true;
+            }
             return false;
         }
         let selected = self.editor.selected.clone();
@@ -5174,10 +5182,11 @@ impl Workspace {
                 })
             });
             if let Some((x, y)) = target
-                && let Some(font) = self.font_mut() {
-                    font.set_anchor(index, ai, x.round(), y.round());
-                    return true;
-                }
+                && let Some(font) = self.font_mut()
+            {
+                font.set_anchor(index, ai, x.round(), y.round());
+                return true;
+            }
             return false;
         }
         let selected = self.editor.selected.clone();
@@ -5445,10 +5454,11 @@ impl Workspace {
                 });
             if let Some(want) = want.filter(|s| s.is_finite() && *s > 0.25 && *s < 4.0)
                 && let Ok(refit) = predict(want)
-                    && refit.is_compatible() {
-                        fitted_to = Some(want);
-                        result_override = Some(refit);
-                    }
+                && refit.is_compatible()
+            {
+                fitted_to = Some(want);
+                result_override = Some(refit);
+            }
         }
         let result = result_override.unwrap_or(result);
         // The encoding guarantees this; assert it before writing to a
@@ -6251,11 +6261,12 @@ impl Workspace {
         if shift {
             let hit = self.edit_buffer.hit_test(bx, by, line_height, top, bottom);
             if let Some(index) = hit.active_sort
-                && self.edit_buffer.begin_manual_kerning(index, bx) {
-                    self.editor.drag = Some(Drag::TextKern);
-                    self.sync_sort_offset();
-                    return;
-                }
+                && self.edit_buffer.begin_manual_kerning(index, bx)
+            {
+                self.editor.drag = Some(Drag::TextKern);
+                self.sync_sort_offset();
+                return;
+            }
         }
         self.edit_buffer
             .place_cursor_at(bx, by, line_height, top, bottom);
@@ -6373,15 +6384,16 @@ impl Workspace {
             .map(str::to_string);
         let target = name.and_then(|n| self.font().and_then(|f| f.name_map.get(&n).copied()));
         if let Some(glyph) = target
-            && !matches!(self.mode, Mode::Editor(i) if i == glyph) {
-                self.mode = Mode::Editor(glyph);
-                self.selected = Some(glyph);
-                self.editor.selected.clear();
-                self.editor.selected_anchors.clear();
-                self.editor.drag = None;
-                self.editor.undo.clear();
-                self.editor.redo.clear();
-            }
+            && !matches!(self.mode, Mode::Editor(i) if i == glyph)
+        {
+            self.mode = Mode::Editor(glyph);
+            self.selected = Some(glyph);
+            self.editor.selected.clear();
+            self.editor.selected_anchors.clear();
+            self.editor.drag = None;
+            self.editor.undo.clear();
+            self.editor.redo.clear();
+        }
         self.sync_sort_offset();
         true
     }
@@ -7813,12 +7825,13 @@ fn main() {
     {
         let config = config::load();
         if let Some(theme) = config.theme.as_deref()
-            && !t::set_theme(theme) {
-                eprintln!(
-                    "runebender: config names theme {theme:?}, which does not exist; \
+            && !t::set_theme(theme)
+        {
+            eprintln!(
+                "runebender: config names theme {theme:?}, which does not exist; \
                      using the default"
-                );
-            }
+            );
+        }
         CONFIG.set(config).ok();
     }
 

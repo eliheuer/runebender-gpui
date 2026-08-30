@@ -157,10 +157,9 @@ impl Workspace {
                         cx,
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if selected
-                            && !this.expanded_categories.remove(&ci) {
-                                this.expanded_categories.insert(ci);
-                            }
+                        if selected && !this.expanded_categories.remove(&ci) {
+                            this.expanded_categories.insert(ci);
+                        }
                         this.set_sidebar_filter(SidebarFilter::Category(category));
                         cx.notify();
                     }))
@@ -2315,7 +2314,8 @@ impl Workspace {
         }
         if let Some((ci, _)) = menu.start_point {
             let open_contour = self
-                .current_glyph_index().zip(self.font())
+                .current_glyph_index()
+                .zip(self.font())
                 .and_then(|(i, f)| {
                     f.font
                         .get_glyph(f.glyphs[i].name.as_ref())?
@@ -3816,7 +3816,6 @@ impl Workspace {
                 })),
         );
 
-        
         match &self.model_score {
             Some((glyph, model, baseline)) => {
                 let better = model < baseline;
@@ -4082,41 +4081,42 @@ impl Workspace {
         // axis, the Glyphs Axis Mappings story. "400,430" adds or
         // replaces the pair at that input; × removes.
         if let Some(doc) = project.ds_doc.as_ref()
-            && let Some(axis) = doc.axes.first() {
-                body = body.child(
-                    div()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child(format!("Mappings ({} user → design)", axis.tag)),
-                );
-                if let Some(map) = axis.map.as_ref() {
-                    let mut rows = div().flex().flex_wrap().gap_1();
-                    for (i, m) in map.iter().enumerate() {
-                        rows = rows.child(
-                            div()
-                                .id(("axis-map", i))
-                                .px_1()
-                                .rounded(t::radius())
-                                .border(t::stroke())
-                                .border_color(t::cell_border())
-                                .text_xs()
-                                .text_color(t::text())
-                                .cursor_pointer()
-                                .child(format!("{:.0}→{:.0} ×", m.input, m.output))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.command_remove_axis_mapping(i);
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                    body = body.child(rows);
+            && let Some(axis) = doc.axes.first()
+        {
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child(format!("Mappings ({} user → design)", axis.tag)),
+            );
+            if let Some(map) = axis.map.as_ref() {
+                let mut rows = div().flex().flex_wrap().gap_1();
+                for (i, m) in map.iter().enumerate() {
+                    rows = rows.child(
+                        div()
+                            .id(("axis-map", i))
+                            .px_1()
+                            .rounded(t::radius())
+                            .border(t::stroke())
+                            .border_color(t::cell_border())
+                            .text_xs()
+                            .text_color(t::text())
+                            .cursor_pointer()
+                            .child(format!("{:.0}→{:.0} ×", m.input, m.output))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.command_remove_axis_mapping(i);
+                                cx.notify();
+                            })),
+                    );
                 }
-                body = body.child(
-                    div()
-                        .w(px(110.0))
-                        .child(widgets::input::Input::new(&self.axis_map_input)),
-                );
+                body = body.child(rows);
             }
+            body = body.child(
+                div()
+                    .w(px(110.0))
+                    .child(widgets::input::Input::new(&self.axis_map_input)),
+            );
+        }
         // HOI: the trajectory view and the timing ease, the
         // higher-order interpolation corner of the panel.
         body = body.child(

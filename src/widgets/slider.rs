@@ -66,7 +66,6 @@ impl SliderState {
         self
     }
 
-
     /// Where the thumb sits, 0.0 at the minimum and 1.0 at the maximum.
     pub fn percentage(&self) -> f32 {
         let span = self.max - self.min;

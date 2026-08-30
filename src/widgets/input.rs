@@ -125,8 +125,6 @@ impl InputState {
         self
     }
 
-
-
     pub fn value(&self) -> &str {
         &self.text
     }
@@ -479,7 +477,6 @@ impl InputState {
         cx.notify();
     }
 
-
     pub fn contexts(&self) -> Arc<std::sync::Mutex<TextContexts>> {
         self.contexts.clone()
     }
@@ -601,7 +598,6 @@ fn glyph_outline(
 
 #[cfg(test)]
 mod tests {
-    
 
     #[test]
     fn a_cut_is_a_copy_then_a_delete() {
@@ -802,19 +798,18 @@ fn paint_field(
         input.paint_glyphs(inner, t::text(), window);
     });
 
-    if focused
-        && let Some(caret) = state.update(cx, |input, _| input.caret_rect()) {
-            window.paint_quad(gpui::fill(
-                Bounds {
-                    origin: Point {
-                        x: inner.x + px(caret.0),
-                        y: inner.y + px(caret.1),
-                    },
-                    size: gpui::size(px(1.5), px(caret.3)),
+    if focused && let Some(caret) = state.update(cx, |input, _| input.caret_rect()) {
+        window.paint_quad(gpui::fill(
+            Bounds {
+                origin: Point {
+                    x: inner.x + px(caret.0),
+                    y: inner.y + px(caret.1),
                 },
-                t::text(),
-            ));
-        }
+                size: gpui::size(px(1.5), px(caret.3)),
+            },
+            t::text(),
+        ));
+    }
 }
 
 /// Lay out a plain string and paint it, for the placeholder.

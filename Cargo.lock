@@ -251,7 +251,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -262,7 +262,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3113,7 +3113,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.57.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -5600,7 +5600,7 @@ dependencies = [
 [[package]]
 name = "runebender-core"
 version = "0.1.0"
-source = "git+https://github.com/eliheuer/runebender-core?rev=29f8d4334ba4b423588983a45155bb4b617da716#29f8d4334ba4b423588983a45155bb4b617da716"
+source = "git+https://github.com/eliheuer/runebender-core?rev=7b471bbd8af16379692f63b0a28f4d83c8cac918#7b471bbd8af16379692f63b0a28f4d83c8cac918"
 dependencies = [
  "clap",
  "fea-rs",
@@ -6253,7 +6253,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6438,7 +6438,7 @@ version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c2499c2d826531388872b2268718aed907a39bd785ab0dcfe57fab26283f92e"
 dependencies = [
- "skrifa 0.44.0",
+ "skrifa 0.40.0",
  "yazi",
  "zeno",
 ]
@@ -6918,7 +6918,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

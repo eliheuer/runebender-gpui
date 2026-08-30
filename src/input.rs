@@ -158,66 +158,70 @@ impl Workspace {
         let point_near = all_points
             .iter()
             .any(|(_, (x, y))| ((x - dx).powi(2) + (y - dy).powi(2)).sqrt() <= point_tolerance);
-        if self.editor.tool == Tool::Select && !shift && !point_near
-            && let Some(bbox) = self.selection_bbox(index) {
-                let zoom = self.editor.zoom().max(1e-6);
-                let grab = 7.0 / zoom;
-                let ring = 22.0 / zoom;
-                let (cx_, cy_) = (bbox.center().x, bbox.center().y);
-                let corners = [
-                    ((bbox.x0, bbox.y0), (bbox.x1, bbox.y1)),
-                    ((bbox.x1, bbox.y0), (bbox.x0, bbox.y1)),
-                    ((bbox.x0, bbox.y1), (bbox.x1, bbox.y0)),
-                    ((bbox.x1, bbox.y1), (bbox.x0, bbox.y0)),
-                ];
-                let edges = [
-                    ((cx_, bbox.y0), (cx_, bbox.y1), false, true),
-                    ((cx_, bbox.y1), (cx_, bbox.y0), false, true),
-                    ((bbox.x0, cy_), (bbox.x1, cy_), true, false),
-                    ((bbox.x1, cy_), (bbox.x0, cy_), true, false),
-                ];
-                let dist = |p: (f64, f64)| ((p.0 - dx).powi(2) + (p.1 - dy).powi(2)).sqrt();
-                let mut gesture: Option<((f64, f64), bool, bool, bool)> = None;
-                for (corner, opposite) in corners {
-                    if dist(corner) <= grab {
-                        gesture = Some((opposite, false, true, true));
+        if self.editor.tool == Tool::Select
+            && !shift
+            && !point_near
+            && let Some(bbox) = self.selection_bbox(index)
+        {
+            let zoom = self.editor.zoom().max(1e-6);
+            let grab = 7.0 / zoom;
+            let ring = 22.0 / zoom;
+            let (cx_, cy_) = (bbox.center().x, bbox.center().y);
+            let corners = [
+                ((bbox.x0, bbox.y0), (bbox.x1, bbox.y1)),
+                ((bbox.x1, bbox.y0), (bbox.x0, bbox.y1)),
+                ((bbox.x0, bbox.y1), (bbox.x1, bbox.y0)),
+                ((bbox.x1, bbox.y1), (bbox.x0, bbox.y0)),
+            ];
+            let edges = [
+                ((cx_, bbox.y0), (cx_, bbox.y1), false, true),
+                ((cx_, bbox.y1), (cx_, bbox.y0), false, true),
+                ((bbox.x0, cy_), (bbox.x1, cy_), true, false),
+                ((bbox.x1, cy_), (bbox.x0, cy_), true, false),
+            ];
+            let dist = |p: (f64, f64)| ((p.0 - dx).powi(2) + (p.1 - dy).powi(2)).sqrt();
+            let mut gesture: Option<((f64, f64), bool, bool, bool)> = None;
+            for (corner, opposite) in corners {
+                if dist(corner) <= grab {
+                    gesture = Some((opposite, false, true, true));
+                    break;
+                }
+            }
+            if gesture.is_none() {
+                for (mid, opposite, sx, sy) in edges {
+                    if dist(mid) <= grab {
+                        gesture = Some((opposite, false, sx, sy));
                         break;
                     }
                 }
-                if gesture.is_none() {
-                    for (mid, opposite, sx, sy) in edges {
-                        if dist(mid) <= grab {
-                            gesture = Some((opposite, false, sx, sy));
-                            break;
-                        }
+            }
+            if gesture.is_none() {
+                for (corner, _) in corners {
+                    let d = dist(corner);
+                    if d > grab && d <= ring {
+                        gesture = Some(((cx_, cy_), true, false, false));
+                        break;
                     }
-                }
-                if gesture.is_none() {
-                    for (corner, _) in corners {
-                        let d = dist(corner);
-                        if d > grab && d <= ring {
-                            gesture = Some(((cx_, cy_), true, false, false));
-                            break;
-                        }
-                    }
-                }
-                if let Some((anchor, rotate, scale_x, scale_y)) = gesture {
-                    self.push_undo_snapshot(index);
-                    self.editor.drag = Some(Drag::FreeTransform {
-                        anchor,
-                        start: (dx, dy),
-                        rotate,
-                        scale_x,
-                        scale_y,
-                        originals: all_points.iter().copied().collect(),
-                    });
-                    return;
                 }
             }
+            if let Some((anchor, rotate, scale_x, scale_y)) = gesture {
+                self.push_undo_snapshot(index);
+                self.editor.drag = Some(Drag::FreeTransform {
+                    anchor,
+                    start: (dx, dy),
+                    rotate,
+                    scale_x,
+                    scale_y,
+                    originals: all_points.iter().copied().collect(),
+                });
+                return;
+            }
+        }
         // HOI knobs (trajectory intermediate points) come first while
         // the trajectory view is up: each node's knob sits at its
         // intermediate point, or the linear middle.
-        if self.editor.tool == Tool::Select && self.show_trajectories
+        if self.editor.tool == Tool::Select
+            && self.show_trajectories
             && let Some((lo, hi, curves)) = self.project.as_ref().and_then(|p| {
                 let (lo, hi) = p.axis_end_masters()?;
                 let name = p.active_font().glyphs[index].name.clone();
@@ -227,29 +231,30 @@ impl Workspace {
                     p.masters[hi].font.get_glyph(name.as_ref())?.clone(),
                     read_hoi_intermediates(canon),
                 ))
-            }) {
-                let grab = 7.0 / self.editor.zoom().max(1e-6);
-                let mut best: Option<NearestPair> = None;
-                for (ci, (ca, cb)) in lo.contours.iter().zip(hi.contours.iter()).enumerate() {
-                    for (pi, (pa, pb)) in ca.points.iter().zip(cb.points.iter()).enumerate() {
-                        let a = (pa.x, pa.y);
-                        let b = (pb.x, pb.y);
-                        let q = curves
-                            .get(&(ci, pi))
-                            .copied()
-                            .unwrap_or(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0));
-                        let dist = ((q.0 - dx).powi(2) + (q.1 - dy).powi(2)).sqrt();
-                        if dist <= grab && best.is_none_or(|(d, ..)| dist < d) {
-                            best = Some((dist, (ci, pi), a, b));
-                        }
+            })
+        {
+            let grab = 7.0 / self.editor.zoom().max(1e-6);
+            let mut best: Option<NearestPair> = None;
+            for (ci, (ca, cb)) in lo.contours.iter().zip(hi.contours.iter()).enumerate() {
+                for (pi, (pa, pb)) in ca.points.iter().zip(cb.points.iter()).enumerate() {
+                    let a = (pa.x, pa.y);
+                    let b = (pb.x, pb.y);
+                    let q = curves
+                        .get(&(ci, pi))
+                        .copied()
+                        .unwrap_or(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0));
+                    let dist = ((q.0 - dx).powi(2) + (q.1 - dy).powi(2)).sqrt();
+                    if dist <= grab && best.is_none_or(|(d, ..)| dist < d) {
+                        best = Some((dist, (ci, pi), a, b));
                     }
                 }
-                if let Some((_, id, a, b)) = best {
-                    self.hoi_live = Some((id, (dx, dy)));
-                    self.editor.drag = Some(Drag::HoiKnob { id, a, b });
-                    return;
-                }
             }
+            if let Some((_, id, a, b)) = best {
+                self.hoi_live = Some((id, (dx, dy)));
+                self.editor.drag = Some(Drag::HoiKnob { id, a, b });
+                return;
+            }
+        }
         // Anchors take priority over points.
         let anchor_hit = font.glyphs[index]
             .anchors
@@ -843,9 +848,10 @@ impl Workspace {
             let id = *id;
             self.editor.drag = None;
             if let Some((live_id, q)) = self.hoi_live.take()
-                && live_id == id {
-                    self.commit_hoi_intermediate(id, q);
-                }
+                && live_id == id
+            {
+                self.commit_hoi_intermediate(id, q);
+            }
             return;
         }
         if self.editor.tool == Tool::Pen {

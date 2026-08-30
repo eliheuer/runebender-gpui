@@ -44,7 +44,6 @@ impl MenuBar {
             open: None,
         }
     }
-
 }
 
 fn convert(menu: Menu) -> MenuEntry {

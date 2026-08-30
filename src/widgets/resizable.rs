@@ -138,7 +138,6 @@ impl ResizableGroup {
         self
     }
 
-
     fn build(self, cx: &mut App) -> AnyElement {
         let horizontal = matches!(self.axis, Axis::Horizontal);
         let group = self.id.clone();

@@ -10,7 +10,6 @@
 
 use super::*;
 
-
 /// A contour start marker: the point, the direction, and whether the
 /// contour is closed.
 type StartMarker = ((f64, f64), (f64, f64), bool);
@@ -1030,24 +1029,23 @@ impl Workspace {
         })();
 
         // Knife drag: the cut line plus its contour intersections.
-        let knife_line: Option<KnifeLine> =
-            match &self.editor.drag {
-                Some(Drag::Knife { start, current }) => {
-                    let hits = font
-                        .font
-                        .get_glyph(entry.name.as_ref())
-                        .map(|g| {
-                            runebender_core::knife::knife_hit_points(
-                                g,
-                                kurbo::Point::new(start.0, start.1),
-                                kurbo::Point::new(current.0, current.1),
-                            )
-                        })
-                        .unwrap_or_default();
-                    Some((*start, *current, hits))
-                }
-                _ => None,
-            };
+        let knife_line: Option<KnifeLine> = match &self.editor.drag {
+            Some(Drag::Knife { start, current }) => {
+                let hits = font
+                    .font
+                    .get_glyph(entry.name.as_ref())
+                    .map(|g| {
+                        runebender_core::knife::knife_hit_points(
+                            g,
+                            kurbo::Point::new(start.0, start.1),
+                            kurbo::Point::new(current.0, current.1),
+                        )
+                    })
+                    .unwrap_or_default();
+                Some((*start, *current, hits))
+            }
+            _ => None,
+        };
         // An instance draws like Preview: filled, no editable chrome.
         let preview_mode = self.editor.tool == Tool::Preview || showing_instance;
         let bounds_slot = self.editor.bounds.clone();
