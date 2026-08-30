@@ -223,7 +223,7 @@ impl Workspace {
             .font
             .get_glyph(font.glyphs[index].name.as_ref())
             .and_then(|g| {
-                runebender_core::outline::glyph_ops::component_at(
+                runebender_core::outline::component_ops::component_at(
                     &font.font,
                     g,
                     kurbo::Point::new(dx, dy),

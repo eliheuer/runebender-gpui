@@ -245,7 +245,7 @@ impl Workspace {
                 None => (String::new(), String::new()),
             };
             let group = |left: bool| {
-                runebender_core::outline::glyph_ops::kern_group(&font.font, name.as_ref(), left)
+                runebender_core::document::font_ops::kern_group(&font.font, name.as_ref(), left)
                     .map(|g| {
                         g.as_str()
                             .replace("public.kern1.", "")

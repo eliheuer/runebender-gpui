@@ -405,7 +405,7 @@ impl Workspace {
                 }
                 let component_hit = self.font().and_then(|f| {
                     let g = f.font.get_glyph(f.glyphs[index].name.as_ref())?;
-                    runebender_core::outline::glyph_ops::component_at(
+                    runebender_core::outline::component_ops::component_at(
                         &f.font,
                         g,
                         kurbo::Point::new(dx, dy),
@@ -1389,7 +1389,7 @@ impl Workspace {
                     .font_mut()
                     .and_then(|f| {
                         f.edit_glyph(index, |g| {
-                            runebender_core::outline::glyph_ops::delete_component(g, ci)
+                            runebender_core::outline::component_ops::delete_component(g, ci)
                         })
                     })
                     .unwrap_or(false);

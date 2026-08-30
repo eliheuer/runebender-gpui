@@ -8,7 +8,6 @@
 //! same function. They are the layer between an intent ("remove the
 //! overlap") and the operation in runebender-core that performs it.
 
-
 mod annotations;
 mod color;
 mod features;

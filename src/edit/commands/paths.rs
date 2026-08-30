@@ -221,7 +221,7 @@ impl Workspace {
                 .font_mut()
                 .and_then(|f| {
                     f.edit_glyph(index, |g| {
-                        runebender_core::outline::glyph_ops::duplicate_component(g, ci)
+                        runebender_core::outline::component_ops::duplicate_component(g, ci)
                     })
                 })
                 .flatten();

@@ -175,7 +175,7 @@ impl Workspace {
         };
         let mut renamed = false;
         for master in project.masters.iter_mut() {
-            if runebender_core::outline::glyph_ops::rename_glyph(&mut master.font, &old, &new_name)
+            if runebender_core::document::font_ops::rename_glyph(&mut master.font, &old, &new_name)
             {
                 master.dirty = true;
                 master.kerning_dirty = true;
@@ -238,7 +238,7 @@ impl Workspace {
             if let Some(glyph_index) = master.name_map.get(&name).copied() {
                 let changed = master
                     .edit_glyph(glyph_index, |g| {
-                        runebender_core::outline::glyph_ops::set_glyph_unicode(g, text)
+                        runebender_core::document::font_ops::set_glyph_unicode(g, text)
                     })
                     .unwrap_or(false);
                 if changed {
@@ -267,7 +267,7 @@ impl Workspace {
             return;
         };
         for master in project.masters.iter_mut() {
-            if runebender_core::outline::glyph_ops::set_kern_group(
+            if runebender_core::document::font_ops::set_kern_group(
                 &mut master.font,
                 &name,
                 first_side,
@@ -301,10 +301,10 @@ impl Workspace {
             .codepoint
             .map(|c| format!("{:04X}", c as u32))
             .unwrap_or_default();
-        let group_l = runebender_core::outline::glyph_ops::kern_group(&font.font, &name, true)
+        let group_l = runebender_core::document::font_ops::kern_group(&font.font, &name, true)
             .map(|g| g.as_str().replace("public.kern1.", ""))
             .unwrap_or_default();
-        let group_r = runebender_core::outline::glyph_ops::kern_group(&font.font, &name, false)
+        let group_r = runebender_core::document::font_ops::kern_group(&font.font, &name, false)
             .map(|g| g.as_str().replace("public.kern2.", ""))
             .unwrap_or_default();
         let set = |entity: &gpui::Entity<widgets::input::InputState>,

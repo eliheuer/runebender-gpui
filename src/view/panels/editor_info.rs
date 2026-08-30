@@ -29,11 +29,11 @@ impl Workspace {
             .unwrap_or_default()
             .into();
         let group_l =
-            runebender_core::outline::glyph_ops::kern_group(&font.font, entry.name.as_ref(), true)
+            runebender_core::document::font_ops::kern_group(&font.font, entry.name.as_ref(), true)
                 .map(|g| g.as_str().replace("public.kern1.", ""))
                 .unwrap_or_default();
         let group_r =
-            runebender_core::outline::glyph_ops::kern_group(&font.font, entry.name.as_ref(), false)
+            runebender_core::document::font_ops::kern_group(&font.font, entry.name.as_ref(), false)
                 .map(|g| g.as_str().replace("public.kern2.", ""))
                 .unwrap_or_default();
 

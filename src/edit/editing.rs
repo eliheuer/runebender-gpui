@@ -199,7 +199,7 @@ impl Workspace {
         let norad_glyph = font.font.get_glyph(entry.name.as_ref());
         let component = if anchor.is_none() {
             norad_glyph.and_then(|g| {
-                runebender_core::outline::glyph_ops::component_at(
+                runebender_core::outline::component_ops::component_at(
                     &font.font,
                     g,
                     kurbo::Point::new(dx, dy),
@@ -345,7 +345,7 @@ impl Workspace {
                         .and_then(|f| {
                             let font_clone = f.font.clone();
                             f.edit_glyph(index, |g| {
-                                runebender_core::outline::glyph_ops::decompose_single_component(
+                                runebender_core::outline::component_ops::decompose_single_component(
                                     &font_clone,
                                     g,
                                     ci,
@@ -546,7 +546,7 @@ impl Workspace {
             .and_then(|f| {
                 let font_clone = f.font.clone();
                 f.edit_glyph(index, |g| {
-                    runebender_core::outline::glyph_ops::add_component(&font_clone, g, &base)
+                    runebender_core::outline::component_ops::add_component(&font_clone, g, &base)
                 })
             })
             .unwrap_or(false);
@@ -861,7 +861,7 @@ impl Workspace {
                 .font_mut()
                 .and_then(|f| {
                     f.edit_glyph(index, |g| {
-                        runebender_core::outline::glyph_ops::translate_component(
+                        runebender_core::outline::component_ops::translate_component(
                             g, ci, delta.x, delta.y,
                         )
                     })
@@ -1191,7 +1191,7 @@ impl Workspace {
                 .font_mut()
                 .and_then(|f| {
                     f.edit_glyph(index, |g| {
-                        runebender_core::outline::glyph_ops::translate_component(g, ci, dx, dy)
+                        runebender_core::outline::component_ops::translate_component(g, ci, dx, dy)
                     })
                 })
                 .unwrap_or(false);
