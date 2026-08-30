@@ -172,18 +172,17 @@ unitsPerEm = 1000;
     }
 
     /// The demo designspace the two feature tests compile against. Same
-    /// rule as core's `test_fonts`: `RUNEBENDER_TEST_FONTS`, else the
-    /// runebender-web checkout beside this one.
+    /// rule as core's `testing::fonts`: `RUNEBENDER_TEST_FONTS`, else the
+    /// virtua-grotesk checkout beside this one.
     fn fixture_designspace() -> PathBuf {
         let dir = match std::env::var_os("RUNEBENDER_TEST_FONTS") {
             Some(dir) => PathBuf::from(dir),
-            None => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../runebender-web/assets/test-fonts"),
+            None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources"),
         };
         let path = dir.join("VirtuaGrotesk.designspace");
         assert!(
             path.is_file(),
-            "fixture fonts not found at {}: clone eliheuer/runebender-web next to this \
+            "fixture fonts not found at {}: clone eliheuer/virtua-grotesk next to this \
              repository, or set RUNEBENDER_TEST_FONTS",
             dir.display()
         );

@@ -2,8 +2,8 @@
 # and built and tested on Linux and macOS. The Linux job installs the
 # system libraries gpui's Wayland and X11 backends link against, so a
 # build that cannot open a window there fails here first. Two tests
-# compile feature code against Virtua Grotesk, checked out from
-# runebender-web beside this repository, the layout tests.rs expects.
+# compile feature code against Virtua Grotesk, checked out from its
+# own repository beside this one, the layout tests.rs expects.
 name: CI
 
 on:
@@ -34,9 +34,9 @@ jobs:
       - name: Fixture fonts
         uses: actions/checkout@v4
         with:
-          repository: eliheuer/runebender-web
-          path: runebender-web
-          sparse-checkout: assets/test-fonts
+          repository: eliheuer/virtua-grotesk
+          path: virtua-grotesk
+          sparse-checkout: sources
       - name: Linux system libraries
         if: runner.os == 'Linux'
         run: |
@@ -76,14 +76,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: runebender-gpui
-      # The browser build embeds the demo font from the runebender-web
+      # The browser build embeds the demo font from the virtua-grotesk
       # checkout at compile time (web_host.rs, include_dir!).
       - name: Demo font
         uses: actions/checkout@v4
         with:
-          repository: eliheuer/runebender-web
-          path: runebender-web
-          sparse-checkout: assets/test-fonts
+          repository: eliheuer/virtua-grotesk
+          path: virtua-grotesk
+          sparse-checkout: sources
       # The browser build needs wasm atomics and shared memory, which the
       # prebuilt standard library lacks, so std is rebuilt on a nightly.
       # This checks that the wasm-only code still compiles; the bundle

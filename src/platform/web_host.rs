@@ -289,7 +289,7 @@ pub fn project_from_fetched(fetched: &FetchedWorkspace) -> Result<(Project, Vec<
 /// UFOs compiled into the binary.
 pub fn demo_project() -> Result<Project, String> {
     static DEMO: include_dir::Dir<'_> =
-        include_dir::include_dir!("$CARGO_MANIFEST_DIR/../runebender-web/assets/test-fonts");
+        include_dir::include_dir!("$CARGO_MANIFEST_DIR/../virtua-grotesk/sources");
     let ds_text = DEMO
         .get_file("VirtuaGrotesk.designspace")
         .and_then(|f| f.contents_utf8())

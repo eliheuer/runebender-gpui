@@ -50,7 +50,7 @@ clone it beside this repository and put a `paths` override in a
 `.cargo/config.toml` above both checkouts, never inside either.
 
 Two tests compile feature code against Virtua Grotesk from
-`../runebender-web/assets/test-fonts` or `$RUNEBENDER_TEST_FONTS`.
+`../virtua-grotesk/sources` or `$RUNEBENDER_TEST_FONTS`.
 
 Do not launch the GUI to check your work while the user is at the
 machine. Verify through tests.

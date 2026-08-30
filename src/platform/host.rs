@@ -374,5 +374,5 @@ pub(crate) fn fontc_binary() -> Option<PathBuf> {
 
 pub(crate) fn default_font_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../runebender-web/assets/test-fonts/VirtuaGrotesk.designspace")
+        .join("../virtua-grotesk/sources/VirtuaGrotesk.designspace")
 }
