@@ -24,12 +24,12 @@ comment that says what the file is for. Each directory has a
 | Path | Holds |
 |---|---|
 | `main.rs` | `main()` and the module list |
-| `workspace.rs` | the `Workspace` struct and the types it is made of |
+| `workspace.rs` | the `Workspace` struct: five state groups (`grid`, `sidebar`, `preview`, `models`, `inputs`) plus the tools, drags, and sessions |
 | `actions.rs` | the action list and the menus |
 | `wiring.rs` | `Workspace::new`: every input widget and the subscription that writes it to the font |
 | `launch.rs` | the keymap, the keystroke router, argument handling, the interface font |
-| `view/` | what the window shows: `canvas`, `grid`, `chrome`, `panels/` (one file per region), `render`, `paint`, `blur`, `theme` |
-| `edit/` | what the user does: `commands`, `editing`, `input`, `inspector`, `session`, `sidebar`, `text_tool`, `local_ai` |
+| `view/` | what the window shows: `canvas/` (grid views; the editing view as a scene plus one paint function per layer), `grid`, `chrome`, `panels/` (one file per region), `render`, `paint`, `blur`, `theme` |
+| `edit/` | what the user does: `commands/` (one file per menu), `editing`, `input`, `inspector`, `session`, `sidebar`, `text_tool`, `local_ai` |
 | `platform/` | the world outside the window: `config`, `journal`, `host`, `web_host` |
 | `widgets/` | text input, slider, resizable split, in-window menu bar |
 | `tests.rs` | tests of the shell itself |
