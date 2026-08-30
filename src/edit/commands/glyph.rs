@@ -86,7 +86,7 @@ impl Workspace {
             master.refresh_from_font();
         }
         added += targets.len();
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         self.status_note = Some(
             format!(
                 "Added {added} missing glyph{}",
@@ -139,7 +139,7 @@ impl Workspace {
         }
         project.recheck_compat(&name);
         self.selected = self.font().and_then(|f| f.name_map.get(&name).copied());
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         self.status_note = Some(format!("Duplicated {base} as {name}").into());
     }
 
@@ -265,7 +265,7 @@ impl Workspace {
         let name_owned = name.clone();
         project.recheck_compat(&name_owned);
         self.selected = self.font().and_then(|f| f.name_map.get(&name).copied());
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         self.status_note = Some(format!("Added {name}").into());
     }
 
@@ -284,7 +284,7 @@ impl Workspace {
             }
         }
         self.selected = None;
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         self.status_note = Some(format!("Removed {name}").into());
     }
 }

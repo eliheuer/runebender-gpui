@@ -1041,7 +1041,7 @@ impl Workspace {
     }
 
     pub(crate) fn glyph_smart_axis_ref(&self) -> gpui::Entity<widgets::input::InputState> {
-        self.smart_axis_input.clone()
+        self.inputs.smart_axis.clone()
     }
 
     /// The decoded background image for a file in the UFO images

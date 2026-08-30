@@ -20,7 +20,7 @@ impl Workspace {
     /// Switch the active master, keeping the open glyph (by name)
     /// when it exists in the target master.
     pub(crate) fn switch_master(&mut self, master: usize) {
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         let Some(project) = self.project.as_mut() else {
             return;
         };

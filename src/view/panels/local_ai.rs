@@ -17,7 +17,8 @@ impl Workspace {
 
         // Which model, and a way to change it.
         let label: SharedString = self
-            .model_summary
+            .models
+            .summary
             .clone()
             .unwrap_or_else(|| "No model chosen".into());
         let body = body.child(
@@ -44,7 +45,7 @@ impl Workspace {
             body
         } else {
             installed.into_iter().fold(body, |el, (name, path)| {
-                let current = self.model_dir.as_deref() == Some(path.as_path());
+                let current = self.models.dir.as_deref() == Some(path.as_path());
                 el.child(
                     div()
                         .id(SharedString::from(format!("ai-installed-{name}")))
@@ -68,7 +69,7 @@ impl Workspace {
             })
         };
 
-        if self.model_dir.is_none() {
+        if self.models.dir.is_none() {
             let where_to_put_them = Self::models_dir()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "~/.runebender/models".into());
@@ -81,7 +82,7 @@ impl Workspace {
 
         // Strength, because a model can be right about direction and
         // short on distance.
-        let body = match &self.model_strength_slider {
+        let body = match &self.models.strength_slider {
             Some(slider) => body.child(
                 div()
                     .flex()
@@ -92,7 +93,7 @@ impl Workspace {
                             .w(px(58.0))
                             .text_xs()
                             .text_color(t::text_muted())
-                            .child(format!("{:.2}x", self.model_strength)),
+                            .child(format!("{:.2}x", self.models.strength)),
                     )
                     .child(div().flex_1().child(flat_slider(slider, cx))),
             ),
@@ -125,7 +126,7 @@ impl Workspace {
                 })
                 .on_click(cx.listener(|this, _, _, cx| {
                     if let Mode::Editor(index) = this.mode {
-                        let dir = this.model_dir.clone();
+                        let dir = this.models.dir.clone();
                         if let Some(dir) = dir {
                             this.apply_bolden(index, &dir);
                             cx.notify();
@@ -152,7 +153,7 @@ impl Workspace {
                 })),
         );
 
-        match &self.model_score {
+        match &self.models.score {
             Some((glyph, model, baseline)) => {
                 let better = model < baseline;
                 body.child(

@@ -94,9 +94,9 @@ impl Workspace {
                             .items_center()
                             .gap(px(CARD_GAP))
                             .child(label("LSB".into()))
-                            .child(metric(&self.metric_inputs.lsb))
-                            .child(metric(&self.metric_inputs.width))
-                            .child(metric(&self.metric_inputs.rsb))
+                            .child(metric(&self.inputs.metric.lsb))
+                            .child(metric(&self.inputs.metric.width))
+                            .child(metric(&self.inputs.metric.rsb))
                             .child(label("RSB".into())),
                     )
                     .child(
@@ -212,7 +212,7 @@ impl Workspace {
             .child(
                 div()
                     .h(px(260.0))
-                    .child(widgets::input::Input::new(&self.features_input).h_full()),
+                    .child(widgets::input::Input::new(&self.inputs.features).h_full()),
             )
             .child(
                 div()
@@ -357,7 +357,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2()
-            .child(widgets::input::Input::new(&self.group_name_input))
+            .child(widgets::input::Input::new(&self.inputs.group_name))
             .child(rows)
             .child(
                 div()
@@ -377,7 +377,8 @@ impl Workspace {
             return self.section(cx, "Kerning", div());
         };
         let filter = self
-            .kern_inputs
+            .inputs
+            .kern
             .filter
             .read(cx)
             .value()
@@ -408,9 +409,9 @@ impl Workspace {
         let editor_row = div()
             .flex()
             .gap_1()
-            .child(field(&self.kern_inputs.first))
-            .child(field(&self.kern_inputs.second))
-            .child(field(&self.kern_inputs.value));
+            .child(field(&self.inputs.kern.first))
+            .child(field(&self.inputs.kern.second))
+            .child(field(&self.inputs.kern.value));
         let mut list = div()
             .id("kerning-pairs")
             .max_h(px(220.0))
@@ -435,9 +436,9 @@ impl Workspace {
                     // adjusting an existing pair is click, type, Enter.
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let sets = [
-                            (&this.kern_inputs.first, f3.clone()),
-                            (&this.kern_inputs.second, s3.clone()),
-                            (&this.kern_inputs.value, format!("{v3}")),
+                            (&this.inputs.kern.first, f3.clone()),
+                            (&this.inputs.kern.second, s3.clone()),
+                            (&this.inputs.kern.value, format!("{v3}")),
                         ];
                         for (entity, value) in sets {
                             entity.clone().update(cx, |st, cx| {
@@ -494,7 +495,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_1()
-            .child(widgets::input::Input::new(&self.kern_inputs.filter))
+            .child(widgets::input::Input::new(&self.inputs.kern.filter))
             .child(editor_row)
             .child(list)
             .child(
@@ -550,7 +551,7 @@ impl Workspace {
         swatches = swatches.child(
             div()
                 .w(px(96.0))
-                .child(widgets::input::Input::new(&self.color_hex_input)),
+                .child(widgets::input::Input::new(&self.inputs.color_hex)),
         );
         if !palette.is_empty() {
             let selected = self.color_selected;
@@ -866,28 +867,28 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2()
-            .child(field("Family Name", &self.font_info_inputs.family))
-            .child(field("Style Name", &self.font_info_inputs.style))
+            .child(field("Family Name", &self.inputs.font_info.family))
+            .child(field("Style Name", &self.inputs.font_info.style))
             .child(
                 div()
                     .flex()
                     .gap_1()
-                    .child(field("UPM", &self.font_info_inputs.upm))
-                    .child(field("Italic Angle", &self.font_info_inputs.italic_angle)),
+                    .child(field("UPM", &self.inputs.font_info.upm))
+                    .child(field("Italic Angle", &self.inputs.font_info.italic_angle)),
             )
             .child(
                 div()
                     .flex()
                     .gap_1()
-                    .child(field("Ascender", &self.font_info_inputs.ascender))
-                    .child(field("Descender", &self.font_info_inputs.descender)),
+                    .child(field("Ascender", &self.inputs.font_info.ascender))
+                    .child(field("Descender", &self.inputs.font_info.descender)),
             )
             .child(
                 div()
                     .flex()
                     .gap_1()
-                    .child(field("x-Height", &self.font_info_inputs.x_height))
-                    .child(field("Cap Height", &self.font_info_inputs.cap_height)),
+                    .child(field("x-Height", &self.inputs.font_info.x_height))
+                    .child(field("Cap Height", &self.inputs.font_info.cap_height)),
             )
             // The vertical-metrics parameters (typo/hhea/win), kept
             // together the way the Glyphs Masters tab carries them.
@@ -901,24 +902,24 @@ impl Workspace {
                 div()
                     .flex()
                     .gap_1()
-                    .child(field("typoAsc", &self.font_info_inputs.typo_asc))
-                    .child(field("typoDesc", &self.font_info_inputs.typo_desc))
-                    .child(field("typoGap", &self.font_info_inputs.typo_gap)),
+                    .child(field("typoAsc", &self.inputs.font_info.typo_asc))
+                    .child(field("typoDesc", &self.inputs.font_info.typo_desc))
+                    .child(field("typoGap", &self.inputs.font_info.typo_gap)),
             )
             .child(
                 div()
                     .flex()
                     .gap_1()
-                    .child(field("hheaAsc", &self.font_info_inputs.hhea_asc))
-                    .child(field("hheaDesc", &self.font_info_inputs.hhea_desc))
-                    .child(field("hheaGap", &self.font_info_inputs.hhea_gap)),
+                    .child(field("hheaAsc", &self.inputs.font_info.hhea_asc))
+                    .child(field("hheaDesc", &self.inputs.font_info.hhea_desc))
+                    .child(field("hheaGap", &self.inputs.font_info.hhea_gap)),
             )
             .child(
                 div()
                     .flex()
                     .gap_1()
-                    .child(field("winAsc", &self.font_info_inputs.win_asc))
-                    .child(field("winDesc", &self.font_info_inputs.win_desc)),
+                    .child(field("winAsc", &self.inputs.font_info.win_asc))
+                    .child(field("winDesc", &self.inputs.font_info.win_desc)),
             )
             // PostScript hinting data: alignment zones (pairs of
             // position, position+size) and standard stems, the
@@ -930,14 +931,14 @@ impl Workspace {
                     .text_color(t::text_muted())
                     .child("Zones & Stems"),
             )
-            .child(field("Blue Values", &self.font_info_inputs.blue_values))
-            .child(field("Other Blues", &self.font_info_inputs.other_blues))
+            .child(field("Blue Values", &self.inputs.font_info.blue_values))
+            .child(field("Other Blues", &self.inputs.font_info.other_blues))
             .child(
                 div()
                     .flex()
                     .gap_1()
-                    .child(field("Stems H", &self.font_info_inputs.stems_h))
-                    .child(field("Stems V", &self.font_info_inputs.stems_v)),
+                    .child(field("Stems H", &self.inputs.font_info.stems_h))
+                    .child(field("Stems V", &self.inputs.font_info.stems_v)),
             );
         self.section(cx, "Font Info", body)
     }
@@ -1061,8 +1062,8 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(field("X", &self.metric_inputs.x))
-                            .child(field("Y", &self.metric_inputs.y)),
+                            .child(field("X", &self.inputs.metric.x))
+                            .child(field("Y", &self.inputs.metric.y)),
                     )
                     .child(
                         div()
@@ -1070,8 +1071,8 @@ impl Workspace {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(field("W", &self.metric_inputs.w))
-                            .child(field("H", &self.metric_inputs.h)),
+                            .child(field("W", &self.inputs.metric.w))
+                            .child(field("H", &self.inputs.metric.h)),
                     ),
             );
         }
@@ -1086,7 +1087,7 @@ impl Workspace {
                     .child(
                         div()
                             .flex_1()
-                            .child(widgets::input::Input::new(&self.anchor_name_input)),
+                            .child(widgets::input::Input::new(&self.inputs.anchor_name)),
                     ),
             );
         }
@@ -1168,7 +1169,7 @@ impl Workspace {
                             .child(
                                 div()
                                     .w(px(64.0))
-                                    .child(widgets::input::Input::new(&self.smart_value_input)),
+                                    .child(widgets::input::Input::new(&self.inputs.smart_value)),
                             ),
                     );
                 }
@@ -1267,7 +1268,7 @@ impl Workspace {
                     .child("Instances"),
             );
             body = body.child(list);
-            body = body.child(widgets::input::Input::new(&self.instance_name_input));
+            body = body.child(widgets::input::Input::new(&self.inputs.instance_name));
         }
         // Axis mappings (avar): user → design pairs on the first
         // axis, the Glyphs Axis Mappings story. "400,430" adds or
@@ -1306,7 +1307,7 @@ impl Workspace {
             body = body.child(
                 div()
                     .w(px(110.0))
-                    .child(widgets::input::Input::new(&self.axis_map_input)),
+                    .child(widgets::input::Input::new(&self.inputs.axis_map)),
             );
         }
         // HOI: the trajectory view and the timing ease, the
@@ -1348,7 +1349,7 @@ impl Workspace {
                 .child(
                     div()
                         .w(px(64.0))
-                        .child(widgets::input::Input::new(&self.ease_input)),
+                        .child(widgets::input::Input::new(&self.inputs.ease)),
                 ),
         );
         Some(self.section(cx, "Axes", body))

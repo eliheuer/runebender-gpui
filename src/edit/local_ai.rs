@@ -65,10 +65,10 @@ impl Workspace {
         };
         match font_ml::outline::OutlineModel::load(&checkpoint) {
             Ok(model) => {
-                self.model_summary = Some(checkpoint.summary().into());
-                self.model_loaded = Some(std::rc::Rc::new(model));
-                self.model_dir = Some(dir.to_path_buf());
-                self.model_score = None;
+                self.models.summary = Some(checkpoint.summary().into());
+                self.models.loaded = Some(std::rc::Rc::new(model));
+                self.models.dir = Some(dir.to_path_buf());
+                self.models.score = None;
                 self.status_note = Some("Model loaded".into());
             }
             Err(e) => self.status_note = Some(format!("Model: {e}").into()),
@@ -128,10 +128,10 @@ impl Workspace {
                 return;
             }
         };
-        if self.model_loaded.is_none() {
+        if self.models.loaded.is_none() {
             self.load_model(dir);
         }
-        let Some(model) = self.model_loaded.clone() else {
+        let Some(model) = self.models.loaded.clone() else {
             return;
         };
         let Some(font) = self.font() else { return };
@@ -168,7 +168,7 @@ impl Workspace {
                 strength,
             )
         };
-        let result = match predict(self.model_strength) {
+        let result = match predict(self.models.strength) {
             Ok(r) => r,
             Err(e) => {
                 self.status_note = Some(format!("Bolden: {e}").into());

@@ -67,9 +67,9 @@ impl Workspace {
             extent
         };
 
-        let blur = self.preview_blur;
-        let blur_cache = self.preview_blur_cache.clone();
-        let invert = self.preview_invert;
+        let blur = self.preview.blur;
+        let blur_cache = self.preview.blur_cache.clone();
+        let invert = self.preview.invert;
 
         let body = div().size_full().min_h(px(0.0)).child(
             canvas(

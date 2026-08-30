@@ -45,12 +45,12 @@ impl Workspace {
         self.project = Some(Project::new_font(path));
         self.mode = Mode::Grid;
         self.selected = None;
-        self.multi_selected.clear();
+        self.grid.multi_selected.clear();
         self.last_editor = None;
-        self.sidebar_counts = None;
-        self.sidebar_matches = None;
-        self.sidebar_filter = SidebarFilter::All;
-        self.search_query.clear();
+        self.sidebar.counts = None;
+        self.sidebar.matches = None;
+        self.sidebar.filter = SidebarFilter::All;
+        self.sidebar.search_query.clear();
         self.rebuild_text_models();
         self.status_note = Some("New font · Save As… picks where it lives on disk".into());
     }
@@ -342,8 +342,9 @@ impl Workspace {
         let entry = &font.glyphs[index];
         let (name, codepoint, advance) = (entry.name.to_string(), entry.codepoint, entry.advance);
         let count = SAMPLE_STRINGS.len() as isize;
-        self.sample_index = (self.sample_index as isize + step).rem_euclid(count) as usize;
-        let sample = SAMPLE_STRINGS[self.sample_index];
+        self.preview.sample_index =
+            (self.preview.sample_index as isize + step).rem_euclid(count) as usize;
+        let sample = SAMPLE_STRINGS[self.preview.sample_index];
         self.edit_buffer.clear();
         // The open glyph leads; the sample text follows it.
         self.edit_buffer.insert_glyph(&name, codepoint, advance);

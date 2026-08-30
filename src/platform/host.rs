@@ -116,7 +116,7 @@ impl Workspace {
 
     /// Re-read every clean master from disk, keeping the open glyph.
     pub(crate) fn reload_from_disk(&mut self) {
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         let Some(project) = self.project.as_mut() else {
             return;
         };
@@ -176,7 +176,7 @@ impl Workspace {
                         workspace.active_session = 0;
                         workspace.last_editor = None;
                         workspace.project = Some(project);
-                        workspace.sidebar_counts = None;
+                        workspace.sidebar.counts = None;
                         workspace.load_error = None;
                         workspace.mode = Mode::Grid;
                         workspace.selected = None;
@@ -336,12 +336,12 @@ impl Workspace {
                         workspace.active_session = 0;
                         workspace.last_editor = None;
                         workspace.project = Some(project);
-                        workspace.sidebar_counts = None;
+                        workspace.sidebar.counts = None;
                         workspace.load_error = None;
                         workspace.mode = Mode::Grid;
                         workspace.selected = None;
                         workspace.status_note = None;
-                        workspace.search_query.clear();
+                        workspace.sidebar.search_query.clear();
                         workspace.rebuild_text_models();
                         workspace.start_watching(cx);
                     }

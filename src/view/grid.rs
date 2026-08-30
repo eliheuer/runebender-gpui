@@ -17,18 +17,18 @@ impl Workspace {
     pub(crate) fn grid_cell_metrics(&self) -> GridFit {
         // Detail mode needs room for the info lines: the cell floor
         // rises, whatever the zoom slider says.
-        let size = if self.font_view_mode == FontViewMode::Detail {
-            self.grid_cell_size.max(148.0)
+        let size = if self.grid.view_mode == FontViewMode::Detail {
+            self.grid.cell_size.max(148.0)
         } else {
-            self.grid_cell_size
+            self.grid.cell_size
         };
-        Self::solve_grid(self.grid_viewport, size, GRID_PAD)
+        Self::solve_grid(self.grid.viewport, size, GRID_PAD)
     }
 
     /// Same solve for the editor sidebar's mini grid, against its own
     /// narrower viewport.
     pub(crate) fn sidebar_cell_metrics(&self) -> GridFit {
-        Self::solve_grid(self.sidebar_viewport, self.sidebar_cell_size, GRID_PAD_SM)
+        Self::solve_grid(self.sidebar.viewport, self.sidebar.cell_size, GRID_PAD_SM)
     }
 
     /// Scroll a row-quantized grid by a wheel delta. The offset is
@@ -94,13 +94,14 @@ impl Workspace {
         let mut indices: Vec<usize> = (0..font.glyphs.len())
             .filter(|&i| {
                 let entry = &font.glyphs[i];
-                self.sidebar_matches
+                self.sidebar
+                    .matches
                     .as_ref()
                     .is_none_or(|m| m.contains(entry.name.as_ref()))
                     && self.search_matches(entry.name.as_ref(), entry.codepoint)
             })
             .collect();
-        if !self.sort_unicode {
+        if !self.grid.sort_unicode {
             indices.sort_by_key(|&i| font.glyphs[i].name.clone());
         }
         indices
@@ -114,10 +115,10 @@ impl Workspace {
         if let Some(primary) = self.selected
             && let Some(primary_name) = self.font().map(|f| f.glyphs[primary].name.to_string())
         {
-            self.multi_selected.insert(primary_name);
+            self.grid.multi_selected.insert(primary_name);
         }
-        if !self.multi_selected.remove(&name) {
-            self.multi_selected.insert(name);
+        if !self.grid.multi_selected.remove(&name) {
+            self.grid.multi_selected.insert(name);
         }
         self.selected = Some(index);
     }
@@ -146,7 +147,7 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
-        self.multi_selected.extend(names);
+        self.grid.multi_selected.extend(names);
     }
 
     /// Every selected glyph name (primary plus multi), in font order.
@@ -158,7 +159,7 @@ impl Workspace {
             .glyphs
             .iter()
             .filter(|entry| {
-                self.multi_selected.contains(entry.name.as_ref())
+                self.grid.multi_selected.contains(entry.name.as_ref())
                     || self
                         .selected
                         .is_some_and(|i| font.glyphs[i].name == entry.name)
@@ -173,21 +174,21 @@ impl Workspace {
     /// inputs have not moved.
     pub(crate) fn visible_glyphs(&mut self) -> Arc<Vec<usize>> {
         let key = OrderKey {
-            query: self.search_query.clone(),
-            mode: self.search_mode,
-            regex: self.search_regex,
-            case: self.search_case,
-            sort_unicode: self.sort_unicode,
-            filter: self.sidebar_filter.clone(),
+            query: self.sidebar.search_query.clone(),
+            mode: self.sidebar.search_mode,
+            regex: self.sidebar.search_regex,
+            case: self.sidebar.search_case,
+            sort_unicode: self.grid.sort_unicode,
+            filter: self.sidebar.filter.clone(),
             revision: self.font().map(|f| f.revision).unwrap_or(0),
             master: self.project.as_ref().map(|p| p.active).unwrap_or(0),
         };
-        if self.order_key.as_ref() == Some(&key)
-            && let Some(order) = &self.glyph_order
+        if self.grid.order_key.as_ref() == Some(&key)
+            && let Some(order) = &self.grid.order
         {
             return order.clone();
         }
-        let matches = self.sidebar_matches.clone();
+        let matches = self.sidebar.matches.clone();
         let order: Vec<usize> = match self.font() {
             Some(font) => {
                 let mut indices: Vec<usize> = (0..font.glyphs.len())
@@ -199,7 +200,7 @@ impl Workspace {
                             && self.search_matches(entry.name.as_ref(), entry.codepoint)
                     })
                     .collect();
-                if !self.sort_unicode {
+                if !self.grid.sort_unicode {
                     // Font order is already unicode order, so the Name
                     // toggle sorts alphabetically.
                     indices.sort_by(|a, b| font.glyphs[*a].name.cmp(&font.glyphs[*b].name));
@@ -209,15 +210,15 @@ impl Workspace {
             None => Vec::new(),
         };
         let order = Arc::new(order);
-        self.glyph_order = Some(order.clone());
-        self.order_key = Some(key);
+        self.grid.order = Some(order.clone());
+        self.grid.order_key = Some(key);
         order
     }
 
     /// The cached order, for the panels that only hold `&self`.
     /// `render` refreshes it once a frame before any of them run.
     pub(crate) fn glyph_order(&self) -> Arc<Vec<usize>> {
-        self.glyph_order.clone().unwrap_or_default()
+        self.grid.order.clone().unwrap_or_default()
     }
 }
 

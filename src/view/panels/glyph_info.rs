@@ -36,8 +36,8 @@ impl Workspace {
             if entry.path.elements().is_empty() {
                 continue;
             }
-            let selected =
-                self.selected == Some(glyph) || self.multi_selected.contains(entry.name.as_ref());
+            let selected = self.selected == Some(glyph)
+                || self.grid.multi_selected.contains(entry.name.as_ref());
             let color = if selected {
                 t::cell_selected_ring()
             } else {
@@ -203,7 +203,7 @@ impl Workspace {
                     )
                 },
             )
-            .child(input_row("Glyph Name", &self.glyph_inputs.name))
+            .child(input_row("Glyph Name", &self.inputs.glyph.name))
             .when(in_editor, |el| {
                 el.child(row("Width", format!("{:.0}", entry.advance).into()))
             })
@@ -212,22 +212,22 @@ impl Workspace {
                     div()
                         .flex()
                         .gap_1()
-                        .child(metric_field("Width", &self.metric_inputs.width))
-                        .child(metric_field("LSB", &self.metric_inputs.lsb))
-                        .child(metric_field("RSB", &self.metric_inputs.rsb)),
+                        .child(metric_field("Width", &self.inputs.metric.width))
+                        .child(metric_field("LSB", &self.inputs.metric.lsb))
+                        .child(metric_field("RSB", &self.inputs.metric.rsb)),
                 )
             })
             .child(pair_row(
                 "Kerning Groups (L · R)",
-                &self.glyph_inputs.group_l,
-                &self.glyph_inputs.group_r,
+                &self.inputs.glyph.group_l,
+                &self.inputs.glyph.group_r,
             ))
             .child(pair_row(
                 "Metrics Keys (L · R)",
-                &self.glyph_inputs.lsb_key,
-                &self.glyph_inputs.rsb_key,
+                &self.inputs.glyph.lsb_key,
+                &self.inputs.glyph.rsb_key,
             ))
-            .child(input_row("Unicode", &self.glyph_inputs.unicode))
+            .child(input_row("Unicode", &self.inputs.glyph.unicode))
             // The character's Unicode name, the Glyph Info window's
             // headline fact, quietly under the code point.
             .when_some(
@@ -239,8 +239,8 @@ impl Workspace {
                     el.child(div().text_xs().text_color(t::text_muted()).child(uni_name))
                 },
             )
-            .child(input_row("Production Name", &self.glyph_inputs.production))
-            .child(input_row("Note", &self.glyph_inputs.note))
+            .child(input_row("Production Name", &self.inputs.glyph.production))
+            .child(input_row("Note", &self.inputs.glyph.note))
             // A part glyph's smart axis ("Width,0,100"): defines the
             // axis and seeds the top pole layer.
             .child(
@@ -310,7 +310,7 @@ impl Workspace {
                                 .text_color(t::text_muted())
                                 .child("Switch At (axis value)"),
                         )
-                        .child(widgets::input::Input::new(&self.glyph_inputs.switch_at)),
+                        .child(widgets::input::Input::new(&self.inputs.glyph.switch_at)),
                 }
             });
         self.section(cx, "Glyph", panel)

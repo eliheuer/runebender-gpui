@@ -37,7 +37,7 @@ impl Workspace {
             self.status_note = Some("Open a glyph first".into());
             return;
         };
-        let Some(dir) = self.model_dir.clone() else {
+        let Some(dir) = self.models.dir.clone() else {
             return;
         };
         let Ok(checkpoint) = font_ml::Checkpoint::open(&dir) else {
@@ -74,7 +74,7 @@ impl Workspace {
             self.status_note = Some("No outline to score".into());
             return;
         };
-        let Some(model) = self.model_loaded.clone() else {
+        let Some(model) = self.models.loaded.clone() else {
             return;
         };
         let center = checkpoint
@@ -90,7 +90,7 @@ impl Workspace {
             &from_ops,
             center,
             checkpoint.config.trim_close,
-            self.model_strength,
+            self.models.strength,
         ) else {
             return;
         };
@@ -112,7 +112,7 @@ impl Workspace {
             )
             .into(),
         );
-        self.model_score = Some((name.into(), score.model, score.baseline));
+        self.models.score = Some((name.into(), score.model, score.baseline));
     }
 
     /// Glyph > Bolden With Model…: pick a model directory, predict a

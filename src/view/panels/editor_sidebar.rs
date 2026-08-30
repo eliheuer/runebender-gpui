@@ -9,7 +9,7 @@ impl Workspace {
     /// Editor sidebar: search + scrollable mini glyph grid, so glyph
     /// switching doesn't require leaving the editor.
     pub(crate) fn editor_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let _query = self.search_query.clone();
+        let _query = self.sidebar.search_query.clone();
         let fit = self.sidebar_cell_metrics();
         let mut rows_total = 0usize;
         let mut shown = 0usize;
@@ -34,7 +34,7 @@ impl Workspace {
                     .collect();
                 let packed = pack_spans(&spans, fit.cols);
                 rows_total = packed.len();
-                let start = self.sidebar_scroll_row.min(rows_total.saturating_sub(1));
+                let start = self.sidebar.scroll_row.min(rows_total.saturating_sub(1));
                 visible_rows = packed.iter().skip(start).take(fit.rows).cloned().collect();
                 packed
                     .into_iter()
@@ -60,7 +60,7 @@ impl Workspace {
                    icon: &'static str,
                    which: u8,
                    cx: &mut Context<Self>| {
-            let active = self.sidebar_tab == which;
+            let active = self.sidebar.tab == which;
             // Same treatment as the edit-mode toolbar: a filled tile
             // when active, no outline either way.
             div()
@@ -79,16 +79,16 @@ impl Workspace {
                 ))
                 .tooltip(move |_, cx| cx.new(|_| TabTooltip { label }).into())
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.sidebar_tab = which;
+                    this.sidebar.tab = which;
                     cx.notify();
                 }))
         };
         // An axis-less font has no Axes tab, so a stale selection
         // falls back to the glyph list.
-        let tab_now = if !has_axes && self.sidebar_tab == 2 {
+        let tab_now = if !has_axes && self.sidebar.tab == 2 {
             0
         } else {
-            self.sidebar_tab
+            self.sidebar.tab
         };
         let on_glyphs = tab_now == 0;
         div()
@@ -152,25 +152,25 @@ impl Workspace {
                         .child(
                             div()
                                 .flex_1()
-                                .child(widgets::input::Input::new(&self.search)),
+                                .child(widgets::input::Input::new(&self.sidebar.search_input)),
                         )
                         .child(self.search_toggle(
                             "search-mode",
-                            match self.search_mode {
+                            match self.sidebar.search_mode {
                                 1 => "N",
                                 2 => "U",
                                 _ => "A",
                             },
-                            self.search_mode != 0,
-                            |this| this.search_mode = (this.search_mode + 1) % 3,
+                            self.sidebar.search_mode != 0,
+                            |this| this.sidebar.search_mode = (this.sidebar.search_mode + 1) % 3,
                             cx,
                         ))
                         .child(self.search_toggle(
                             "search-regex",
                             ".*",
-                            self.search_regex,
+                            self.sidebar.search_regex,
                             |this| {
-                                this.search_regex = !this.search_regex;
+                                this.sidebar.search_regex = !this.sidebar.search_regex;
                                 this.rebuild_search_regex();
                             },
                             cx,
@@ -178,9 +178,9 @@ impl Workspace {
                         .child(self.search_toggle(
                             "search-case",
                             "Aa",
-                            self.search_case,
+                            self.sidebar.search_case,
                             |this| {
-                                this.search_case = !this.search_case;
+                                this.sidebar.search_case = !this.sidebar.search_case;
                                 this.rebuild_search_regex();
                             },
                             cx,
@@ -199,8 +199,8 @@ impl Workspace {
                             canvas(
                                 move |bounds: Bounds<gpui::Pixels>, _, app: &mut gpui::App| {
                                     this.update(app, |this, cx| {
-                                        if this.sidebar_viewport != bounds.size {
-                                            this.sidebar_viewport = bounds.size;
+                                        if this.sidebar.viewport != bounds.size {
+                                            this.sidebar.viewport = bounds.size;
                                             cx.notify();
                                         }
                                     })
@@ -245,7 +245,7 @@ impl Workspace {
                                             gpui::ScrollDelta::Lines(p) => p.y * 24.0,
                                         };
                                         if Self::scroll_grid_rows(
-                                            &mut this.sidebar_scroll_row,
+                                            &mut this.sidebar.scroll_row,
                                             dy,
                                             fit.cell_h + GRID_GAP,
                                             fit.rows,
@@ -276,7 +276,8 @@ impl Workspace {
                                 .child(SharedString::from(format!("{} glyphs", shown))),
                         )
                         .children(
-                            self.sidebar_slider
+                            self.sidebar
+                                .slider
                                 .as_ref()
                                 .map(|slider| div().w(px(96.0)).child(flat_slider(slider, cx))),
                         ),
@@ -873,13 +874,13 @@ impl Workspace {
                         .child(
                             div()
                                 .w(px(64.0))
-                                .child(widgets::input::Input::new(&self.slant_input)),
+                                .child(widgets::input::Input::new(&self.inputs.slant)),
                         )
                         .child(div().text_xs().text_color(t::text_muted()).child("Stroke"))
                         .child(
                             div()
                                 .w(px(64.0))
-                                .child(widgets::input::Input::new(&self.stroke_input)),
+                                .child(widgets::input::Input::new(&self.inputs.stroke)),
                         ),
                 )
                 // Offset: the whole glyph bolder (+) or lighter (−).
@@ -894,7 +895,7 @@ impl Workspace {
                         .child(
                             div()
                                 .w(px(64.0))
-                                .child(widgets::input::Input::new(&self.offset_input)),
+                                .child(widgets::input::Input::new(&self.inputs.offset)),
                         ),
                 )
                 .child(
@@ -906,13 +907,13 @@ impl Workspace {
                         .child(
                             div()
                                 .w(px(64.0))
-                                .child(widgets::input::Input::new(&self.extrude_input)),
+                                .child(widgets::input::Input::new(&self.inputs.extrude)),
                         )
                         .child(div().text_xs().text_color(t::text_muted()).child("Roughen"))
                         .child(
                             div()
                                 .w(px(64.0))
-                                .child(widgets::input::Input::new(&self.roughen_input)),
+                                .child(widgets::input::Input::new(&self.inputs.roughen)),
                         ),
                 ),
         )
@@ -979,7 +980,7 @@ impl Workspace {
                 .child(
                     div()
                         .w(px(64.0))
-                        .child(widgets::input::Input::new(&self.fit_input)),
+                        .child(widgets::input::Input::new(&self.inputs.fit)),
                 ),
         );
         self.section(cx, "Curves", body)
@@ -1060,7 +1061,7 @@ impl Workspace {
                     .child(
                         div()
                             .flex_1()
-                            .child(widgets::input::Input::new(&self.reference_glyph_input)),
+                            .child(widgets::input::Input::new(&self.inputs.reference_glyph)),
                     ),
             );
         self.section(cx, "Background", body)
@@ -1375,7 +1376,7 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .w(px(180.0))
-                    .child(widgets::input::Input::new(&self.component_name_input)),
+                    .child(widgets::input::Input::new(&self.inputs.component_name)),
             );
         } else {
             list = list.child(item(
@@ -1391,7 +1392,7 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .w(px(180.0))
-                    .child(widgets::input::Input::new(&self.corner_name_input)),
+                    .child(widgets::input::Input::new(&self.inputs.corner_name)),
             );
         } else if menu.start_point.is_some() {
             list = list.child(item(("cm", 14), "Apply Corner…".into(), "apply-corner", cx));
@@ -1504,7 +1505,7 @@ impl Workspace {
                     .px_3()
                     .py_1()
                     .w(px(200.0))
-                    .child(widgets::input::Input::new(&self.annotation_input)),
+                    .child(widgets::input::Input::new(&self.inputs.annotation)),
             );
         } else if menu.annotation.is_some() {
             list = list.child(item(

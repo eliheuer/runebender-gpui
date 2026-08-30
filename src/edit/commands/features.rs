@@ -21,13 +21,13 @@ impl Workspace {
             self.features_status = Some("Nothing to generate from glyph names".into());
             return;
         }
-        let mut fea = self.features_input.read(cx).value().to_string();
+        let mut fea = self.inputs.features.read(cx).value().to_string();
         let mut tags: Vec<String> = Vec::new();
         for (tag, body) in blocks {
             fea = Self::replace_feature_block(&fea, &tag, &body);
             tags.push(tag);
         }
-        self.features_input.update(cx, |st, cx| {
+        self.inputs.features.update(cx, |st, cx| {
             st.set_value(fea, window, cx);
         });
         self.features_edited = true;
@@ -41,7 +41,7 @@ impl Workspace {
     /// (the old joining rules carry on), the way Glyphs lets you keep
     /// a broken feature file open while you fix it.
     pub(crate) fn command_apply_features(&mut self, cx: &mut Context<Self>) {
-        let fea = self.features_input.read(cx).value().to_string();
+        let fea = self.inputs.features.read(cx).value().to_string();
         let verdict = self.font().map(|f| Self::check_features_compile(f, &fea));
         if let Some(font) = self.font_mut() {
             if font.font.features != fea {

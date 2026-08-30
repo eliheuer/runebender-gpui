@@ -376,61 +376,14 @@ pub(crate) struct Workspace {
     /// Edit tabs, Glyphs-style. Empty until a glyph is first opened.
     pub(crate) sessions: Vec<EditSession>,
     pub(crate) active_session: usize,
-    pub(crate) sidebar_filter: SidebarFilter,
-    /// Names matched by the current sidebar filter (None = all).
-    pub(crate) sidebar_matches: Option<std::collections::HashSet<String>>,
-    /// Per-row glyph counts, rebuilt on load/reload/master switch.
-    pub(crate) sidebar_counts: Option<SidebarCounts>,
-    pub(crate) expanded_scripts: std::collections::HashSet<usize>,
-    pub(crate) expanded_categories: std::collections::HashSet<usize>,
-    /// Grid sort: false = by name, true = by unicode (web default).
-    pub(crate) sort_unicode: bool,
     /// A run of arrow-key nudges is in progress: they share one undo
     /// step until something else happens.
     pub(crate) nudging: bool,
-    /// Text preview strip under the editor: whether it is showing, its
-    /// type size in pixels, how far it is blurred (a spacing check),
-    /// whether the colors are flipped, and how the line is aligned.
-    pub(crate) preview_visible: bool,
-    pub(crate) preview_blur: f32,
-    /// The last blurred frame, kept so dragging a point does not
-    /// re-rasterize the preview on every mouse move.
-    pub(crate) preview_blur_cache: Arc<Mutex<Option<BlurFrame>>>,
     /// Decoded glyph background images from the UFO images store,
     /// keyed by file name; None caches a failed decode. Behind a
     /// mutex because rendering (which fills it) holds &self.
     pub(crate) glyph_image_cache:
         Arc<Mutex<std::collections::HashMap<String, Option<Arc<gpui::RenderImage>>>>>,
-    pub(crate) preview_invert: bool,
-    pub(crate) preview_blur_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
-    /// Grid cell size in px, driven by the bottom bar's zoom slider.
-    /// This is the *target*: cells stretch from it to fill the row.
-    pub(crate) grid_cell_size: f32,
-    /// Measured size of the glyph grid's scroll viewport. Columns and
-    /// row height are solved against it so rows fill the width and
-    /// divide the height evenly (no half row at the bottom edge).
-    pub(crate) grid_viewport: gpui::Size<gpui::Pixels>,
-    /// The same, for the editor sidebar's mini glyph grid.
-    pub(crate) sidebar_viewport: gpui::Size<gpui::Pixels>,
-    /// The glyphs the filters and the search leave, in display order.
-    /// Rebuilt when the inputs change rather than on every frame: it
-    /// filters and sorts the whole font, which is far too much work to
-    /// repeat for a mouse move.
-    pub(crate) glyph_order: Option<Arc<Vec<usize>>>,
-    /// What `glyph_order` was built from.
-    pub(crate) order_key: Option<OrderKey>,
-    /// The search pattern, compiled once instead of per glyph.
-    pub(crate) search_re: Option<regex::Regex>,
-    /// First visible row of each grid. Scrolling moves whole rows.
-    pub(crate) grid_scroll_row: usize,
-    pub(crate) sidebar_scroll_row: usize,
-    /// Which editor-sidebar tab is up: 0 glyphs, 1 shapes, 2 axes,
-    /// 3 chat.
-    pub(crate) sidebar_tab: u8,
-    /// Target cell size for the editor sidebar's mini grid.
-    pub(crate) sidebar_cell_size: f32,
-    pub(crate) sidebar_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
-    pub(crate) cell_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
     pub(crate) mode: Mode,
     pub(crate) editor: EditorState,
     /// The editor's text buffer (the text tool): the open glyph is
@@ -455,53 +408,13 @@ pub(crate) struct Workspace {
     #[cfg(not(target_os = "macos"))]
     pub(crate) app_menu_bar: gpui::Entity<widgets::menu_bar::MenuBar>,
     pub(crate) focus_handle: gpui::FocusHandle,
-    /// Scales what a model predicts. A model can be right about which
-    /// way a point moves and short on how far, which looks like a
-    /// prediction that is too light.
-    pub(crate) model_strength: f64,
-    /// The chosen model directory, kept so a run does not re-ask.
-    pub(crate) model_dir: Option<PathBuf>,
-    /// What the directory says it is, for the panel.
-    pub(crate) model_summary: Option<SharedString>,
-    /// Loaded weights. Cached: reading them is the slow part.
-    pub(crate) model_loaded: Option<std::rc::Rc<font_ml::outline::OutlineModel>>,
-    /// Last judgement: glyph, model error, baseline error.
-    pub(crate) model_score: Option<(SharedString, f64, f64)>,
-    pub(crate) model_strength_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
     pub(crate) status_note: Option<SharedString>,
-    pub(crate) search: gpui::Entity<widgets::input::InputState>,
-    pub(crate) search_query: String,
-    /// Search scope: 0 = all, 1 = name, 2 = unicode.
-    pub(crate) search_mode: u8,
     /// Wall-clock time of the last save, for the header.
     pub(crate) last_save_label: Option<SharedString>,
-    /// Multi-selected glyph names (grid cmd/shift-click); `selected`
-    /// stays the primary.
-    pub(crate) multi_selected: std::collections::HashSet<String>,
-    pub(crate) search_regex: bool,
-    pub(crate) search_case: bool,
-    pub(crate) metric_inputs: MetricInputs,
-    pub(crate) font_info_inputs: FontInfoInputs,
-    pub(crate) kern_inputs: KernInputs,
-    /// Slant angle field in the Transformations section (degrees).
-    pub(crate) slant_input: gpui::Entity<widgets::input::InputState>,
-    /// Stroke width field in the Transformations section (units).
-    pub(crate) stroke_input: gpui::Entity<widgets::input::InputState>,
-    /// Offset field: bolder (positive) or lighter (negative) units.
-    pub(crate) offset_input: gpui::Entity<widgets::input::InputState>,
-    /// Fit Curve percentage field in the Curves section.
-    pub(crate) fit_input: gpui::Entity<widgets::input::InputState>,
-    /// Hex field that appends a color to the CPAL palette.
-    pub(crate) color_hex_input: gpui::Entity<widgets::input::InputState>,
     /// Palette index the next color layer is assigned.
     pub(crate) color_selected: usize,
     /// Paint the color layers stacked in the editor.
     pub(crate) show_color_preview: bool,
-    /// Which built-in sample string the buffer shows.
-    pub(crate) sample_index: usize,
-    /// Font view mode: the classic grid, the Glyphs 4 detail grid
-    /// (info beside every glyph), or the property-table list.
-    pub(crate) font_view_mode: FontViewMode,
     /// Draw node trajectories + velocity dots across the first axis
     /// (higher-order interpolation view).
     pub(crate) show_trajectories: bool,
@@ -519,25 +432,12 @@ pub(crate) struct Workspace {
     /// Preview shaping locale: (script tag, BCP 47 language), e.g.
     /// ("arab", "ur"). None = direction-derived defaults.
     pub(crate) shaping_locale: Option<(String, String)>,
-    /// Ease amount field: Enter bakes interpolation timing into a
-    /// brace layer at the preview location.
-    pub(crate) ease_input: gpui::Entity<widgets::input::InputState>,
-    /// Extrude field ("offset,angle"; k-prefix keeps the front).
-    pub(crate) extrude_input: gpui::Entity<widgets::input::InputState>,
-    /// Roughen field ("segment,h,v"); reseeded per apply.
-    pub(crate) roughen_input: gpui::Entity<widgets::input::InputState>,
     pub(crate) roughen_seed: u64,
-    /// The Instances editor field under the axis sliders: Enter
-    /// renames the instance at the preview location, or adds one.
-    pub(crate) instance_name_input: gpui::Entity<widgets::input::InputState>,
-    /// The Features section's features.fea editor (grid mode).
-    pub(crate) features_input: gpui::Entity<widgets::input::InputState>,
     /// Unapplied edits in the features editor: the refresh keeps its
     /// hands off until Apply or Revert.
     pub(crate) features_edited: bool,
     /// The last Apply's compile verdict, shown under the editor.
     pub(crate) features_status: Option<SharedString>,
-    pub(crate) glyph_inputs: GlyphInputs,
     pub(crate) context_menu: Option<ContextMenu>,
     /// The Selection panel's 9-point reference for numeric move and
     /// scale (web coordinate quadrant).
@@ -554,24 +454,6 @@ pub(crate) struct Workspace {
     pub(crate) visible_glyph_layers: std::collections::HashSet<String>,
     /// Another glyph ghosted behind the drawing for comparison.
     pub(crate) reference_glyph: Option<String>,
-    pub(crate) reference_glyph_input: gpui::Entity<widgets::input::InputState>,
-    pub(crate) component_name_input: gpui::Entity<widgets::input::InputState>,
-    /// Corner-glyph name typed in the context menu (Apply Corner…).
-    pub(crate) corner_name_input: gpui::Entity<widgets::input::InputState>,
-    /// Note text typed in the context menu (Annotate: Note…).
-    pub(crate) annotation_input: gpui::Entity<widgets::input::InputState>,
-    /// Smart-axis definition on the open part glyph ("Width,0,100").
-    pub(crate) smart_axis_input: gpui::Entity<widgets::input::InputState>,
-    /// New kerning group from the grid selection: "o" (kern1) or
-    /// "|o" (kern2).
-    pub(crate) group_name_input: gpui::Entity<widgets::input::InputState>,
-    /// New avar pair on the first axis: "user,design".
-    pub(crate) axis_map_input: gpui::Entity<widgets::input::InputState>,
-    /// Parsed predicate query, rebuilt when the search changes.
-    pub(crate) search_predicates: Option<Vec<SearchPred>>,
-    /// The selected smart component's value on its first axis.
-    pub(crate) smart_value_input: gpui::Entity<widgets::input::InputState>,
-    pub(crate) anchor_name_input: gpui::Entity<widgets::input::InputState>,
     /// Sliders for non-degenerate designspace axes: (axis index,
     /// slider), created lazily in render.
     pub(crate) axis_sliders: Vec<(usize, gpui::Entity<widgets::slider::SliderState>)>,
@@ -588,6 +470,155 @@ pub(crate) struct Workspace {
     /// A selected kern pair in the preview strip: indices into the
     /// resolved preview line (glyph indices of the pair).
     pub(crate) _subscriptions: Vec<gpui::Subscription>,
+    /// The glyph grid's view state.
+    pub(crate) grid: GridState,
+    /// The left sidebar's state.
+    pub(crate) sidebar: SidebarState,
+    /// The preview strip's state.
+    pub(crate) preview: PreviewState,
+    /// The Local AI panel's state.
+    pub(crate) models: ModelsState,
+    /// The inspector's input fields.
+    pub(crate) inputs: InputFields,
+}
+
+/// The glyph grid's view state: cell size, scroll, order, selection.
+pub(crate) struct GridState {
+    /// Grid sort: false = by name, true = by unicode (web default).
+    pub(crate) sort_unicode: bool,
+    /// Grid cell size in px, driven by the bottom bar's zoom slider.
+    /// This is the *target*: cells stretch from it to fill the row.
+    pub(crate) cell_size: f32,
+    /// Measured size of the glyph grid's scroll viewport. Columns and
+    /// row height are solved against it so rows fill the width and
+    /// divide the height evenly (no half row at the bottom edge).
+    pub(crate) viewport: gpui::Size<gpui::Pixels>,
+    /// The glyphs the filters and the search leave, in display order.
+    /// Rebuilt when the inputs change rather than on every frame: it
+    /// filters and sorts the whole font, which is far too much work to
+    /// repeat for a mouse move.
+    pub(crate) order: Option<Arc<Vec<usize>>>,
+    /// What `glyph_order` was built from.
+    pub(crate) order_key: Option<OrderKey>,
+    /// First visible row of each grid. Scrolling moves whole rows.
+    pub(crate) scroll_row: usize,
+    pub(crate) cell_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
+    /// Multi-selected glyph names (grid cmd/shift-click); `selected`
+    /// stays the primary.
+    pub(crate) multi_selected: std::collections::HashSet<String>,
+    /// Font view mode: the classic grid, the Glyphs 4 detail grid
+    /// (info beside every glyph), or the property-table list.
+    pub(crate) view_mode: FontViewMode,
+}
+
+/// The left sidebar: filter, search, expansion, scroll, and its inputs.
+pub(crate) struct SidebarState {
+    pub(crate) filter: SidebarFilter,
+    /// Names matched by the current sidebar filter (None = all).
+    pub(crate) matches: Option<std::collections::HashSet<String>>,
+    /// Per-row glyph counts, rebuilt on load/reload/master switch.
+    pub(crate) counts: Option<SidebarCounts>,
+    pub(crate) expanded_scripts: std::collections::HashSet<usize>,
+    pub(crate) expanded_categories: std::collections::HashSet<usize>,
+    /// The same, for the editor sidebar's mini glyph grid.
+    pub(crate) viewport: gpui::Size<gpui::Pixels>,
+    /// The search pattern, compiled once instead of per glyph.
+    pub(crate) search_re: Option<regex::Regex>,
+    pub(crate) scroll_row: usize,
+    /// Which editor-sidebar tab is up: 0 glyphs, 1 shapes, 2 axes,
+    /// 3 chat.
+    pub(crate) tab: u8,
+    /// Target cell size for the editor sidebar's mini grid.
+    pub(crate) cell_size: f32,
+    pub(crate) slider: Option<gpui::Entity<widgets::slider::SliderState>>,
+    pub(crate) search_input: gpui::Entity<widgets::input::InputState>,
+    pub(crate) search_query: String,
+    /// Search scope: 0 = all, 1 = name, 2 = unicode.
+    pub(crate) search_mode: u8,
+    pub(crate) search_regex: bool,
+    pub(crate) search_case: bool,
+    /// Parsed predicate query, rebuilt when the search changes.
+    pub(crate) search_predicates: Option<Vec<SearchPred>>,
+}
+
+/// The preview strip's state.
+pub(crate) struct PreviewState {
+    /// Text preview strip under the editor: whether it is showing, its
+    /// type size in pixels, how far it is blurred (a spacing check),
+    /// whether the colors are flipped, and how the line is aligned.
+    pub(crate) visible: bool,
+    pub(crate) blur: f32,
+    /// The last blurred frame, kept so dragging a point does not
+    /// re-rasterize the preview on every mouse move.
+    pub(crate) blur_cache: Arc<Mutex<Option<BlurFrame>>>,
+    pub(crate) invert: bool,
+    pub(crate) blur_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
+    /// Which built-in sample string the buffer shows.
+    pub(crate) sample_index: usize,
+}
+
+/// The Local AI panel's state: the model on disk and its controls.
+pub(crate) struct ModelsState {
+    /// Scales what a model predicts. A model can be right about which
+    /// way a point moves and short on how far, which looks like a
+    /// prediction that is too light.
+    pub(crate) strength: f64,
+    /// The chosen model directory, kept so a run does not re-ask.
+    pub(crate) dir: Option<PathBuf>,
+    /// What the directory says it is, for the panel.
+    pub(crate) summary: Option<SharedString>,
+    /// Loaded weights. Cached: reading them is the slow part.
+    pub(crate) loaded: Option<std::rc::Rc<font_ml::outline::OutlineModel>>,
+    /// Last judgement: glyph, model error, baseline error.
+    pub(crate) score: Option<(SharedString, f64, f64)>,
+    pub(crate) strength_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
+}
+
+/// Every input field the inspector owns. The widgets are built in
+/// `wiring.rs`; what typing in one does lives in `edit/inspector.rs`.
+pub(crate) struct InputFields {
+    pub(crate) metric: MetricInputs,
+    pub(crate) font_info: FontInfoInputs,
+    pub(crate) kern: KernInputs,
+    /// Slant angle field in the Transformations section (degrees).
+    pub(crate) slant: gpui::Entity<widgets::input::InputState>,
+    /// Stroke width field in the Transformations section (units).
+    pub(crate) stroke: gpui::Entity<widgets::input::InputState>,
+    /// Offset field: bolder (positive) or lighter (negative) units.
+    pub(crate) offset: gpui::Entity<widgets::input::InputState>,
+    /// Fit Curve percentage field in the Curves section.
+    pub(crate) fit: gpui::Entity<widgets::input::InputState>,
+    /// Hex field that appends a color to the CPAL palette.
+    pub(crate) color_hex: gpui::Entity<widgets::input::InputState>,
+    /// Ease amount field: Enter bakes interpolation timing into a
+    /// brace layer at the preview location.
+    pub(crate) ease: gpui::Entity<widgets::input::InputState>,
+    /// Extrude field ("offset,angle"; k-prefix keeps the front).
+    pub(crate) extrude: gpui::Entity<widgets::input::InputState>,
+    /// Roughen field ("segment,h,v"); reseeded per apply.
+    pub(crate) roughen: gpui::Entity<widgets::input::InputState>,
+    /// The Instances editor field under the axis sliders: Enter
+    /// renames the instance at the preview location, or adds one.
+    pub(crate) instance_name: gpui::Entity<widgets::input::InputState>,
+    /// The Features section's features.fea editor (grid mode).
+    pub(crate) features: gpui::Entity<widgets::input::InputState>,
+    pub(crate) glyph: GlyphInputs,
+    pub(crate) reference_glyph: gpui::Entity<widgets::input::InputState>,
+    pub(crate) component_name: gpui::Entity<widgets::input::InputState>,
+    /// Corner-glyph name typed in the context menu (Apply Corner…).
+    pub(crate) corner_name: gpui::Entity<widgets::input::InputState>,
+    /// Note text typed in the context menu (Annotate: Note…).
+    pub(crate) annotation: gpui::Entity<widgets::input::InputState>,
+    /// Smart-axis definition on the open part glyph ("Width,0,100").
+    pub(crate) smart_axis: gpui::Entity<widgets::input::InputState>,
+    /// New kerning group from the grid selection: "o" (kern1) or
+    /// "|o" (kern2).
+    pub(crate) group_name: gpui::Entity<widgets::input::InputState>,
+    /// New avar pair on the first axis: "user,design".
+    pub(crate) axis_map: gpui::Entity<widgets::input::InputState>,
+    /// The selected smart component's value on its first axis.
+    pub(crate) smart_value: gpui::Entity<widgets::input::InputState>,
+    pub(crate) anchor_name: gpui::Entity<widgets::input::InputState>,
 }
 
 /// The editor's Width / LSB / RSB / X / Y fields.

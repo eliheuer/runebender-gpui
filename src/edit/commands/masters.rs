@@ -68,7 +68,7 @@ impl Workspace {
         off.sort();
         off.dedup();
         let count = off.len();
-        self.multi_selected = off.into_iter().collect();
+        self.grid.multi_selected = off.into_iter().collect();
         self.selected = None;
         self.status_note = Some(
             if count == 0 {
@@ -353,7 +353,7 @@ impl Workspace {
         }
         project.ds_dirty = true;
         project.compute_compat();
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         self.status_note =
             Some(format!("{name} switches to {alt} at {} ≥ {at:.0}", axis.tag).into());
     }

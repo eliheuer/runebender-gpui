@@ -8,14 +8,14 @@ use super::*;
 impl Workspace {
     pub(crate) fn category_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         use runebender_core::ui::sidebar as sb;
-        let counts = self.sidebar_counts.as_ref();
+        let counts = self.sidebar.counts.as_ref();
 
         // Categories: expandable rows with the web's subfilters.
         let mut categories = div().flex().flex_col();
         for (ci, (category, label)) in SIDEBAR_CATEGORIES.iter().enumerate() {
             let subs = sb::category_subfilters(label);
             let count = counts.map(|c| c.categories[ci]).unwrap_or(0);
-            let expanded = self.expanded_categories.contains(&ci);
+            let expanded = self.sidebar.expanded_categories.contains(&ci);
             let mut row = self
                 .sidebar_row(
                     ("category", ci),
@@ -37,9 +37,9 @@ impl Workspace {
                 // the row click; double-purpose: clicking an already
                 // selected row toggles expansion instead.
                 let category = *category;
-                let selected = self.sidebar_filter == SidebarFilter::Category(category)
+                let selected = self.sidebar.filter == SidebarFilter::Category(category)
                     || subs.iter().any(|(sub, _)| {
-                        self.sidebar_filter == SidebarFilter::Subfilter(category, sub)
+                        self.sidebar.filter == SidebarFilter::Subfilter(category, sub)
                     });
                 row = self
                     .sidebar_row(
@@ -53,8 +53,8 @@ impl Workspace {
                         cx,
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if selected && !this.expanded_categories.remove(&ci) {
-                            this.expanded_categories.insert(ci);
+                        if selected && !this.sidebar.expanded_categories.remove(&ci) {
+                            this.sidebar.expanded_categories.insert(ci);
                         }
                         this.set_sidebar_filter(SidebarFilter::Category(category));
                         cx.notify();
@@ -86,10 +86,10 @@ impl Workspace {
         let mut languages = div().flex().flex_col();
         for (gi, group) in sb::language_groups().iter().enumerate() {
             let count = counts.map(|c| c.groups[gi]).unwrap_or(0);
-            let expanded = self.expanded_scripts.contains(&gi);
-            let selected = self.sidebar_filter == SidebarFilter::LanguageGroup(gi)
+            let expanded = self.sidebar.expanded_scripts.contains(&gi);
+            let selected = self.sidebar.filter == SidebarFilter::LanguageGroup(gi)
                 || (0..group.filters.len())
-                    .any(|fi| self.sidebar_filter == SidebarFilter::Language(gi, fi));
+                    .any(|fi| self.sidebar.filter == SidebarFilter::Language(gi, fi));
             languages = languages.child(
                 self.sidebar_row(
                     ("script", gi),
@@ -103,11 +103,11 @@ impl Workspace {
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if selected {
-                        if !this.expanded_scripts.remove(&gi) {
-                            this.expanded_scripts.insert(gi);
+                        if !this.sidebar.expanded_scripts.remove(&gi) {
+                            this.sidebar.expanded_scripts.insert(gi);
                         }
                     } else {
-                        this.expanded_scripts.insert(gi);
+                        this.sidebar.expanded_scripts.insert(gi);
                     }
                     this.set_sidebar_filter(SidebarFilter::LanguageGroup(gi));
                     cx.notify();
@@ -194,7 +194,7 @@ impl Workspace {
             .unwrap_or_default();
         for (si, (label, _)) in saved_defs.iter().enumerate() {
             let count = counts.and_then(|c| c.saved.get(si).copied()).unwrap_or(0);
-            let active = self.sidebar_filter == SidebarFilter::Saved(si);
+            let active = self.sidebar.filter == SidebarFilter::Saved(si);
             filters = filters.child(
                 div()
                     .id(("saved-filter", si))
@@ -244,7 +244,7 @@ impl Workspace {
                     })),
             );
         }
-        let pending_query = self.search_query.trim().to_string();
+        let pending_query = self.sidebar.search_query.trim().to_string();
         if !pending_query.is_empty() && !saved_defs.iter().any(|(_, q)| *q == pending_query) {
             filters = filters.child(
                 div()
@@ -284,25 +284,25 @@ impl Workspace {
                     .child(
                         div()
                             .flex_1()
-                            .child(widgets::input::Input::new(&self.search)),
+                            .child(widgets::input::Input::new(&self.sidebar.search_input)),
                     )
                     .child(self.search_toggle(
                         "search-mode",
-                        match self.search_mode {
+                        match self.sidebar.search_mode {
                             1 => "N",
                             2 => "U",
                             _ => "A",
                         },
-                        self.search_mode != 0,
-                        |this| this.search_mode = (this.search_mode + 1) % 3,
+                        self.sidebar.search_mode != 0,
+                        |this| this.sidebar.search_mode = (this.sidebar.search_mode + 1) % 3,
                         cx,
                     ))
                     .child(self.search_toggle(
                         "search-regex",
                         ".*",
-                        self.search_regex,
+                        self.sidebar.search_regex,
                         |this| {
-                            this.search_regex = !this.search_regex;
+                            this.sidebar.search_regex = !this.sidebar.search_regex;
                             this.rebuild_search_regex();
                         },
                         cx,
@@ -310,9 +310,9 @@ impl Workspace {
                     .child(self.search_toggle(
                         "search-case",
                         "Aa",
-                        self.search_case,
+                        self.sidebar.search_case,
                         |this| {
-                            this.search_case = !this.search_case;
+                            this.sidebar.search_case = !this.sidebar.search_case;
                             this.rebuild_search_regex();
                         },
                         cx,

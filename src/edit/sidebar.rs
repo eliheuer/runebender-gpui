@@ -94,8 +94,8 @@ impl Workspace {
         use runebender_core::analysis::category::GlyphCategory as GC;
         use runebender_core::ui::sidebar as sb;
         let Some(font) = self.font() else {
-            self.sidebar_counts = None;
-            self.sidebar_matches = None;
+            self.sidebar.counts = None;
+            self.sidebar.matches = None;
             return;
         };
         let glyphs: Vec<(String, Option<char>, Vec<u32>)> = font
@@ -208,7 +208,7 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
-        self.sidebar_counts = Some(SidebarCounts {
+        self.sidebar.counts = Some(SidebarCounts {
             total: glyphs.len(),
             categories,
             subfilters,
@@ -223,13 +223,13 @@ impl Workspace {
 
     /// Recompute the current filter's match set only (filter clicks).
     pub(crate) fn rebuild_sidebar_matches(&mut self) {
-        let filter = self.sidebar_filter.clone();
+        let filter = self.sidebar.filter.clone();
         if filter == SidebarFilter::All {
-            self.sidebar_matches = None;
+            self.sidebar.matches = None;
             return;
         }
         let Some(font) = self.font() else {
-            self.sidebar_matches = None;
+            self.sidebar.matches = None;
             return;
         };
         let matches: std::collections::HashSet<String> = font
@@ -240,7 +240,7 @@ impl Workspace {
             })
             .map(|entry| entry.name.to_string())
             .collect();
-        self.sidebar_matches = Some(matches);
+        self.sidebar.matches = Some(matches);
     }
 
     /// Does a glyph match the sidebar search, honoring scope, regex,
@@ -298,20 +298,20 @@ impl Workspace {
     }
 
     pub(crate) fn search_matches(&self, name: &str, codepoint: Option<char>) -> bool {
-        let query = self.search_query.trim();
+        let query = self.sidebar.search_query.trim();
         if query.is_empty() {
             return true;
         }
         // Predicate queries filter on glyph data (all terms must
         // hold); anything else falls through to text search.
-        if let Some(preds) = &self.search_predicates {
+        if let Some(preds) = &self.sidebar.search_predicates {
             let Some(font) = self.font() else { return true };
             return Self::glyph_matches_preds(font, name, codepoint, preds);
         }
         // Only build the codepoint haystacks the mode actually reads.
         let hex;
         let chars;
-        let haystacks: [&str; 3] = match self.search_mode {
+        let haystacks: [&str; 3] = match self.sidebar.search_mode {
             1 => [name, "", ""],
             2 => {
                 hex = codepoint
@@ -329,16 +329,16 @@ impl Workspace {
             }
         };
         let any = |f: &dyn Fn(&str) -> bool| haystacks.iter().any(|h| !h.is_empty() && f(h));
-        if self.search_regex {
+        if self.sidebar.search_regex {
             // Compiled once when the query changed, not per glyph: a
             // font-wide filter used to build 862 regexes a frame.
-            return match &self.search_re {
+            return match &self.sidebar.search_re {
                 Some(re) => any(&|h| re.is_match(h)),
                 // A half-typed pattern matches everything, like the web.
                 None => true,
             };
         }
-        if self.search_case {
+        if self.sidebar.search_case {
             any(&|h| h.contains(query))
         } else {
             let needle = query.to_lowercase();
@@ -349,23 +349,23 @@ impl Workspace {
     /// Recompile the search pattern. Called when the query or the
     /// case flag changes.
     pub(crate) fn rebuild_search_regex(&mut self) {
-        self.search_re = None;
-        let query = self.search_query.trim();
-        self.search_predicates = parse_search_predicates(query);
-        if !self.search_regex || query.is_empty() {
+        self.sidebar.search_re = None;
+        let query = self.sidebar.search_query.trim();
+        self.sidebar.search_predicates = parse_search_predicates(query);
+        if !self.sidebar.search_regex || query.is_empty() {
             return;
         }
-        let pattern = if self.search_case {
+        let pattern = if self.sidebar.search_case {
             query.to_string()
         } else {
             format!("(?i){query}")
         };
-        self.search_re = regex::Regex::new(&pattern).ok();
+        self.sidebar.search_re = regex::Regex::new(&pattern).ok();
     }
 
     /// Pin the current search query as a saved filter in the font lib.
     pub(crate) fn save_current_search_as_filter(&mut self) {
-        let query = self.search_query.trim().to_string();
+        let query = self.sidebar.search_query.trim().to_string();
         if query.is_empty() {
             return;
         }
@@ -378,7 +378,7 @@ impl Workspace {
         write_saved_filters(&mut font.font, &saved);
         font.dirty = true;
         let index = saved.len() - 1;
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         self.set_sidebar_filter(SidebarFilter::Saved(index));
     }
 
@@ -392,8 +392,8 @@ impl Workspace {
         saved.remove(si);
         write_saved_filters(&mut font.font, &saved);
         font.dirty = true;
-        self.sidebar_counts = None;
-        match self.sidebar_filter {
+        self.sidebar.counts = None;
+        match self.sidebar.filter {
             SidebarFilter::Saved(active) if active == si => {
                 self.set_sidebar_filter(SidebarFilter::All);
             }
@@ -406,9 +406,9 @@ impl Workspace {
 
     /// Select a sidebar row.
     pub(crate) fn set_sidebar_filter(&mut self, filter: SidebarFilter) {
-        self.sidebar_filter = filter;
+        self.sidebar.filter = filter;
         // A different set of glyphs starts at the top.
-        self.grid_scroll_row = 0;
+        self.grid.scroll_row = 0;
         self.rebuild_sidebar_matches();
     }
 
@@ -456,7 +456,7 @@ impl Workspace {
         filter: SidebarFilter,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let active = self.sidebar_filter == filter;
+        let active = self.sidebar.filter == filter;
         div()
             .id(id)
             // Fixed row height, no vertical padding: Glyphs' sidebar

@@ -208,7 +208,7 @@ impl Workspace {
             }
             master.refresh_from_font();
         }
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         self.status_note = Some(
             if exploded == 0 {
                 "No color layers to convert".to_string()

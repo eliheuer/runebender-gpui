@@ -39,7 +39,7 @@ impl Render for Workspace {
         self.ensure_sidebar_slider(window, cx);
         self.ensure_preview_slider(window, cx);
         self.ensure_model_strength_slider(window, cx);
-        if self.sidebar_counts.is_none() && self.project.is_some() {
+        if self.sidebar.counts.is_none() && self.project.is_some() {
             self.rebuild_sidebar_cache();
         }
         // One filter-and-sort pass per frame at most, and none at all
@@ -92,7 +92,7 @@ impl Render for Workspace {
                                     resizable_panel()
                                         .size(px(140.0))
                                         .size_range(px(0.0)..px(720.0))
-                                        .visible(self.preview_visible)
+                                        .visible(self.preview.visible)
                                         .child(self.preview_strip(cx)),
                                 ),
                         ),
@@ -101,7 +101,7 @@ impl Render for Workspace {
                     .into_any_element(),
             ),
             _ => {
-                let _query = self.search_query.clone();
+                let _query = self.sidebar.search_query.clone();
                 let fit = self.grid_cell_metrics();
                 let (cell_w, cell_h) = (fit.cell_w, fit.cell_h);
                 let mut rows_total = 0usize;
@@ -133,7 +133,7 @@ impl Render for Workspace {
                         // starts at a row boundary and holds exactly
                         // the rows that fit, so nothing is ever half
                         // drawn at either edge.
-                        let start = self.grid_scroll_row.min(rows_total.saturating_sub(1));
+                        let start = self.grid.scroll_row.min(rows_total.saturating_sub(1));
                         visible_rows = packed.iter().skip(start).take(fit.rows).cloned().collect();
                         packed
                             .into_iter()
@@ -156,8 +156,8 @@ impl Render for Workspace {
                 let probe = canvas(
                     move |bounds: Bounds<gpui::Pixels>, _, app: &mut gpui::App| {
                         this.update(app, |this, cx| {
-                            if this.grid_viewport != bounds.size {
-                                this.grid_viewport = bounds.size;
+                            if this.grid.viewport != bounds.size {
+                                this.grid.viewport = bounds.size;
                                 cx.notify();
                             }
                         })
@@ -213,7 +213,7 @@ impl Render for Workspace {
                                             gpui::ScrollDelta::Lines(p) => p.y * 24.0,
                                         };
                                         if Self::scroll_grid_rows(
-                                            &mut this.grid_scroll_row,
+                                            &mut this.grid.scroll_row,
                                             dy,
                                             fit.cell_h + GRID_GAP,
                                             fit.rows,
@@ -226,7 +226,7 @@ impl Render for Workspace {
                             // List swaps the whole grid for the
                             // property table; Grid and Detail share
                             // the cell pipeline.
-                            match self.font_view_mode {
+                            match self.grid.view_mode {
                                 FontViewMode::List => self.glyph_list_view(cx),
                                 FontViewMode::Matrix => self.glyph_matrix_view(cx),
                                 _ => grid_block.into_any_element(),
@@ -543,23 +543,23 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FilterOffsetCurve, _, cx| {
-                if let Ok(delta) = this.offset_input.read(cx).value().trim().parse::<f64>() {
+                if let Ok(delta) = this.inputs.offset.read(cx).value().trim().parse::<f64>() {
                     this.command_offset(delta);
                 }
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FilterExtrude, _, cx| {
-                let text = this.extrude_input.read(cx).value().to_string();
+                let text = this.inputs.extrude.read(cx).value().to_string();
                 this.command_extrude(&text);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FilterRoughen, _, cx| {
-                let text = this.roughen_input.read(cx).value().to_string();
+                let text = this.inputs.roughen.read(cx).value().to_string();
                 this.command_roughen(&text);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FilterSlant, _, cx| {
-                if let Ok(deg) = this.slant_input.read(cx).value().trim().parse::<f64>()
+                if let Ok(deg) = this.inputs.slant.read(cx).value().trim().parse::<f64>()
                     && deg != 0.0
                     && deg.abs() < 89.0
                 {
@@ -657,11 +657,11 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &SortByName, _, cx| {
-                this.sort_unicode = false;
+                this.grid.sort_unicode = false;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &SortByUnicode, _, cx| {
-                this.sort_unicode = true;
+                this.grid.sort_unicode = true;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ZoomToFit, _, cx| {

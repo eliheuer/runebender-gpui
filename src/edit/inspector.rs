@@ -65,23 +65,24 @@ impl Workspace {
         // A grid multi-selection batch-edits: the typed value lands
         // on every selected glyph, the Glyphs list-edit behavior.
         // No undo for the batch yet — undo is single-glyph.
-        let batch: Vec<usize> = if matches!(self.mode, Mode::Grid) && self.multi_selected.len() > 1
-        {
-            let Some(font) = self.font() else { return };
-            self.multi_selected
-                .iter()
-                .filter_map(|name| font.name_map.get(name).copied())
-                .collect()
-        } else {
-            let Some(index) = (match self.mode {
-                Mode::Editor(index) => Some(index),
-                Mode::Grid => self.selected,
-            }) else {
-                return;
+        let batch: Vec<usize> =
+            if matches!(self.mode, Mode::Grid) && self.grid.multi_selected.len() > 1 {
+                let Some(font) = self.font() else { return };
+                self.grid
+                    .multi_selected
+                    .iter()
+                    .filter_map(|name| font.name_map.get(name).copied())
+                    .collect()
+            } else {
+                let Some(index) = (match self.mode {
+                    Mode::Editor(index) => Some(index),
+                    Mode::Grid => self.selected,
+                }) else {
+                    return;
+                };
+                self.push_undo_snapshot(index);
+                vec![index]
             };
-            self.push_undo_snapshot(index);
-            vec![index]
-        };
         let count = batch.len();
         let Some(font) = self.font_mut() else {
             return;
@@ -218,7 +219,7 @@ impl Workspace {
                     .update_glyph(i, new_name.clone(), codepoint, advance);
             }
         }
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         self.remap_glyph_indices(&new_name);
         self.status_note = Some(format!("Renamed {old} → {new_name}").into());
     }
@@ -251,7 +252,7 @@ impl Workspace {
             self.status_note = Some(format!("Bad unicode: {text}").into());
             return;
         }
-        self.sidebar_counts = None;
+        self.sidebar.counts = None;
         self.rebuild_text_models();
         self.remap_glyph_indices(&name);
     }
@@ -332,15 +333,15 @@ impl Workspace {
                 )
             })
             .unwrap_or_default();
-        let name_input = self.glyph_inputs.name.clone();
-        let unicode_input = self.glyph_inputs.unicode.clone();
-        let l_input = self.glyph_inputs.group_l.clone();
-        let r_input = self.glyph_inputs.group_r.clone();
-        let note_input = self.glyph_inputs.note.clone();
-        let lkey_input = self.glyph_inputs.lsb_key.clone();
-        let rkey_input = self.glyph_inputs.rsb_key.clone();
+        let name_input = self.inputs.glyph.name.clone();
+        let unicode_input = self.inputs.glyph.unicode.clone();
+        let l_input = self.inputs.glyph.group_l.clone();
+        let r_input = self.inputs.glyph.group_r.clone();
+        let note_input = self.inputs.glyph.note.clone();
+        let lkey_input = self.inputs.glyph.lsb_key.clone();
+        let rkey_input = self.inputs.glyph.rsb_key.clone();
         let production = read_production_name(&font.font, name.as_str()).unwrap_or_default();
-        let production_input = self.glyph_inputs.production.clone();
+        let production_input = self.inputs.glyph.production.clone();
         set(&name_input, name, window, cx);
         set(&unicode_input, unicode, window, cx);
         set(&l_input, group_l, window, cx);
@@ -683,7 +684,7 @@ impl Workspace {
         }
         let Some(font) = self.font() else { return };
         let value = font.font.features.clone();
-        self.features_input.update(cx, |st, cx| {
+        self.inputs.features.update(cx, |st, cx| {
             if st.value() != value.as_str() {
                 st.set_value(value, window, cx);
             }
@@ -870,95 +871,95 @@ impl Workspace {
         };
         let values = [
             (
-                &self.font_info_inputs.family,
+                &self.inputs.font_info.family,
                 info.family_name.clone().unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.style,
+                &self.inputs.font_info.style,
                 info.style_name.clone().unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.upm,
+                &self.inputs.font_info.upm,
                 format!("{:.0}", master.units_per_em),
             ),
             (
-                &self.font_info_inputs.italic_angle,
+                &self.inputs.font_info.italic_angle,
                 info.italic_angle
                     .map(|v| format!("{v}"))
                     .unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.ascender,
+                &self.inputs.font_info.ascender,
                 format!("{:.0}", master.ascender),
             ),
             (
-                &self.font_info_inputs.descender,
+                &self.inputs.font_info.descender,
                 format!("{:.0}", master.descender),
             ),
-            (&self.font_info_inputs.x_height, opt(master.x_height)),
-            (&self.font_info_inputs.cap_height, opt(master.cap_height)),
+            (&self.inputs.font_info.x_height, opt(master.x_height)),
+            (&self.inputs.font_info.cap_height, opt(master.cap_height)),
             (
-                &self.font_info_inputs.typo_asc,
+                &self.inputs.font_info.typo_asc,
                 info.open_type_os2_typo_ascender
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.typo_desc,
+                &self.inputs.font_info.typo_desc,
                 info.open_type_os2_typo_descender
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.typo_gap,
+                &self.inputs.font_info.typo_gap,
                 info.open_type_os2_typo_line_gap
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.hhea_asc,
+                &self.inputs.font_info.hhea_asc,
                 info.open_type_hhea_ascender
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.hhea_desc,
+                &self.inputs.font_info.hhea_desc,
                 info.open_type_hhea_descender
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.hhea_gap,
+                &self.inputs.font_info.hhea_gap,
                 info.open_type_hhea_line_gap
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.win_asc,
+                &self.inputs.font_info.win_asc,
                 info.open_type_os2_win_ascent
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.win_desc,
+                &self.inputs.font_info.win_desc,
                 info.open_type_os2_win_descent
                     .map(|v| v.to_string())
                     .unwrap_or_default(),
             ),
             (
-                &self.font_info_inputs.blue_values,
+                &self.inputs.font_info.blue_values,
                 list(&info.postscript_blue_values),
             ),
             (
-                &self.font_info_inputs.other_blues,
+                &self.inputs.font_info.other_blues,
                 list(&info.postscript_other_blues),
             ),
             (
-                &self.font_info_inputs.stems_h,
+                &self.inputs.font_info.stems_h,
                 list(&info.postscript_stem_snap_h),
             ),
             (
-                &self.font_info_inputs.stems_v,
+                &self.inputs.font_info.stems_v,
                 list(&info.postscript_stem_snap_v),
             ),
         ];
@@ -1054,9 +1055,9 @@ impl Workspace {
                 }
             });
         };
-        set(&self.metric_inputs.width, width, window, cx);
-        set(&self.metric_inputs.lsb, lsb, window, cx);
-        set(&self.metric_inputs.rsb, rsb, window, cx);
+        set(&self.inputs.metric.width, width, window, cx);
+        set(&self.inputs.metric.lsb, lsb, window, cx);
+        set(&self.inputs.metric.rsb, rsb, window, cx);
     }
 
     /// Set one coordinate of the single selected point (Selection
@@ -1188,11 +1189,11 @@ impl Workspace {
             .map(|(name, _, _)| name.to_string())
             .unwrap_or_default();
         for (entity, value) in [
-            (self.metric_inputs.x.clone(), x),
-            (self.metric_inputs.y.clone(), y),
-            (self.metric_inputs.w.clone(), w),
-            (self.metric_inputs.h.clone(), h),
-            (self.anchor_name_input.clone(), anchor_name),
+            (self.inputs.metric.x.clone(), x),
+            (self.inputs.metric.y.clone(), y),
+            (self.inputs.metric.w.clone(), w),
+            (self.inputs.metric.h.clone(), h),
+            (self.inputs.anchor_name.clone(), anchor_name),
         ] {
             entity.update(cx, |st, cx| {
                 if st.value() != value.as_str() {

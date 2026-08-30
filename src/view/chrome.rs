@@ -220,15 +220,15 @@ impl Workspace {
                     .flex_none()
                     .cursor_pointer()
                     .child(eye_icon(
-                        if self.preview_visible {
+                        if self.preview.visible {
                             t::accent()
                         } else {
                             t::text_muted()
                         },
-                        self.preview_visible,
+                        self.preview.visible,
                     ))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.preview_visible = !this.preview_visible;
+                        this.preview.visible = !this.preview.visible;
                         cx.notify();
                     })),
             )
@@ -237,13 +237,13 @@ impl Workspace {
                     .id("preview-invert")
                     .flex_none()
                     .cursor_pointer()
-                    .child(invert_icon(if self.preview_invert {
+                    .child(invert_icon(if self.preview.invert {
                         t::accent()
                     } else {
                         t::text_muted()
                     }))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.preview_invert = !this.preview_invert;
+                        this.preview.invert = !this.preview.invert;
                         cx.notify();
                     })),
             )
@@ -259,7 +259,7 @@ impl Workspace {
             .gap_2()
             .flex_none()
             .child(div().text_xs().text_color(t::text_muted()).child("blur"))
-            .children(self.preview_blur_slider.as_ref().map(|slider| {
+            .children(self.preview.blur_slider.as_ref().map(|slider| {
                 // The thumb hangs past both ends of the track, so the
                 // slider gets its own room rather than sitting on the
                 // label.
@@ -269,7 +269,7 @@ impl Workspace {
 
     /// Create the bottom bar's cell-size slider once a window exists.
     pub(crate) fn ensure_preview_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.preview_blur_slider.is_some() {
+        if self.preview.blur_slider.is_some() {
             return;
         }
         let slider = cx.new(|_| {
@@ -282,12 +282,12 @@ impl Workspace {
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
                 let widgets::slider::SliderEvent::Change(value) = event;
-                this.preview_blur = *value;
+                this.preview.blur = *value;
                 cx.notify();
             }
         });
         self._subscriptions.push(sub);
-        self.preview_blur_slider = Some(slider);
+        self.preview.blur_slider = Some(slider);
     }
 
     /// The strength control for model predictions.
@@ -296,7 +296,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.model_strength_slider.is_some() {
+        if self.models.strength_slider.is_some() {
             return;
         }
         let slider = cx.new(|_| {
@@ -309,18 +309,18 @@ impl Workspace {
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
                 let widgets::slider::SliderEvent::Change(value) = event;
-                this.model_strength = *value as f64;
+                this.models.strength = *value as f64;
                 // The last judgement was made at the old strength.
-                this.model_score = None;
+                this.models.score = None;
                 cx.notify();
             }
         });
         self._subscriptions.push(sub);
-        self.model_strength_slider = Some(slider);
+        self.models.strength_slider = Some(slider);
     }
 
     pub(crate) fn ensure_sidebar_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sidebar_slider.is_some() {
+        if self.sidebar.slider.is_some() {
             return;
         }
         let slider = cx.new(|_| {
@@ -333,17 +333,17 @@ impl Workspace {
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
                 let widgets::slider::SliderEvent::Change(value) = event;
-                this.sidebar_cell_size = *value;
-                this.sidebar_scroll_row = 0;
+                this.sidebar.cell_size = *value;
+                this.sidebar.scroll_row = 0;
                 cx.notify();
             }
         });
         self._subscriptions.push(sub);
-        self.sidebar_slider = Some(slider);
+        self.sidebar.slider = Some(slider);
     }
 
     pub(crate) fn ensure_cell_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.cell_slider.is_some() {
+        if self.grid.cell_slider.is_some() {
             return;
         }
         let slider = cx.new(|_| {
@@ -356,12 +356,12 @@ impl Workspace {
         let sub = cx.subscribe_in(&slider, window, {
             move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
                 let widgets::slider::SliderEvent::Change(value) = event;
-                this.grid_cell_size = *value;
+                this.grid.cell_size = *value;
                 cx.notify();
             }
         });
         self._subscriptions.push(sub);
-        self.cell_slider = Some(slider);
+        self.grid.cell_slider = Some(slider);
     }
 
     pub(crate) fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -450,11 +450,11 @@ impl Workspace {
                                 })
                                 .child(label)
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.font_view_mode = mode;
+                                    this.grid.view_mode = mode;
                                     cx.notify();
                                 }))
                         };
-                    let current = self.font_view_mode;
+                    let current = self.grid.view_mode;
                     div()
                         .flex()
                         .items_center()
@@ -490,7 +490,8 @@ impl Workspace {
                         ))
                 })
                 .children(
-                    self.cell_slider
+                    self.grid
+                        .cell_slider
                         .as_ref()
                         .map(|slider| div().w(px(140.0)).child(flat_slider(slider, cx))),
                 );

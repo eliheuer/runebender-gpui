@@ -31,7 +31,7 @@ impl Workspace {
             .codepoint
             .map(|c| format!("U+{:04X}", c as u32).into());
         let detail_info: Option<SharedString> =
-            (self.font_view_mode == FontViewMode::Detail && !jump_on_click).then(|| {
+            (self.grid.view_mode == FontViewMode::Detail && !jump_on_click).then(|| {
                 let category = entry
                     .codepoint
                     .map(|c| {
@@ -44,7 +44,7 @@ impl Workspace {
         let selected = if jump_on_click {
             matches!(self.mode, Mode::Editor(i) if i == index)
         } else {
-            self.selected == Some(index) || self.multi_selected.contains(name.as_ref())
+            self.selected == Some(index) || self.grid.multi_selected.contains(name.as_ref())
         };
         let labels = cell_label_metrics(cell);
         let (show_labels, label_px, label_h) = (labels.show, labels.size, labels.height);
@@ -94,7 +94,7 @@ impl Workspace {
                         this.grid_extend_multi(index);
                     } else {
                         this.selected = Some(index);
-                        this.multi_selected.clear();
+                        this.grid.multi_selected.clear();
                     }
                     if event.click_count() >= 2 {
                         this.open_editor(index);
@@ -230,7 +230,7 @@ impl Workspace {
             let entry = &font.glyphs[index];
             let name = entry.name.clone();
             let selected =
-                self.selected == Some(index) || self.multi_selected.contains(name.as_ref());
+                self.selected == Some(index) || self.grid.multi_selected.contains(name.as_ref());
             let mark = t::mark_paint(entry.mark.as_deref()).map(|p| p.ink);
             let ink = font.ink_bounds(index);
             let (lsb, rsb) = match ink {
@@ -287,7 +287,7 @@ impl Workspace {
                             this.grid_extend_multi(index);
                         } else {
                             this.selected = Some(index);
-                            this.multi_selected.clear();
+                            this.grid.multi_selected.clear();
                         }
                         if event.click_count() >= 2 {
                             this.open_editor(index);
@@ -447,7 +447,7 @@ impl Workspace {
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
                                 this.selected = Some(index);
-                                this.multi_selected.clear();
+                                this.grid.multi_selected.clear();
                                 if ev.click_count() >= 2 {
                                     this.open_editor(index);
                                 }
