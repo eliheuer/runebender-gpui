@@ -674,8 +674,10 @@ impl Workspace {
                 .chain(info.postscript_other_blues.iter().flatten())
                 .copied()
                 .collect::<Vec<f64>>()
-                .chunks_exact(2)
-                .map(|pair| (pair[0].min(pair[1]), pair[0].max(pair[1])))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|[a, b]| (a.min(*b), a.max(*b)))
                 .collect()
         };
         // Node trajectories across the axis (HOI view): sampled at

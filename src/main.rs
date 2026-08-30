@@ -5601,7 +5601,7 @@ impl Workspace {
                 let rgba = img.to_rgba8();
                 let (w, h) = (rgba.width(), rgba.height());
                 let mut bytes = rgba.into_raw();
-                for px in bytes.chunks_exact_mut(4) {
+                for px in bytes.as_chunks_mut::<4>().0 {
                     let a = px[3] as u32;
                     // Swap to BGRA and premultiply in one pass.
                     let (r, g, b) = (px[0] as u32, px[1] as u32, px[2] as u32);

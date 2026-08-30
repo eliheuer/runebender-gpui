@@ -80,7 +80,7 @@ features = ["accelerate"]
 
 [dependencies.runebender-core]
 git = "https://github.com/eliheuer/runebender-core"
-rev = "7b471bbd8af16379692f63b0a28f4d83c8cac918"
+rev = "33bdb63e5d2af8a3c211e590c3a3c037c5a54130"
 
 [dependencies.serde]
 version = "1.0"
