@@ -40,7 +40,9 @@ use runebender_core::formats::lib_keys::{
 use runebender_core::formats::metrics_keys::{
     MetricsFormula, parse_metrics_key, read_metrics_key, write_metrics_key,
 };
-use runebender_core::formats::svg::{glyph_svg, svg_to_contours};
+#[cfg(not(target_family = "wasm"))]
+use runebender_core::formats::svg::glyph_svg;
+use runebender_core::formats::svg::svg_to_contours;
 use runebender_core::outline::cleanup::{
     add_extreme_points, correct_path_directions, fit_curve_handles, round_glyph_coordinates,
     tidy_contours, toggle_contour_open,
@@ -54,6 +56,7 @@ use runebender_core::outline::glyph_ops::{CurveOp, GlyphSnapshot};
 use runebender_core::ui::editing::ViewPort;
 
 use actions::*;
+#[cfg(not(target_family = "wasm"))]
 use platform::host::*;
 use platform::*;
 use startup::keymap;

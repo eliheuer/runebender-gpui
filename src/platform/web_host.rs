@@ -14,11 +14,15 @@
 //! - `PUT  {base}/runebender/api/file/{rel}` + `If-Match` → `{ etag }`
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::AsyncReadExt;
 use gpui::http_client::{AsyncBody, HttpClient, Request};
 use serde::Deserialize;
+
+use runebender_core::document::project::{Master, Project};
+use runebender_core::document::var_model::Location;
 
 /// Connection state kept on the workspace: server base URL and the
 /// ETag of every file we have read (If-Match tokens for saves).

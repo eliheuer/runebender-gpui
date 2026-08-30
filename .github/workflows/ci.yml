@@ -13,13 +13,16 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
-  RUSTDOCFLAGS: -D warnings
 
 jobs:
   build:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # Warnings are errors here. The wasm job leaves RUSTFLAGS alone so
+    # .cargo/config.toml can set the wasm target features.
+    env:
+      RUSTFLAGS: -D warnings
+      RUSTDOCFLAGS: -D warnings
     strategy:
       fail-fast: false
       matrix:
@@ -65,3 +68,30 @@ jobs:
       - name: build
         working-directory: runebender-gpui
         run: cargo build --release
+
+  wasm:
+    name: wasm32 (check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: runebender-gpui
+      # The browser build needs wasm atomics and shared memory, which the
+      # prebuilt standard library lacks, so std is rebuilt on a nightly.
+      # This checks that the wasm-only code still compiles; the bundle
+      # itself is built by hand with trunk. See docs/development.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-08-01
+          components: rust-src
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runebender-gpui
+          key: wasm
+      - name: check
+        working-directory: runebender-gpui
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-08-01
+          CARGO_UNSTABLE_BUILD_STD: std,panic_abort
+        run: cargo check --target wasm32-unknown-unknown
