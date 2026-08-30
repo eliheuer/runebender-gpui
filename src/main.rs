@@ -7,13 +7,13 @@
 
 mod blur;
 mod canvas;
+mod commands;
 mod config;
+mod input;
 mod journal;
+mod panels;
 #[cfg(test)]
 mod tests;
-mod commands;
-mod input;
-mod panels;
 mod theme;
 #[cfg(target_family = "wasm")]
 mod web_host;
@@ -46,14 +46,14 @@ use runebender_core::effects::{
 use runebender_core::glyph_ops::{CurveOp, GlyphSnapshot};
 use runebender_core::lib_keys::{
     Annotation, bake_masks, hoi_quad_at, read_annotations, read_hoi_intermediates, read_masks,
-    read_production_name, read_saved_filters, write_production_name, write_annotations, write_hoi_intermediates,
-    write_masks, write_saved_filters,
+    read_production_name, read_saved_filters, write_annotations, write_hoi_intermediates,
+    write_masks, write_production_name, write_saved_filters,
 };
 use runebender_core::measure::joining_band;
-use runebender_core::project::{BraceSource, GlyphPoint, Master, Project};
 use runebender_core::metrics_keys::{
     MetricsFormula, parse_metrics_key, read_metrics_key, write_metrics_key,
 };
+use runebender_core::project::{BraceSource, GlyphPoint, Master, Project};
 use runebender_core::search::{SearchPred, parse_search_predicates};
 use runebender_core::svg::{glyph_svg, svg_to_contours};
 
@@ -462,7 +462,6 @@ fn app_menus() -> Vec<gpui::Menu> {
         },
     ]
 }
-
 
 // ============================================================================
 // GLYPH PAINTING
@@ -5446,8 +5445,8 @@ impl Workspace {
         let mut fitted_to: Option<f64> = None;
         if let Some((delta, height)) = self.model_weight_delta() {
             let from_path = font_ml::stems::ops_to_path(&result.from);
-            let want = font_ml::stems::target_from_delta(&from_path, delta, height)
-                .and_then(|target| {
+            let want =
+                font_ml::stems::target_from_delta(&from_path, delta, height).and_then(|target| {
                     font_ml::stems::fit_strength(
                         &from_path,
                         &font_ml::stems::ops_to_path(&result.to),
@@ -9146,4 +9145,3 @@ fn main() {
     #[cfg(not(target_family = "wasm"))]
     app.run(launch);
 }
-

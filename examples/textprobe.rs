@@ -1,9 +1,8 @@
 //! Smallest possible gpui window with a text label, to tell a broken
 //! app apart from a broken text pipeline.
 use gpui::{
-    App, AppContext as _, Bounds, Context, IntoElement, ParentElement as _,
-    Render, Styled as _, Window, WindowBounds, WindowOptions, div, px, rgb,
-    size,
+    App, AppContext as _, Bounds, Context, IntoElement, ParentElement as _, Render, Styled as _,
+    Window, WindowBounds, WindowOptions, div, px, rgb, size,
 };
 
 struct Probe;

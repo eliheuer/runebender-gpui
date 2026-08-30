@@ -383,7 +383,6 @@ unitsPerEm = 1000;
         assert!(!a.path.elements().is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
-
 }
 
 #[cfg(test)]

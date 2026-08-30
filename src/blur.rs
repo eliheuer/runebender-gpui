@@ -144,6 +144,5 @@ fn box_pass(
 }
 
 fn color(c: Rgba) -> tiny_skia::Color {
-    tiny_skia::Color::from_rgba(c.r, c.g, c.b, c.a)
-        .unwrap_or(tiny_skia::Color::BLACK)
+    tiny_skia::Color::from_rgba(c.r, c.g, c.b, c.a).unwrap_or(tiny_skia::Color::BLACK)
 }

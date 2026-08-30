@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Axis, Bounds, Global, InteractiveElement as _,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Pixels,
-    SharedString, StatefulInteractiveElement as _, Styled as _, canvas, div, px,
+    AnyElement, App, AppContext as _, Axis, Bounds, Global, InteractiveElement as _, IntoElement,
+    MouseButton, MouseDownEvent, ParentElement as _, Pixels, SharedString,
+    StatefulInteractiveElement as _, Styled as _, canvas, div, px,
 };
 
 use crate::theme as t;
@@ -50,22 +50,13 @@ fn store_size(cx: &mut App, group: &SharedString, index: usize, size: Pixels) {
     sizes[index] = Some(size);
 }
 
-fn store_bounds(
-    cx: &mut App,
-    group: &SharedString,
-    index: usize,
-    bounds: Bounds<Pixels>,
-) {
+fn store_bounds(cx: &mut App, group: &SharedString, index: usize, bounds: Bounds<Pixels>) {
     cx.default_global::<ResizableState>()
         .bounds
         .insert((group.clone(), index), bounds);
 }
 
-fn panel_bounds(
-    cx: &App,
-    group: &SharedString,
-    index: usize,
-) -> Option<Bounds<Pixels>> {
+fn panel_bounds(cx: &App, group: &SharedString, index: usize) -> Option<Bounds<Pixels>> {
     cx.try_global::<ResizableState>()?
         .bounds
         .get(&(group.clone(), index))
@@ -261,11 +252,7 @@ fn divider(
     let drag_group = group.clone();
     let drag_range = range.clone();
 
-    let mut strip = div()
-        .id(id)
-        .flex_shrink_0()
-        .bg(t::cell_border())
-        .relative();
+    let mut strip = div().id(id).flex_shrink_0().bg(t::cell_border()).relative();
     strip = if horizontal {
         strip.w(px(DIVIDER)).h_full().cursor_col_resize()
     } else {
@@ -340,11 +327,7 @@ impl gpui::RenderOnce for ResizableGroup {
 struct DragDivider(usize);
 
 impl gpui::Render for DragDivider {
-    fn render(
-        &mut self,
-        _: &mut gpui::Window,
-        _: &mut gpui::Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
         gpui::Empty
     }
 }

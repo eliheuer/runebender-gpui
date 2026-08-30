@@ -106,8 +106,7 @@ mod tests {
 
     #[test]
     fn paths_are_paths() {
-        let c = parse("models = \"/srv/models\"\njournal = \"/tmp/j.jsonl\"\n")
-            .expect("valid");
+        let c = parse("models = \"/srv/models\"\njournal = \"/tmp/j.jsonl\"\n").expect("valid");
         assert_eq!(c.models, Some(PathBuf::from("/srv/models")));
         assert_eq!(c.journal, Some(PathBuf::from("/tmp/j.jsonl")));
     }
@@ -119,7 +118,10 @@ mod tests {
         for (id, _) in crate::theme::THEMES {
             let c = parse(&format!("theme = \"{id}\"\n")).expect("valid");
             assert_eq!(c.theme.as_deref(), Some(id));
-            assert!(crate::theme::set_theme(id), "config could name {id} and it would fail");
+            assert!(
+                crate::theme::set_theme(id),
+                "config could name {id} and it would fail"
+            );
         }
         crate::theme::set_theme("dark");
     }
@@ -135,6 +137,9 @@ mod tests {
         )
         .expect("valid");
         assert_eq!(c.theme.as_deref(), Some("gray"));
-        assert_eq!(c.models, Some(PathBuf::from("/home/eli/.runebender/models")));
+        assert_eq!(
+            c.models,
+            Some(PathBuf::from("/home/eli/.runebender/models"))
+        );
     }
 }

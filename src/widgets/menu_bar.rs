@@ -6,9 +6,8 @@
 //! description of the menus and the two bars cannot drift.
 
 use gpui::{
-    Action, Context, InteractiveElement as _, IntoElement,
-    Menu, MenuItem, MouseButton, ParentElement as _, Render, SharedString,
-    Styled as _, Window, div, px,
+    Action, Context, InteractiveElement as _, IntoElement, Menu, MenuItem, MouseButton,
+    ParentElement as _, Render, SharedString, Styled as _, Window, div, px,
 };
 
 use crate::theme as t;
@@ -66,9 +65,7 @@ fn flatten(source: Vec<MenuItem>, out: &mut Vec<Entry>) {
     for item in source {
         match item {
             MenuItem::Separator => out.push(Entry::Separator),
-            MenuItem::Action { name, action, .. } => {
-                out.push(Entry::Action { name, action })
-            }
+            MenuItem::Action { name, action, .. } => out.push(Entry::Action { name, action }),
             MenuItem::Submenu(sub) => {
                 out.push(Entry::Separator);
                 out.push(Entry::Heading(sub.name.clone()));
@@ -80,11 +77,7 @@ fn flatten(source: Vec<MenuItem>, out: &mut Vec<Entry>) {
 }
 
 impl Render for MenuBar {
-    fn render(
-        &mut self,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let open = self.open;
         let mut bar = div()
             .flex()
@@ -147,13 +140,7 @@ impl MenuBar {
         for (row, entry) in self.menus[index].items.iter().enumerate() {
             match entry {
                 Entry::Separator => {
-                    list = list.child(
-                        div()
-                            .my(px(4.0))
-                            .h(px(1.0))
-                            .w_full()
-                            .bg(t::panel_outline()),
-                    );
+                    list = list.child(div().my(px(4.0)).h(px(1.0)).w_full().bg(t::panel_outline()));
                 }
                 Entry::Heading(name) => {
                     list = list.child(
@@ -178,10 +165,7 @@ impl MenuBar {
                                 MouseButton::Left,
                                 cx.listener(move |this: &mut Self, _, window, cx| {
                                     this.open = None;
-                                    window.dispatch_action(
-                                        action.boxed_clone(),
-                                        cx,
-                                    );
+                                    window.dispatch_action(action.boxed_clone(), cx);
                                     cx.notify();
                                 }),
                             ),

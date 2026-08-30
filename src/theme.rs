@@ -53,8 +53,7 @@ pub fn set_theme(id: &str) -> bool {
     let Some(resolved) = theme_oklch::load_theme(id) else {
         return false;
     };
-    *CURRENT.write().expect("theme lock") =
-        Some((name, Box::leak(Box::new(resolved))));
+    *CURRENT.write().expect("theme lock") = Some((name, Box::leak(Box::new(resolved))));
     true
 }
 
@@ -103,9 +102,11 @@ pub fn mark_paint(label: Option<&str>) -> Option<MarkPaint> {
             border: theme.mark_outline.map(c).unwrap_or_else(cell_border),
             ink: theme.mark_ink.map(c).unwrap_or_else(text),
         },
-        runebender_core::theme_oklch::MarkStyle::Border => {
-            MarkPaint { bg: None, border: color, ink: color }
-        }
+        runebender_core::theme_oklch::MarkStyle::Border => MarkPaint {
+            bg: None,
+            border: color,
+            ink: color,
+        },
     })
 }
 
@@ -391,16 +392,36 @@ pub fn comb_gradient(t: f64) -> Rgba {
 }
 
 pub fn continuity_g2() -> Rgba {
-    Rgba { r: 0.30, g: 0.85, b: 0.55, a: 1.0 }
+    Rgba {
+        r: 0.30,
+        g: 0.85,
+        b: 0.55,
+        a: 1.0,
+    }
 }
 pub fn continuity_g1() -> Rgba {
-    Rgba { r: 0.95, g: 0.80, b: 0.30, a: 1.0 }
+    Rgba {
+        r: 0.95,
+        g: 0.80,
+        b: 0.30,
+        a: 1.0,
+    }
 }
 pub fn continuity_line() -> Rgba {
-    Rgba { r: 0.55, g: 0.62, b: 0.70, a: 1.0 }
+    Rgba {
+        r: 0.55,
+        g: 0.62,
+        b: 0.70,
+        a: 1.0,
+    }
 }
 pub fn continuity_kink() -> Rgba {
-    Rgba { r: 0.95, g: 0.35, b: 0.30, a: 1.0 }
+    Rgba {
+        r: 0.95,
+        g: 0.35,
+        b: 0.30,
+        a: 1.0,
+    }
 }
 
 // ---- measure HUD (web POPCOUNT_1..4 + HALO_COLOR) ----
@@ -409,10 +430,30 @@ pub fn continuity_kink() -> Rgba {
 /// sum (yellow), 3 acceptable (orange), 4+ a flagged correction (red).
 pub fn popcount_tier(pc: u32) -> Rgba {
     match pc {
-        0 | 1 => Rgba { r: 0.09, g: 0.72, b: 0.44, a: 1.0 },
-        2 => Rgba { r: 1.0, g: 0.86, b: 0.20, a: 1.0 },
-        3 => Rgba { r: 1.0, g: 0.60, b: 0.06, a: 1.0 },
-        _ => Rgba { r: 1.0, g: 0.29, b: 0.24, a: 1.0 },
+        0 | 1 => Rgba {
+            r: 0.09,
+            g: 0.72,
+            b: 0.44,
+            a: 1.0,
+        },
+        2 => Rgba {
+            r: 1.0,
+            g: 0.86,
+            b: 0.20,
+            a: 1.0,
+        },
+        3 => Rgba {
+            r: 1.0,
+            g: 0.60,
+            b: 0.06,
+            a: 1.0,
+        },
+        _ => Rgba {
+            r: 1.0,
+            g: 0.29,
+            b: 0.24,
+            a: 1.0,
+        },
     }
 }
 
@@ -427,7 +468,6 @@ pub fn halo() -> Rgba {
 pub fn point_selected_ring() -> Rgba {
     c(theme().role("selection"))
 }
-
 
 // ---- anchors ----
 

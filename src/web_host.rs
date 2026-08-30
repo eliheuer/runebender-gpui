@@ -94,7 +94,11 @@ async fn get_bytes(
 fn file_url(base: &str, rel: &str) -> String {
     let encoded: String = rel
         .split('/')
-        .map(|seg| js_sys::encode_uri_component(seg).as_string().unwrap_or_default())
+        .map(|seg| {
+            js_sys::encode_uri_component(seg)
+                .as_string()
+                .unwrap_or_default()
+        })
         .collect::<Vec<_>>()
         .join("/");
     format!("{base}/runebender/api/file/{encoded}")
@@ -116,14 +120,11 @@ pub async fn fetch_workspace(
     base: String,
 ) -> Result<FetchedWorkspace, String> {
     let (info_bytes, _) = get_bytes(&client, &format!("{base}/runebender/api/info")).await?;
-    let info: Info =
-        serde_json::from_slice(&info_bytes).map_err(|e| format!("info: {e}"))?;
+    let info: Info = serde_json::from_slice(&info_bytes).map_err(|e| format!("info: {e}"))?;
     let entry = info.entry.ok_or("server has no entry font")?;
 
-    let (list_bytes, _) =
-        get_bytes(&client, &format!("{base}/runebender/api/files")).await?;
-    let list: FileList =
-        serde_json::from_slice(&list_bytes).map_err(|e| format!("files: {e}"))?;
+    let (list_bytes, _) = get_bytes(&client, &format!("{base}/runebender/api/files")).await?;
+    let list: FileList = serde_json::from_slice(&list_bytes).map_err(|e| format!("files: {e}"))?;
 
     let mut files = HashMap::new();
     let mut etags = HashMap::new();
@@ -204,7 +205,9 @@ pub async fn put_file(
         return Err(format!(
             "save {}: {}",
             file.path,
-            parsed.error.unwrap_or_else(|| format!("HTTP {}", response.status()))
+            parsed
+                .error
+                .unwrap_or_else(|| format!("HTTP {}", response.status()))
         ));
     }
     parsed
@@ -232,8 +235,7 @@ pub fn project_from_fetched(fetched: &FetchedWorkspace) -> Result<(Project, Vec<
         }
         let ufo =
             runebender_core::font_memory::ufo_from_files(files.iter().map(|(p, b)| (*p, *b)))?;
-        let mut model =
-            Master::from_font(ufo.font, PathBuf::from(prefix.trim_end_matches('/')));
+        let mut model = Master::from_font(ufo.font, PathBuf::from(prefix.trim_end_matches('/')));
         model.glif_paths = ufo.glif_paths;
         prefixes.borrow_mut().push(prefix);
         Ok(model)

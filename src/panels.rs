@@ -1977,7 +1977,14 @@ impl Workspace {
     /// Layers section: one row per master, the active one highlighted.
     pub(crate) fn layers_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let (names, active): (Vec<SharedString>, usize) = match &self.project {
-            Some(p) => (p.master_names.iter().cloned().map(SharedString::from).collect(), p.active),
+            Some(p) => (
+                p.master_names
+                    .iter()
+                    .cloned()
+                    .map(SharedString::from)
+                    .collect(),
+                p.active,
+            ),
             None => (Vec::new(), 0),
         };
         let reference = self.reference_layers.clone();
@@ -3701,31 +3708,29 @@ impl Workspace {
         let body = if installed.is_empty() {
             body
         } else {
-            installed
-                .into_iter()
-                .fold(body, |el, (name, path)| {
-                    let current = self.model_dir.as_deref() == Some(path.as_path());
-                    el.child(
-                        div()
-                            .id(SharedString::from(format!("ai-installed-{name}")))
-                            .px_1()
-                            .py_0p5()
-                            .border(t::stroke())
-                            .border_color(if current {
-                                t::accent()
-                            } else {
-                                t::panel_outline()
-                            })
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(if current { t::accent() } else { t::text() })
-                            .child(name)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.load_model(&path);
-                                cx.notify();
-                            })),
-                    )
-                })
+            installed.into_iter().fold(body, |el, (name, path)| {
+                let current = self.model_dir.as_deref() == Some(path.as_path());
+                el.child(
+                    div()
+                        .id(SharedString::from(format!("ai-installed-{name}")))
+                        .px_1()
+                        .py_0p5()
+                        .border(t::stroke())
+                        .border_color(if current {
+                            t::accent()
+                        } else {
+                            t::panel_outline()
+                        })
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(if current { t::accent() } else { t::text() })
+                        .child(name)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.load_model(&path);
+                            cx.notify();
+                        })),
+                )
+            })
         };
 
         if self.model_dir.is_none() {
@@ -4037,7 +4042,13 @@ impl Workspace {
                         .cursor_pointer()
                         .text_color(if at_instance { t::accent() } else { t::text() })
                         .hover(|el| el.bg(t::cell_selected_bg()))
-                        .child(div().flex_1().min_w(px(0.0)).truncate().child(SharedString::from(name.clone())))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .truncate()
+                                .child(SharedString::from(name.clone())),
+                        )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.go_to_location(&target, window, cx);
                         }))

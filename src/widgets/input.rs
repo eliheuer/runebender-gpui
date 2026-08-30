@@ -12,9 +12,7 @@
 
 use std::sync::Arc;
 
-use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, SharedString, Window,
-};
+use gpui::{App, Context, EventEmitter, FocusHandle, Focusable, SharedString, Window};
 use parley::{FontContext, LayoutContext, PlainEditor};
 
 /// What a field reports. `Change` on every edit, `PressEnter` when the
@@ -69,8 +67,7 @@ pub struct GlobalTextContexts(pub Arc<std::sync::Mutex<TextContexts>>);
 
 pub fn text_contexts(cx: &mut App) -> Arc<std::sync::Mutex<TextContexts>> {
     if !cx.has_global::<GlobalTextContexts>() {
-        let contexts =
-            Arc::new(std::sync::Mutex::new(TextContexts::default()));
+        let contexts = Arc::new(std::sync::Mutex::new(TextContexts::default()));
         cx.set_global(GlobalTextContexts(contexts));
     }
     cx.global::<GlobalTextContexts>().0.clone()
@@ -220,10 +217,7 @@ impl InputState {
     }
 
     /// Refresh the layout, which every geometry question needs first.
-    fn with_layout<R>(
-        &mut self,
-        f: impl FnOnce(&mut PlainEditor<[u8; 4]>) -> R,
-    ) -> R {
+    fn with_layout<R>(&mut self, f: impl FnOnce(&mut PlainEditor<[u8; 4]>) -> R) -> R {
         let contexts = self.contexts.clone();
         let mut contexts = contexts.lock().expect("text contexts");
         let TextContexts { font, layout } = &mut *contexts;
@@ -304,11 +298,7 @@ impl InputState {
     }
 
     /// Extend the selection while the mouse is down.
-    fn drag_to(
-        &mut self,
-        position: gpui::Point<gpui::Pixels>,
-        cx: &mut Context<Self>,
-    ) {
+    fn drag_to(&mut self, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
         if !self.dragging {
             return;
         }
@@ -332,11 +322,7 @@ impl InputState {
     }
 
     /// One keystroke. Returns whether the field used it.
-    fn on_key(
-        &mut self,
-        keystroke: &gpui::Keystroke,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    fn on_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
         let m = &keystroke.modifiers;
         let word = m.alt || m.control;
         let shift = m.shift;
@@ -478,8 +464,7 @@ impl InputState {
 
     /// Replace the selection with the clipboard's text.
     fn paste(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
-        else {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
         self.insert(&text, cx);
@@ -539,15 +524,7 @@ impl skrifa::outline::OutlinePen for OutlineToPath {
         self.path
             .quad_to((cx as f64, cy as f64), (x as f64, y as f64));
     }
-    fn curve_to(
-        &mut self,
-        cx0: f32,
-        cy0: f32,
-        cx1: f32,
-        cy1: f32,
-        x: f32,
-        y: f32,
-    ) {
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
         self.path.curve_to(
             (cx0 as f64, cy0 as f64),
             (cx1 as f64, cy1 as f64),
@@ -615,8 +592,7 @@ fn glyph_outline(
     use skrifa::instance::{LocationRef, Size};
     use skrifa::outline::DrawSettings;
 
-    let font_ref =
-        skrifa::FontRef::from_index(font.data.as_ref(), font.index).ok()?;
+    let font_ref = skrifa::FontRef::from_index(font.data.as_ref(), font.index).ok()?;
     let outlines = font_ref.outline_glyphs();
     let glyph = outlines.get(skrifa::GlyphId::new(glyph_id))?;
     // parley hands back raw F2Dot14 bits; skrifa wants the type.
@@ -673,8 +649,8 @@ mod tests {
 // ---------------------------------------------------------------
 
 use gpui::{
-    Bounds, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement as _, Pixels, Point, Rgba, Styled as _, canvas, div, px,
+    Bounds, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ParentElement as _,
+    Pixels, Point, Rgba, Styled as _, canvas, div, px,
 };
 
 use crate::theme as t;
@@ -780,9 +756,7 @@ impl gpui::RenderOnce for Input {
                 drag_state.update(cx, |state, cx| state.drag_to(position, cx));
             })
             .on_key_down(move |event, window, cx| {
-                let handled = state.update(cx, |input, cx| {
-                    input.on_key(&event.keystroke, cx)
-                });
+                let handled = state.update(cx, |input, cx| input.on_key(&event.keystroke, cx));
                 if handled {
                     cx.stop_propagation();
                 }
@@ -888,20 +862,13 @@ fn paint_layout(
             let size = run.run().font_size();
             let coords = run.run().normalized_coords().to_vec();
             for glyph in run.positioned_glyphs() {
-                let Some(outline) =
-                    glyph_outline_cached(&font, size, &coords, glyph.id)
-                else {
+                let Some(outline) = glyph_outline_cached(&font, size, &coords, glyph.id) else {
                     continue;
                 };
-                let at = kurbo::Affine::translate((
-                    glyph.x as f64,
-                    glyph.y as f64,
-                ));
-                if let Some(path) = crate::build_fill_path(
-                    &(at * outline),
-                    kurbo::Affine::IDENTITY,
-                    origin,
-                ) {
+                let at = kurbo::Affine::translate((glyph.x as f64, glyph.y as f64));
+                if let Some(path) =
+                    crate::build_fill_path(&(at * outline), kurbo::Affine::IDENTITY, origin)
+                {
                     window.paint_path(path, color);
                 }
             }

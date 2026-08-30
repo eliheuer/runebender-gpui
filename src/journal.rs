@@ -81,7 +81,11 @@ pub fn line(entry: &Entry) -> String {
 /// a reason to interrupt someone's drawing.
 pub fn record(entry: Entry) {
     let Some(path) = path() else { return };
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = writeln!(file, "{}", line(&entry));
     }
 }
@@ -92,7 +96,11 @@ mod tests {
 
     #[test]
     fn a_line_is_one_json_object() {
-        let e = Entry { op: "remove overlap", glyph: Some("eight"), detail: Some("3 contours to 1".into()) };
+        let e = Entry {
+            op: "remove overlap",
+            glyph: Some("eight"),
+            detail: Some("3 contours to 1".into()),
+        };
         assert_eq!(
             line(&e),
             r#"{"op":"remove overlap","glyph":"eight","detail":"3 contours to 1"}"#
@@ -101,7 +109,11 @@ mod tests {
 
     #[test]
     fn the_optional_parts_are_left_out() {
-        let e = Entry { op: "save", glyph: None, detail: None };
+        let e = Entry {
+            op: "save",
+            glyph: None,
+            detail: None,
+        };
         assert_eq!(line(&e), r#"{"op":"save"}"#);
     }
 
@@ -109,7 +121,11 @@ mod tests {
     /// be free of the characters that would break the line.
     #[test]
     fn a_hostile_glyph_name_cannot_break_the_line() {
-        let e = Entry { op: "rename", glyph: Some("a\"b\\c\nd"), detail: None };
+        let e = Entry {
+            op: "rename",
+            glyph: Some("a\"b\\c\nd"),
+            detail: None,
+        };
         let out = line(&e);
         assert_eq!(out, r#"{"op":"rename","glyph":"a\"b\\c\nd"}"#);
         assert_eq!(out.lines().count(), 1, "one entry is one line");

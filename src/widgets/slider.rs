@@ -11,10 +11,9 @@
 //! panics on wasm.
 
 use gpui::{
-    AppContext as _, Bounds, Context, Entity, EventEmitter,
-    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement as _, Pixels, Point, StatefulInteractiveElement as _,
-    Styled as _, Window, canvas, div, px,
+    AppContext as _, Bounds, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,
+    MouseButton, MouseDownEvent, ParentElement as _, Pixels, Point,
+    StatefulInteractiveElement as _, Styled as _, Window, canvas, div, px,
 };
 
 /// Emitted while the value is being changed by the user.
@@ -82,12 +81,7 @@ impl SliderState {
 
     /// Set the value from code. Silent: only a drag reports a change,
     /// so a slider following the state it displays cannot feed itself.
-    pub fn set_value(
-        &mut self,
-        value: f32,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn set_value(&mut self, value: f32, _window: &mut Window, cx: &mut Context<Self>) {
         self.value = value;
         self.clamp_value();
         cx.notify();
@@ -140,11 +134,7 @@ impl EventEmitter<SliderEvent> for SliderState {}
 struct DragSlider(gpui::EntityId);
 
 impl gpui::Render for DragSlider {
-    fn render(
-        &mut self,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         gpui::Empty
     }
 }
@@ -182,13 +172,10 @@ pub fn track(
             .size_full(),
         )
         .child(fill)
-        .on_mouse_down(
-            MouseButton::Left,
-            move |event: &MouseDownEvent, _, cx| {
-                let position = event.position;
-                on_down.update(cx, |state, cx| state.drag_to(position, cx));
-            },
-        )
+        .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _, cx| {
+            let position = event.position;
+            on_down.update(cx, |state, cx| state.drag_to(position, cx));
+        })
         .on_drag(DragSlider(id), |drag, _, _, cx| {
             cx.stop_propagation();
             cx.new(|_| drag.clone())
@@ -209,14 +196,20 @@ mod tests {
 
     #[test]
     fn builder_clamps_and_reports_percentage() {
-        let state = SliderState::new().min(100.0).max(900.0).default_value(400.0);
+        let state = SliderState::new()
+            .min(100.0)
+            .max(900.0)
+            .default_value(400.0);
         assert_eq!(state.value(), 400.0);
         assert!((state.percentage() - 0.375).abs() < 1e-6);
 
         // Out of range in either direction lands on the nearer end.
         let low = SliderState::new().min(100.0).max(900.0).default_value(0.0);
         assert_eq!(low.value(), 100.0);
-        let high = SliderState::new().min(100.0).max(900.0).default_value(9000.0);
+        let high = SliderState::new()
+            .min(100.0)
+            .max(900.0)
+            .default_value(9000.0);
         assert_eq!(high.value(), 900.0);
     }
 
@@ -224,8 +217,14 @@ mod tests {
     fn builder_order_does_not_matter() {
         // gpui-component's slider needed .max() before .min(); this one
         // clamps after each, so either order lands in the same place.
-        let a = SliderState::new().max(900.0).min(100.0).default_value(400.0);
-        let b = SliderState::new().min(100.0).max(900.0).default_value(400.0);
+        let a = SliderState::new()
+            .max(900.0)
+            .min(100.0)
+            .default_value(400.0);
+        let b = SliderState::new()
+            .min(100.0)
+            .max(900.0)
+            .default_value(400.0);
         assert_eq!(a.value(), b.value());
     }
 
