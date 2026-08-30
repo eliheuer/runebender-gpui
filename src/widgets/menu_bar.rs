@@ -6,9 +6,9 @@
 //! description of the menus and the two bars cannot drift.
 
 use gpui::{
-    Action, App, Context, Entity, InteractiveElement as _, IntoElement,
+    Action, Context, InteractiveElement as _, IntoElement,
     Menu, MenuItem, MouseButton, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    Styled as _, Window, div, px,
 };
 
 use crate::theme as t;

@@ -522,7 +522,7 @@ impl Workspace {
         // the grid: one input entity, one place on screen.
         let in_editor = matches!(self.mode, Mode::Editor(_));
         panel = panel
-            .child(row("Master", master))
+            .child(row("Master", SharedString::from(master)))
             // Why the glyph is not interpolating, when it is not: the
             // grid dot says that something is wrong, this says what.
             .when_some(
@@ -1977,7 +1977,7 @@ impl Workspace {
     /// Layers section: one row per master, the active one highlighted.
     pub(crate) fn layers_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let (names, active): (Vec<SharedString>, usize) = match &self.project {
-            Some(p) => (p.master_names.clone(), p.active),
+            Some(p) => (p.master_names.iter().cloned().map(SharedString::from).collect(), p.active),
             None => (Vec::new(), 0),
         };
         let reference = self.reference_layers.clone();
@@ -3219,7 +3219,7 @@ impl Workspace {
                         .unwrap_or(false)
                 })
                 .count();
-            let pair_count = |m: &FontModel| {
+            let pair_count = |m: &Master| {
                 m.font
                     .kerning
                     .values()
@@ -4005,7 +4005,7 @@ impl Workspace {
                         div()
                             .text_sm()
                             .text_color(t::text_muted())
-                            .child(axis.tag.clone()),
+                            .child(SharedString::from(axis.tag.clone())),
                     )
                     .child(div().flex_1().child(flat_slider(slider, cx))),
             );
@@ -4037,7 +4037,7 @@ impl Workspace {
                         .cursor_pointer()
                         .text_color(if at_instance { t::accent() } else { t::text() })
                         .hover(|el| el.bg(t::cell_selected_bg()))
-                        .child(div().flex_1().min_w(px(0.0)).truncate().child(name.clone()))
+                        .child(div().flex_1().min_w(px(0.0)).truncate().child(SharedString::from(name.clone())))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.go_to_location(&target, window, cx);
                         }))

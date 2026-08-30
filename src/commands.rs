@@ -840,7 +840,7 @@ impl Workspace {
                     .collect();
                 for (index, left, right) in keyed {
                     // Targets from the same master's referenced glyphs.
-                    let resolve = |master: &FontModel,
+                    let resolve = |master: &Master,
                                    formula: &MetricsFormula,
                                    want_left: bool|
                      -> Option<f64> {

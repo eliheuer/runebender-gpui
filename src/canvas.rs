@@ -134,7 +134,7 @@ impl Workspace {
                                         div().w(px(6.0)).h(px(6.0)).rounded_full().bg(t::anchor()),
                                     )
                                 })
-                                .child(name),
+                                .child(SharedString::from(name)),
                         )
                         .when(labels.height >= 40.0, |el| {
                             el.child(
@@ -309,7 +309,7 @@ impl Workspace {
                             .text_sm()
                             .text_color(if selected { t::accent() } else { t::text() })
                             .overflow_hidden()
-                            .child(name.clone()),
+                            .child(SharedString::from(name.clone())),
                     )
                     .child(cell(
                         entry

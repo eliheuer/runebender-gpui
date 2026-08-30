@@ -211,3 +211,108 @@ pub async fn put_file(
         .etag
         .ok_or_else(|| format!("save {}: no etag in response", file.path))
 }
+
+/// Assemble a project from a fetched workspace (web host).
+/// Returns the project plus per-master UFO path prefixes
+/// (workspace-root relative), aligned with `masters`.
+pub fn project_from_fetched(fetched: &FetchedWorkspace) -> Result<(Project, Vec<String>), String> {
+    use std::cell::RefCell;
+    let prefixes: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let build_master = |prefix: String| -> Result<Master, String> {
+        let files: Vec<(&str, &[u8])> = fetched
+            .files
+            .iter()
+            .filter_map(|(path, bytes)| {
+                path.strip_prefix(&prefix)
+                    .map(|rel| (rel, bytes.as_slice()))
+            })
+            .collect();
+        if files.is_empty() {
+            return Err(format!("no files under {prefix}"));
+        }
+        let ufo =
+            runebender_core::font_memory::ufo_from_files(files.iter().map(|(p, b)| (*p, *b)))?;
+        let mut model =
+            Master::from_font(ufo.font, PathBuf::from(prefix.trim_end_matches('/')));
+        model.glif_paths = ufo.glif_paths;
+        prefixes.borrow_mut().push(prefix);
+        Ok(model)
+    };
+
+    let project = if let Some(ds_text) = &fetched.designspace_text {
+        let doc = runebender_core::font_memory::designspace_from_str(ds_text)?;
+        let ds_dir = match fetched.entry.rfind('/') {
+            Some(i) => &fetched.entry[..=i],
+            None => "",
+        };
+        Project::from_designspace(doc, |filename| build_master(format!("{ds_dir}{filename}/")))?
+    } else {
+        // Bare UFO entry.
+        let model = build_master(format!("{}/", fetched.entry.trim_end_matches('/')))?;
+        let name: Arc<str> = model
+            .font
+            .font_info
+            .style_name
+            .clone()
+            .unwrap_or_else(|| "Regular".into())
+            .into();
+        Project {
+            masters: vec![model],
+            active: 0,
+            master_names: vec![name],
+            axes: Vec::new(),
+            master_locations: Vec::new(),
+            model: None,
+            location: Location::new(),
+            compat: HashMap::new(),
+            export_source: None,
+            instances: Vec::new(),
+            ds_doc: None,
+            ds_dirty: false,
+            brace: Vec::new(),
+        }
+    };
+    let mut project = project;
+    project.compute_compat();
+    Ok((project, prefixes.into_inner()))
+}
+
+/// The embedded demo project for hosts without a filesystem
+/// (web builds): the Virtua Grotesk designspace and both master
+/// UFOs compiled into the binary.
+pub fn demo_project() -> Result<Project, String> {
+    static DEMO: include_dir::Dir<'_> =
+        include_dir::include_dir!("$CARGO_MANIFEST_DIR/../runebender-web/assets/test-fonts");
+    let ds_text = DEMO
+        .get_file("VirtuaGrotesk.designspace")
+        .and_then(|f| f.contents_utf8())
+        .ok_or("embedded designspace missing")?;
+    let doc = runebender_core::font_memory::designspace_from_str(ds_text)?;
+    let mut project = Project::from_designspace(doc, |filename| {
+        let ufo = DEMO
+            .get_dir(filename)
+            .ok_or_else(|| format!("embedded UFO missing: {filename}"))?;
+        let mut files: Vec<(String, &[u8])> = Vec::new();
+        fn walk<'a>(
+            dir: &'a include_dir::Dir<'a>,
+            prefix: &str,
+            out: &mut Vec<(String, &'a [u8])>,
+        ) {
+            for file in dir.files() {
+                let name = file.path().file_name().unwrap().to_string_lossy();
+                out.push((format!("{prefix}{name}"), file.contents()));
+            }
+            for sub in dir.dirs() {
+                let name = sub.path().file_name().unwrap().to_string_lossy();
+                walk(sub, &format!("{prefix}{name}/"), out);
+            }
+        }
+        walk(ufo, "", &mut files);
+        let font = runebender_core::font_memory::font_from_files(
+            files.iter().map(|(p, b)| (p.as_str(), *b)),
+        )?;
+        Ok(Master::from_font(font, PathBuf::from(filename)))
+    })?;
+    project.compute_compat();
+    Ok(project)
+}
