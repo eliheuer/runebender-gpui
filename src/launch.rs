@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The launch path: the keymap, the keystroke router, the font named
 //! on the command line, `--fonts`, and which family the interface

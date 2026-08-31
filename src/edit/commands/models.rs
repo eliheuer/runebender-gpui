@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Local models: choosing, scoring, and running the bolden model.
 

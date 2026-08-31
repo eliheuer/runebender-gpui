@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Web host layer: load and save fonts through the runebender
 //! workspace server (`runebender-web/server/serve.mjs`) instead of a

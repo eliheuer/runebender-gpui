@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The grid view's right panel: glyph info, the preview, mark colours, and the hover overlay.
 

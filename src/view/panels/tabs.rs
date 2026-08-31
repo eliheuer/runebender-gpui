@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The left edge: the tab strip and the category sidebar it opens.
 

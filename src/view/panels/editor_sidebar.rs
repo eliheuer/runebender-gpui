@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The editor view's left panel: related glyphs, shaping, transforms, curves, background, layers, and the context menu.
 

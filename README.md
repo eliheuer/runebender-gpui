@@ -192,4 +192,4 @@ At feature parity with the retired web editor, and a little past it.
 
 ## License
 
-Apache-2.0.
+Apache-2.0 OR MIT, the Linebender convention.

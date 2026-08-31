@@ -2,7 +2,7 @@
 name = "runebender-gpui"
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
+license = "Apache-2.0 OR MIT"
 description = "A font editor built on GPUI, a sibling of runebender-xilem for comparing UI frameworks"
 repository = "https://github.com/eliheuer/runebender-gpui"
 

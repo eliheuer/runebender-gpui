@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Painting helpers shared by the canvas, the grid, and the panels:
 //! kurbo paths into gpui paths, icons drawn from paths, batched fills,

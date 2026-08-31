@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! What the user does: commands, selection and its operations, pointer
 //! and keyboard input, the inspector's fields, sessions and undo, the
