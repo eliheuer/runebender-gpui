@@ -6,8 +6,35 @@
 //! Each `ensure_*` creates a control once and keeps it in step with
 //! the workspace on later renders.
 
-use crate::*;
-
+use crate::BAR_BUTTON;
+use crate::BOTTOM_BAR_H;
+use crate::CELL;
+use crate::Drag;
+use crate::FontViewMode;
+use crate::IconMark;
+use crate::MINI_CELL;
+use crate::Mode;
+use crate::TAB_H;
+use crate::Workspace;
+use crate::eye_icon;
+use crate::flat_slider;
+use crate::glyph_free_icon;
+use crate::icon_svg;
+use crate::invert_icon;
+use crate::view::theme as t;
+use crate::widgets;
+use gpui::AppContext;
+use gpui::Context;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::Window;
+use gpui::div;
+use gpui::prelude::FluentBuilder;
+use gpui::px;
 impl Workspace {
     pub(crate) fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (title, status): (SharedString, SharedString) = match (self.font(), &self.load_error) {

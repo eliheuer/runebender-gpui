@@ -6,8 +6,13 @@
 //! Sort geometry, the models behind each sort, kerning edits made by
 //! dragging sorts, and pasting into the buffer.
 
-use crate::*;
-
+use crate::Drag;
+use crate::HIT_RADIUS_PX;
+use crate::Mode;
+use crate::Tool;
+use crate::Workspace;
+use gpui::Context;
+use gpui::Point;
 impl Workspace {
     /// Paste the system clipboard's text into the editor's buffer,
     /// character by character (web pasteTextIntoBuffer): switches to

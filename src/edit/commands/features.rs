@@ -3,8 +3,9 @@
 
 //! Features: generating and applying feature code.
 
-use crate::*;
-
+use crate::Workspace;
+use gpui::Context;
+use gpui::Window;
 impl Workspace {
     /// The Features section's Generate button: rewrite the automatic
     /// blocks (init/medi/fina from name suffixes, liga from

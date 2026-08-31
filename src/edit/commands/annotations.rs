@@ -3,8 +3,10 @@
 
 //! Annotations on the glyph.
 
-use crate::*;
-
+use crate::Workspace;
+use runebender_core::formats::lib_keys::Annotation;
+use runebender_core::formats::lib_keys::read_annotations;
+use runebender_core::formats::lib_keys::write_annotations;
 impl Workspace {
     /// Drop an annotation at a design-space point on the open
     /// glyph (active master; annotations are working notes, never

@@ -5,8 +5,40 @@
 //! on the command line, `--fonts`, and which family the interface
 //! text uses. Everything `main()` calls before the window opens.
 
-use crate::*;
-
+use crate::CopyContours;
+use crate::CorrectPathDirection;
+use crate::Decompose;
+use crate::DeselectAllPoints;
+use crate::DuplicateRepeat;
+use crate::DuplicateSelection;
+use crate::ExportFont;
+use crate::FlipHorizontal;
+use crate::FlipVertical;
+use crate::InvertPointSelection;
+use crate::Mode;
+use crate::NewFont;
+use crate::NewGlyph;
+use crate::OpenFont;
+use crate::PasteContours;
+use crate::PathBuf;
+use crate::Quit;
+use crate::Redo;
+use crate::RemoveOverlap;
+use crate::ReverseContours;
+use crate::SaveFont;
+use crate::SaveFontAs;
+use crate::SelectAllPoints;
+use crate::SyncMetrics;
+use crate::TidyPaths;
+use crate::Undo;
+use crate::Workspace;
+use crate::ZoomToFit;
+use crate::default_font_path;
+use crate::widgets;
+use gpui::App;
+use gpui::SharedString;
+use kurbo::Affine;
+use runebender_core::document::project::Project;
 impl Workspace {
     /// Route keystrokes before any binding runs, so Tab cycles the
     /// point selection rather than walking tab stops. On the web

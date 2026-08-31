@@ -3,8 +3,22 @@
 
 //! The preview strip along the bottom of the editor.
 
-use super::*;
-
+use crate::Arc;
+use crate::Workspace;
+use crate::blur_key;
+use crate::build_fill_path;
+use crate::view::blur;
+use crate::view::theme as t;
+use gpui::Bounds;
+use gpui::Context;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::Styled;
+use gpui::canvas;
+use gpui::div;
+use gpui::px;
+use kurbo::Affine;
+use kurbo::BezPath;
 impl Workspace {
     pub(crate) fn preview_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let Some(font) = self.font() else {

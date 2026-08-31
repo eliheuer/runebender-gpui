@@ -3,8 +3,39 @@
 
 //! The grid view's right panel: glyph info, the preview, mark colours, and the hover overlay.
 
-use super::*;
-
+use crate::Arc;
+use crate::BOTTOM_BAR_H;
+use crate::GridFit;
+use crate::IconMark;
+use crate::Mode;
+use crate::Workspace;
+use crate::build_fill_path;
+use crate::build_path;
+use crate::cell_glyph_transform;
+use crate::cell_label_metrics;
+use crate::glyph_free_icon;
+use crate::paint_batched;
+use crate::place_cells;
+use crate::view::theme as t;
+use crate::widgets;
+use gpui::Bounds;
+use gpui::Context;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::PathBuilder;
+use gpui::Point;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::Window;
+use gpui::canvas;
+use gpui::div;
+use gpui::prelude::FluentBuilder;
+use gpui::px;
+use kurbo::Affine;
+use kurbo::BezPath;
+use runebender_core::document::project::GlyphPoint;
 impl Workspace {
     /// One canvas for every glyph in a grid, batched by colour. The
     /// cells themselves are plain divs: gpui breaks its render pass at

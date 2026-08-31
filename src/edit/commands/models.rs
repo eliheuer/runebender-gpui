@@ -3,8 +3,9 @@
 
 //! Local models: choosing, scoring, and running the bolden model.
 
-use crate::*;
-
+use crate::Mode;
+use crate::Workspace;
+use gpui::Context;
 impl Workspace {
     /// Choose a model directory and remember it.
     pub(crate) fn command_choose_model(&mut self, cx: &mut Context<Self>) {

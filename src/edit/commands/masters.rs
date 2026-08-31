@@ -3,8 +3,13 @@
 
 //! Masters: interpolation, shape switches, smart components, axis mappings, instances, and cross-master checks.
 
-use crate::*;
-
+use crate::Mode;
+use crate::Workspace;
+use runebender_core::analysis::measure::joining_band;
+use runebender_core::document::project::Master;
+use runebender_core::formats::metrics_keys::MetricsFormula;
+use runebender_core::formats::metrics_keys::parse_metrics_key;
+use runebender_core::formats::metrics_keys::read_metrics_key;
 impl Workspace {
     /// Glyph > Check Joining: for every positional form, measure
     /// the connecting stroke's band at its joining edges (init and

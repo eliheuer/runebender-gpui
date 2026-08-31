@@ -7,8 +7,10 @@
 //! weight delta from the font's own reference pairs, and applying the
 //! bolden model to a glyph.
 
-use crate::*;
-
+use crate::CONFIG;
+use crate::PathBuf;
+use crate::Workspace;
+use runebender_core::outline::effects::bolden_contours;
 impl Workspace {
     /// Read a model directory and cache the weights.
     /// Where a model is looked for when nobody points at one.

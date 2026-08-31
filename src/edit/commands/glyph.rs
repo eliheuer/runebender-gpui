@@ -3,8 +3,10 @@
 
 //! Glyph menu: add, remove, duplicate, generate, groups, and glyph export.
 
-use crate::*;
-
+use crate::PathBuf;
+use crate::Workspace;
+use gpui::Context;
+use runebender_core::formats::svg::glyph_svg;
 impl Workspace {
     /// Copy the selection as text (the glyphs' characters), the web
     /// sidebar footer's action.

@@ -8,8 +8,40 @@
 //! field's value through. Nothing here runs after the window opens;
 //! what a field does lives in `edit/inspector.rs` and its siblings.
 
-use crate::*;
-
+use crate::Arc;
+use crate::CELL;
+use crate::EditorState;
+use crate::FontInfoField;
+use crate::FontInfoInputs;
+use crate::FontViewMode;
+use crate::GlyphInputs;
+use crate::GridState;
+use crate::InputFields;
+use crate::KernInputs;
+use crate::MINI_CELL;
+use crate::MeasureOpts;
+use crate::MetricField;
+use crate::MetricInputs;
+use crate::Mode;
+use crate::ModelsState;
+use crate::Mutex;
+use crate::PreviewState;
+use crate::SidebarFilter;
+use crate::SidebarState;
+use crate::Workspace;
+#[cfg(target_family = "wasm")]
+#[cfg(target_family = "wasm")]
+#[cfg(target_family = "wasm")]
+#[cfg(target_family = "wasm")]
+use crate::platform::web_host;
+use crate::widgets;
+use gpui::AppContext;
+use gpui::Context;
+use gpui::SharedString;
+use gpui::Window;
+use gpui::px;
+use kurbo::Affine;
+use runebender_core::document::project::Project;
 impl Workspace {
     /// Create the workspace for `project`, with every input widget
     /// wired. `load_error` is shown in the status bar when the project

@@ -5,10 +5,23 @@
 //! kurbo paths into gpui paths, icons drawn from paths, batched fills,
 //! and the blur cache key.
 
-use crate::*;
-
 /// Convert a kurbo path (font units, Y-up) into a gpui path mapped
 /// into `bounds` (pixels, Y-down) with the given design→local affine.
+use crate::view::theme as t;
+use crate::widgets;
+use gpui::Bounds;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::PathBuilder;
+use gpui::Point;
+use gpui::Styled;
+use gpui::Window;
+use gpui::canvas;
+use gpui::div;
+use gpui::px;
+use kurbo::Affine;
+use kurbo::BezPath;
+use kurbo::PathEl;
 pub(crate) fn build_path(
     outline: &BezPath,
     transform: Affine,

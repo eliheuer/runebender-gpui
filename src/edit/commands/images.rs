@@ -3,8 +3,10 @@
 
 //! Images: tracing, placing, importing SVG.
 
-use crate::*;
-
+use crate::Mode;
+use crate::Workspace;
+use gpui::Context;
+use runebender_core::formats::svg::svg_to_contours;
 impl Workspace {
     /// Glyph → Trace Image…: pick an image, autotrace it through
     /// img2bez (the web editor's tracer), and replace the current

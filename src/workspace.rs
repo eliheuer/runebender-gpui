@@ -7,9 +7,26 @@
 //! `view/`, `edit/`, and `platform/`, one file per concern, and
 //! `wiring.rs` builds the first value.
 
-use crate::*;
-
+use crate::Arc;
+use crate::Mutex;
+use crate::OrderKey;
+use crate::PathBuf;
 /// Font View's three modes (Glyphs 4): grid, detail, list.
+use crate::platform::config;
+#[cfg(target_family = "wasm")]
+#[cfg(target_family = "wasm")]
+#[cfg(target_family = "wasm")]
+#[cfg(target_family = "wasm")]
+use crate::platform::web_host;
+use crate::widgets;
+use gpui::Bounds;
+use gpui::Point;
+use gpui::SharedString;
+use kurbo::Affine;
+use runebender_core::analysis::search::SearchPred;
+use runebender_core::document::project::Project;
+use runebender_core::outline::glyph_ops::GlyphSnapshot;
+use runebender_core::ui::editing::ViewPort;
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum FontViewMode {
     Grid,

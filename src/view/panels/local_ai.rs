@@ -3,8 +3,18 @@
 
 //! The Local AI panel: installed models and the bolden control.
 
-use super::*;
-
+use crate::Mode;
+use crate::Workspace;
+use crate::flat_slider;
+use crate::view::theme as t;
+use gpui::Context;
+use gpui::InteractiveElement;
+use gpui::ParentElement;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::div;
+use gpui::px;
 impl Workspace {
     /// The Local AI section: choose a model, run it, and see how the
     /// result scores against a master already drawn.

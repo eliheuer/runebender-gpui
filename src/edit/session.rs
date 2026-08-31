@@ -6,8 +6,13 @@
 //! Switching masters, parking and resuming a glyph's edit session, undo
 //! and redo snapshots, and the operation journal.
 
-use crate::*;
-
+use crate::EditSession;
+use crate::EditorState;
+use crate::Mode;
+use crate::Tool;
+use crate::Workspace;
+use crate::platform::journal;
+use runebender_core::document::project::Master;
 impl Workspace {
     pub(crate) fn font(&self) -> Option<&Master> {
         self.project.as_ref().map(|p| p.active_font())

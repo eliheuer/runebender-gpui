@@ -7,8 +7,21 @@
 //! `refresh_*` per group reads the font back into the fields, so a
 //! field never holds state the font does not.
 
-use crate::*;
-
+use crate::AnchorFamily;
+use crate::FontInfoField;
+use crate::MetricField;
+use crate::Mode;
+use crate::Workspace;
+use crate::widgets;
+use gpui::Context;
+use gpui::Window;
+use kurbo::Affine;
+use runebender_core::document::project::Master;
+use runebender_core::formats::lib_keys::read_production_name;
+use runebender_core::formats::lib_keys::write_production_name;
+use runebender_core::formats::metrics_keys::parse_metrics_key;
+use runebender_core::formats::metrics_keys::read_metrics_key;
+use runebender_core::formats::metrics_keys::write_metrics_key;
 impl Workspace {
     /// Non-default, non-background layers of the active master that
     /// hold a copy of `name`.

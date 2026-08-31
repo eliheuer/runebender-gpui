@@ -99,6 +99,7 @@ unitsPerEm = 1000;
         let _ = std::fs::remove_dir_all(&dir);
     }
     use crate::*;
+    use runebender_core::document::project::{Master, Project};
 
     #[test]
     fn glyph_image_roundtrips_through_save() {

@@ -19,42 +19,7 @@ mod workspace;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use gpui::{
-    App, Bounds, Context, MouseButton, PathBuilder, Point, SharedString, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, canvas, div, prelude::*, px, size,
-};
-use kurbo::{Affine, BezPath, PathEl};
-
-use runebender_core::analysis::measure::joining_band;
-use runebender_core::analysis::search::{SearchPred, parse_search_predicates};
-use runebender_core::document::project::{BraceSource, GlyphPoint, Master, Project};
-use runebender_core::formats::color_font::{
-    COLOR_LAYERS_EXPLICIT_KEY, has_v1_entry, linear_gradient_paint, paint_glyph_layer, paint_solid,
-    parse_hex_color, read_color_mapping, read_color_palette, write_color_mapping,
-    write_color_palette,
-};
-use runebender_core::formats::lib_keys::{
-    Annotation, bake_masks, hoi_quad_at, read_annotations, read_hoi_intermediates, read_masks,
-    read_production_name, read_saved_filters, write_annotations, write_hoi_intermediates,
-    write_masks, write_production_name, write_saved_filters,
-};
-use runebender_core::formats::metrics_keys::{
-    MetricsFormula, parse_metrics_key, read_metrics_key, write_metrics_key,
-};
-#[cfg(not(target_family = "wasm"))]
-use runebender_core::formats::svg::glyph_svg;
-use runebender_core::formats::svg::svg_to_contours;
-use runebender_core::outline::cleanup::{
-    add_extreme_points, correct_path_directions, fit_curve_handles, round_glyph_coordinates,
-    tidy_contours, toggle_contour_open,
-};
-use runebender_core::outline::convert::{cubics_to_quads, quads_to_cubics};
-use runebender_core::outline::effects::{
-    apply_corner_at, bolden_contours, expand_stroke_contours, extrude_glyph_contours,
-    offset_glyph_contours, roughen_glyph_contours,
-};
-use runebender_core::outline::glyph_ops::{CurveOp, GlyphSnapshot};
-use runebender_core::ui::editing::ViewPort;
+use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
 
 use actions::*;
 use launch::keymap;

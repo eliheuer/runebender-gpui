@@ -6,8 +6,31 @@
 //! The filter and search caches, saved filters, and the rows and tiles
 //! the sidebar is built from.
 
-use crate::*;
-
+use crate::Mode;
+use crate::SIDEBAR_CATEGORIES;
+use crate::SidebarCounts;
+use crate::SidebarFilter;
+use crate::Tool;
+use crate::Workspace;
+use crate::icon_svg;
+use crate::view::theme as t;
+use gpui::Bounds;
+use gpui::Context;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::canvas;
+use gpui::div;
+use gpui::prelude::FluentBuilder;
+use gpui::px;
+use runebender_core::analysis::search::SearchPred;
+use runebender_core::analysis::search::parse_search_predicates;
+use runebender_core::document::project::Master;
+use runebender_core::formats::lib_keys::read_saved_filters;
+use runebender_core::formats::lib_keys::write_saved_filters;
 impl Workspace {
     /// Left sidebar tile: search plus the category filter list,
     /// like runebender-web's CategorySidebar.

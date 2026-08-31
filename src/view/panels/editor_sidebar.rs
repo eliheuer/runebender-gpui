@@ -3,8 +3,36 @@
 
 //! The editor view's left panel: related glyphs, shaping, transforms, curves, background, layers, and the context menu.
 
-use super::*;
-
+use crate::BOTTOM_BAR_H;
+use crate::GRID_GAP;
+use crate::Mode;
+use crate::TabTooltip;
+use crate::Workspace;
+use crate::build_fill_path;
+use crate::flat_slider;
+use crate::glyph_column_span;
+use crate::icon_svg;
+use crate::pack_spans;
+use crate::panels::Thumb;
+use crate::view::theme as t;
+use crate::widgets;
+use gpui::AppContext;
+use gpui::Bounds;
+use gpui::Context;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::MouseButton;
+use gpui::ParentElement;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::canvas;
+use gpui::div;
+use gpui::prelude::FluentBuilder;
+use gpui::px;
+use kurbo::Affine;
+use runebender_core::formats::lib_keys::read_masks;
+use runebender_core::outline::glyph_ops::CurveOp;
 impl Workspace {
     /// Editor sidebar: search + scrollable mini glyph grid, so glyph
     /// switching doesn't require leaving the editor.

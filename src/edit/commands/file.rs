@@ -3,8 +3,19 @@
 
 //! File menu: new, open, save, export, and the session-level toggles.
 
-use crate::*;
-
+use crate::EditSession;
+use crate::EditorState;
+use crate::Mode;
+use crate::PathBuf;
+use crate::SAMPLE_STRINGS;
+use crate::SidebarFilter;
+use crate::Workspace;
+use crate::app_menus;
+use crate::fontc_binary;
+use crate::view::theme as t;
+use gpui::Context;
+use gpui::Window;
+use runebender_core::document::project::Project;
 impl Workspace {
     /// The tab strip's "+": a fresh session on the current glyph.
     pub(crate) fn command_new_session(&mut self) {

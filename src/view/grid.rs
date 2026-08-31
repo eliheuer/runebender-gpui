@@ -6,8 +6,16 @@
 //! Cell sizes, the visible window of rows, the glyph order the grid
 //! shows, and multi-selection across cells.
 
-use crate::*;
-
+use crate::Arc;
+use crate::FontViewMode;
+use crate::GRID_GAP;
+use crate::GRID_PAD;
+use crate::GRID_PAD_SM;
+use crate::GRID_PAD_Y;
+use crate::GridFit;
+use crate::SidebarFilter;
+use crate::Workspace;
+use kurbo::Affine;
 impl Workspace {
     /// Solve the grid's cell size against the measured viewport, the
     /// way the web editor does: the zoom slider sets a *target* size,

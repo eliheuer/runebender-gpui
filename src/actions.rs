@@ -8,8 +8,85 @@
 //! menus on Windows and Linux, and the in-window bar drawn where no
 //! native bar exists.
 
-use crate::*;
-
+use crate::AddExtremes;
+use crate::BakeMasks;
+use crate::Balance;
+use crate::BoldenWithModel;
+use crate::BooleanExclude;
+use crate::BooleanIntersect;
+use crate::BooleanSubtract;
+use crate::BooleanUnion;
+use crate::CheckJoining;
+use crate::CopyContours;
+use crate::CopySelectedGlyphs;
+use crate::CorrectPathDirection;
+use crate::CubicsToQuads;
+use crate::Decompose;
+use crate::DeselectAllPoints;
+use crate::DuplicateGlyph;
+use crate::DuplicateRepeat;
+use crate::DuplicateSelection;
+use crate::ExportFont;
+use crate::ExportGlyphSvg;
+use crate::FilterExtrude;
+use crate::FilterOffsetCurve;
+use crate::FilterRoughen;
+use crate::FilterSlant;
+use crate::FlipHorizontal;
+use crate::FlipVertical;
+use crate::Harmonize;
+use crate::HyperToCubic;
+use crate::ImportSvg;
+use crate::InvertPointSelection;
+use crate::MEASURE_MENU;
+use crate::MeasureAllOff;
+use crate::MeasureAllOn;
+use crate::MeasureColorize;
+use crate::MeasureHandles;
+use crate::MeasurePopcount;
+use crate::MeasureSegments;
+use crate::MeasureSideBearings;
+use crate::MeasureSizes;
+use crate::MeasureSpans;
+use crate::NewFont;
+use crate::NewGlyph;
+use crate::NextMaster;
+use crate::NextSampleString;
+use crate::OpenFont;
+use crate::Optimize;
+use crate::PasteContours;
+use crate::PlaceImage;
+use crate::PreviousMaster;
+use crate::PreviousSampleString;
+use crate::QuadsToCubics;
+use crate::Quit;
+use crate::Redo;
+use crate::Reinterpolate;
+use crate::RemoveGlyphCmd;
+use crate::RemoveImage;
+use crate::RemoveOverlap;
+use crate::ReverseContours;
+use crate::Rotate180;
+use crate::RotateLeft;
+use crate::RotateRight;
+use crate::RoundCoordinates;
+use crate::RoundCorners;
+use crate::SaveFont;
+use crate::SaveFontAs;
+use crate::SelectAllPoints;
+use crate::SetStartPoint;
+use crate::SetThemeDark;
+use crate::SetThemeGray;
+use crate::SetThemeLight;
+use crate::SetThemeMidnight;
+use crate::ShowAllMasters;
+use crate::SortByName;
+use crate::SortByUnicode;
+use crate::SyncMetrics;
+use crate::TidyPaths;
+use crate::TraceImage;
+use crate::Undo;
+use crate::ZoomToFit;
 /// The application menu, used three ways: the native macOS menu bar,
 /// the stored menu Windows/Linux expose to `get_menus`, and the
 /// in-window menu bar drawn on every platform that has no native bar,
@@ -18,6 +95,7 @@ use crate::*;
 /// gained a theme that nothing here can reach: a fallback arm would
 /// silently hand it Dark's action and the menu item would do the wrong
 /// thing, so callers are made to notice instead.
+use crate::view::theme as t;
 pub(crate) fn theme_action(id: &str) -> Option<Box<dyn gpui::Action>> {
     Some(match id {
         "dark" => Box::new(SetThemeDark),

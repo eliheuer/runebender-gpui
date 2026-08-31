@@ -3,8 +3,22 @@
 
 //! Paths menu: cleanup, booleans, transforms, curve operations, filters, and the clipboard.
 
-use crate::*;
-
+use crate::Mode;
+use crate::Tool;
+use crate::Workspace;
+use gpui::Context;
+use runebender_core::outline::cleanup::add_extreme_points;
+use runebender_core::outline::cleanup::correct_path_directions;
+use runebender_core::outline::cleanup::fit_curve_handles;
+use runebender_core::outline::cleanup::round_glyph_coordinates;
+use runebender_core::outline::cleanup::tidy_contours;
+use runebender_core::outline::convert::cubics_to_quads;
+use runebender_core::outline::convert::quads_to_cubics;
+use runebender_core::outline::effects::apply_corner_at;
+use runebender_core::outline::effects::expand_stroke_contours;
+use runebender_core::outline::effects::extrude_glyph_contours;
+use runebender_core::outline::effects::offset_glyph_contours;
+use runebender_core::outline::effects::roughen_glyph_contours;
 impl Workspace {
     /// Glyph menu: convert the open glyph's curves between cubic
     /// and quadratic, in every master (structure must stay shared).

@@ -7,8 +7,31 @@
 //! pen contour, moving and transforming the selection, and the
 //! context menu that offers those operations.
 
-use crate::*;
-
+use crate::Arc;
+use crate::ContextMenu;
+use crate::HIT_RADIUS_PX;
+use crate::MEASURE_MENU;
+use crate::MeasureOpts;
+use crate::Mode;
+use crate::Tool;
+use crate::Workspace;
+use crate::ZOOM_MAX;
+use crate::ZOOM_MIN;
+use crate::ZOOM_PER_PIXEL;
+use crate::app_menus;
+use crate::seg_key;
+use crate::widgets;
+use gpui::Context;
+use gpui::Point;
+use kurbo::Affine;
+use runebender_core::document::project::BraceSource;
+use runebender_core::document::project::GlyphPoint;
+use runebender_core::formats::lib_keys::hoi_quad_at;
+use runebender_core::formats::lib_keys::read_annotations;
+use runebender_core::formats::lib_keys::read_hoi_intermediates;
+use runebender_core::formats::lib_keys::write_hoi_intermediates;
+use runebender_core::outline::cleanup::toggle_contour_open;
+use runebender_core::outline::glyph_ops::CurveOp;
 impl Workspace {
     /// Commit a dragged intermediate point: store it in the glyph's
     /// HOI lib key (dragging back onto the linear middle clears it),

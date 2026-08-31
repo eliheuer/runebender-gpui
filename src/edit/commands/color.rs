@@ -3,8 +3,17 @@
 
 //! Color: palettes, color layers, COLRv1, gradients.
 
-use crate::*;
-
+use crate::Workspace;
+use runebender_core::formats::color_font::COLOR_LAYERS_EXPLICIT_KEY;
+use runebender_core::formats::color_font::has_v1_entry;
+use runebender_core::formats::color_font::linear_gradient_paint;
+use runebender_core::formats::color_font::paint_glyph_layer;
+use runebender_core::formats::color_font::paint_solid;
+use runebender_core::formats::color_font::parse_hex_color;
+use runebender_core::formats::color_font::read_color_mapping;
+use runebender_core::formats::color_font::read_color_palette;
+use runebender_core::formats::color_font::write_color_mapping;
+use runebender_core::formats::color_font::write_color_palette;
 impl Workspace {
     /// Append a hex color to the palette, on every master (CPAL
     /// palettes must agree across sources). Returns true on success.

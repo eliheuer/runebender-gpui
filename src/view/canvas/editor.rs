@@ -8,10 +8,44 @@
 //! layer after another. Each layer is one function in this file,
 //! named for what it paints, called in draw order.
 
-use crate::*;
-
+use crate::Arc;
+use crate::Drag;
+use crate::HIT_RADIUS_PX;
+use crate::MeasureOpts;
+use crate::Mutex;
+use crate::Tool;
+use crate::Workspace;
+use crate::build_fill_path;
+use crate::build_path;
+use crate::paint_batched;
 /// A contour start marker: the point, the direction, and whether the
 /// contour is closed.
+use crate::view::theme as t;
+use gpui::App;
+use gpui::Bounds;
+use gpui::Context;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::MouseButton;
+use gpui::ParentElement;
+use gpui::PathBuilder;
+use gpui::Point;
+use gpui::Styled;
+use gpui::Window;
+use gpui::canvas;
+use gpui::div;
+use gpui::px;
+use kurbo::Affine;
+use kurbo::BezPath;
+use runebender_core::document::project::GlyphPoint;
+use runebender_core::formats::color_font::read_color_mapping;
+use runebender_core::formats::color_font::read_color_palette;
+use runebender_core::formats::lib_keys::Annotation;
+use runebender_core::formats::lib_keys::hoi_quad_at;
+use runebender_core::formats::lib_keys::read_annotations;
+use runebender_core::formats::lib_keys::read_hoi_intermediates;
+use runebender_core::formats::lib_keys::read_masks;
+use runebender_core::ui::editing::ViewPort;
 type StartMarker = ((f64, f64), (f64, f64), bool);
 /// The pen tool's preview: last on-curve point, pointer, and the ring
 /// on the start point when closing would land.

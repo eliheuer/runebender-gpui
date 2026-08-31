@@ -3,8 +3,24 @@
 
 //! The left edge: the tab strip and the category sidebar it opens.
 
-use super::*;
-
+use crate::Mode;
+use crate::SIDEBAR_CATEGORIES;
+use crate::SidebarFilter;
+use crate::TAB_H;
+use crate::Workspace;
+use crate::view::theme as t;
+use crate::widgets;
+use gpui::Context;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::div;
+use gpui::prelude::FluentBuilder;
+use gpui::px;
+use runebender_core::formats::lib_keys::read_saved_filters;
 impl Workspace {
     pub(crate) fn category_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         use runebender_core::ui::sidebar as sb;

@@ -3,8 +3,25 @@
 
 //! The editor view's right panel: one section per group of fields, from features to axes.
 
-use super::*;
-
+use crate::Mode;
+use crate::Tool;
+use crate::Workspace;
+use crate::flat_slider;
+use crate::view::theme as t;
+use crate::widgets;
+use gpui::Context;
+use gpui::InteractiveElement;
+use gpui::IntoElement;
+use gpui::ParentElement;
+use gpui::SharedString;
+use gpui::StatefulInteractiveElement;
+use gpui::Styled;
+use gpui::div;
+use gpui::prelude::FluentBuilder;
+use gpui::px;
+use runebender_core::document::project::Master;
+use runebender_core::formats::color_font::read_color_mapping;
+use runebender_core::formats::color_font::read_color_palette;
 impl Workspace {
     /// The floating info panel Glyphs puts at the bottom of the edit
     /// view: the glyph's name and codepoint, its sidebearings and

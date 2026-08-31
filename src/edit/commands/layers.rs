@@ -3,8 +3,12 @@
 
 //! Layers: background, backup, brace, and mask layers.
 
-use crate::*;
-
+use crate::Mode;
+use crate::Workspace;
+use runebender_core::document::project::BraceSource;
+use runebender_core::formats::lib_keys::bake_masks;
+use runebender_core::formats::lib_keys::read_masks;
+use runebender_core::formats::lib_keys::write_masks;
 impl Workspace {
     /// Copy the open glyph's outline into the UFO background layer
     /// (public.background), creating the layer on first use.
