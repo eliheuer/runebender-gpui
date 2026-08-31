@@ -36,6 +36,7 @@ use gpui::px;
 use kurbo::Affine;
 use kurbo::BezPath;
 use runebender_core::document::project::GlyphPoint;
+use std::collections::HashMap;
 impl Workspace {
     /// One canvas for every glyph in a grid, batched by colour. The
     /// cells themselves are plain divs: gpui breaks its render pass at
@@ -56,10 +57,7 @@ impl Workspace {
         let upm = font.units_per_em;
         // Everything the paint closure needs about a glyph, pulled out
         // here because it cannot borrow the font.
-        let mut ink: std::collections::HashMap<
-            usize,
-            (Arc<BezPath>, kurbo::Rect, f64, gpui::Rgba),
-        > = std::collections::HashMap::new();
+        let mut ink: HashMap<usize, (Arc<BezPath>, kurbo::Rect, f64, gpui::Rgba)> = HashMap::new();
         for &(glyph, _) in rows.iter().flatten() {
             let Some(entry) = font.glyphs.get(glyph) else {
                 continue;

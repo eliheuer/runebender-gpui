@@ -32,6 +32,7 @@ use runebender_core::formats::lib_keys::read_hoi_intermediates;
 use runebender_core::formats::lib_keys::write_hoi_intermediates;
 use runebender_core::outline::cleanup::toggle_contour_open;
 use runebender_core::outline::glyph_ops::CurveOp;
+use std::collections::{HashMap, HashSet};
 impl Workspace {
     /// Commit a dragged intermediate point: store it in the glyph's
     /// HOI lib key (dragging back onto the linear middle clears it),
@@ -500,7 +501,7 @@ impl Workspace {
             "reverse" => {
                 if let Some(ci) = menu.contour {
                     self.push_undo_snapshot(index);
-                    let target: std::collections::HashSet<(usize, usize)> = [(ci, 0)].into();
+                    let target: HashSet<(usize, usize)> = [(ci, 0)].into();
                     let ok = self
                         .font_mut()
                         .and_then(|f| {
@@ -733,7 +734,7 @@ impl Workspace {
         index: usize,
         start: (f64, f64),
         current: (f64, f64),
-        base: &std::collections::HashSet<(usize, usize)>,
+        base: &HashSet<(usize, usize)>,
         base_anchors: &[usize],
     ) {
         let (x0, x1) = (start.0.min(current.0), start.0.max(current.0));
@@ -1251,7 +1252,7 @@ impl Workspace {
                     runebender_core::outline::point_ops::translate_points(
                         g,
                         &selected,
-                        &std::collections::HashMap::new(),
+                        &HashMap::new(),
                         (dx, dy),
                         independent,
                     )

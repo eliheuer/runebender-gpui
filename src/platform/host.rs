@@ -18,6 +18,7 @@ use crate::platform::web_host;
 use gpui::Context;
 use runebender_core::document::project::Master;
 use runebender_core::document::project::Project;
+use std::collections::HashMap;
 impl Workspace {
     /// The repo's own Google Fonts build script above the source
     /// (build-fontc.sh preferred, then build.sh), with the directory
@@ -270,7 +271,7 @@ impl Workspace {
             return;
         }
         let base = host.base.clone();
-        let etags: std::collections::HashMap<String, String> = host.etags.clone();
+        let etags: HashMap<String, String> = host.etags.clone();
         let client = cx.http_client();
         let count = to_save.len();
         self.status_note = Some(format!("Saving {count} files…").into());

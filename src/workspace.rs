@@ -27,6 +27,7 @@ use runebender_core::analysis::search::SearchPred;
 use runebender_core::document::project::Project;
 use runebender_core::outline::glyph_ops::GlyphSnapshot;
 use runebender_core::ui::editing::ViewPort;
+use std::collections::{HashMap, HashSet};
 
 /// Font View's three modes (Glyphs 4): grid, detail, list.
 /// How the font overview presents the glyph set.
@@ -111,7 +112,7 @@ pub(crate) enum Drag {
         start: (f64, f64),
         /// Every point's position when the gesture began, keyed by
         /// `(contour, point)`.
-        originals: std::collections::HashMap<(usize, usize), (f64, f64)>,
+        originals: HashMap<(usize, usize), (f64, f64)>,
         /// Selected anchors travel with the points (web moves points
         /// and anchors on one delta): index and start position each.
         anchor: Vec<(usize, (f64, f64))>,
@@ -151,7 +152,7 @@ pub(crate) enum Drag {
         /// The same, for the y axis.
         scale_y: bool,
         /// Every point's position when the gesture began.
-        originals: std::collections::HashMap<(usize, usize), (f64, f64)>,
+        originals: HashMap<(usize, usize), (f64, f64)>,
     },
     /// Dragging a node's HOI intermediate knob: the point id and
     /// the node's positions in the axis-end masters.
@@ -198,7 +199,7 @@ pub(crate) enum Drag {
         /// The pointer's current position.
         current: (f64, f64),
         /// Points selected when the drag began.
-        base: std::collections::HashSet<(usize, usize)>,
+        base: HashSet<(usize, usize)>,
         /// Anchors selected when the drag began.
         base_anchors: Vec<usize>,
     },
@@ -275,7 +276,7 @@ pub(crate) struct EditorState {
     pub(crate) guide_hover: Option<(bool, usize)>,
     /// Locked nodes (session-scoped): unselectable and undraggable
     /// until unlocked — Glyphs' node locking.
-    pub(crate) locked_points: std::collections::HashSet<(usize, usize)>,
+    pub(crate) locked_points: HashSet<(usize, usize)>,
     /// Mouse position in window coords, for pen previews.
     pub(crate) pointer: Option<Point<gpui::Pixels>>,
     /// The shared `runebender_core` viewport (design Y-up, screen
@@ -291,7 +292,7 @@ pub(crate) struct EditorState {
     /// Shapes tool draws ellipses instead of rectangles.
     pub(crate) shape_ellipse: bool,
     /// The selected points, as `(contour, point)` indices.
-    pub(crate) selected: std::collections::HashSet<(usize, usize)>,
+    pub(crate) selected: HashSet<(usize, usize)>,
     /// Selected anchors, in the order they were picked. A selection
     /// may hold points and anchors at once (web keeps both in one
     /// selection); the last one is the "primary" the panels read.
@@ -327,14 +328,14 @@ impl EditorState {
             selected_component: None,
             sidebearing_hover: None,
             guide_hover: None,
-            locked_points: std::collections::HashSet::new(),
+            locked_points: HashSet::new(),
             pointer: None,
             viewport: ViewPort::new(),
             initialized: false,
             tool: Tool::Select,
             pen: None,
             shape_ellipse: false,
-            selected: std::collections::HashSet::new(),
+            selected: HashSet::new(),
             selected_anchors: Vec::new(),
             cursor: (0.0, 0.0),
             drag: None,
@@ -443,7 +444,7 @@ pub(crate) struct SidebarCounts {
     /// One count per category row, in `SIDEBAR_CATEGORIES` order.
     pub(crate) categories: Vec<usize>,
     /// Counts keyed by (category row, subfilter) indices.
-    pub(crate) subfilters: std::collections::HashMap<(usize, usize), usize>,
+    pub(crate) subfilters: HashMap<(usize, usize), usize>,
     /// One count per script group.
     pub(crate) groups: Vec<usize>,
     /// Counts per group, then per language within it.
@@ -504,8 +505,7 @@ pub(crate) struct Workspace {
     /// Decoded glyph background images from the UFO images store,
     /// keyed by file name; None caches a failed decode. Behind a
     /// mutex because rendering (which fills it) holds &self.
-    pub(crate) glyph_image_cache:
-        Arc<Mutex<std::collections::HashMap<String, Option<Arc<gpui::RenderImage>>>>>,
+    pub(crate) glyph_image_cache: Arc<Mutex<HashMap<String, Option<Arc<gpui::RenderImage>>>>>,
     /// What the window shows: overview or editor.
     pub(crate) mode: Mode,
     /// The active session's live editor state.
@@ -517,10 +517,10 @@ pub(crate) struct Workspace {
     /// Keys route to the preview buffer (click the strip to focus,
     /// Escape to leave).
     /// Folded sidebar sections (by title).
-    pub(crate) collapsed_sections: std::collections::HashSet<&'static str>,
+    pub(crate) collapsed_sections: HashSet<&'static str>,
     /// Masters drawn as dim reference underlays in the editor
     /// (the layer rows' eye toggles).
-    pub(crate) reference_layers: std::collections::HashSet<usize>,
+    pub(crate) reference_layers: HashSet<usize>,
     /// Edit > Show All Masters: every master overlaid in the edit
     /// view, any master's node clickable (the click switches to that
     /// master with the node selected).
@@ -554,7 +554,7 @@ pub(crate) struct Workspace {
     pub(crate) show_mark_cloud: bool,
     /// Preview feature overrides: tag → forced on/off. Absent tags
     /// keep the shaper's defaults.
-    pub(crate) feature_overrides: std::collections::HashMap<String, bool>,
+    pub(crate) feature_overrides: HashMap<String, bool>,
     /// Preview shaping locale: (script tag, BCP 47 language), e.g.
     /// ("arab", "ur"). None = direction-derived defaults.
     pub(crate) shaping_locale: Option<(String, String)>,
@@ -581,7 +581,7 @@ pub(crate) struct Workspace {
     pub(crate) show_background: bool,
     /// Per-glyph UFO layers drawn as underlays (layer names with the
     /// eye on), beyond the default and background layers.
-    pub(crate) visible_glyph_layers: std::collections::HashSet<String>,
+    pub(crate) visible_glyph_layers: HashSet<String>,
     /// Another glyph ghosted behind the drawing for comparison.
     pub(crate) reference_glyph: Option<String>,
     /// Sliders for non-degenerate designspace axes: (axis index,
@@ -636,7 +636,7 @@ pub(crate) struct GridState {
     pub(crate) cell_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
     /// Multi-selected glyph names (grid cmd/shift-click); `selected`
     /// stays the primary.
-    pub(crate) multi_selected: std::collections::HashSet<String>,
+    pub(crate) multi_selected: HashSet<String>,
     /// Font view mode: the classic grid, the Glyphs 4 detail grid
     /// (info beside every glyph), or the property-table list.
     pub(crate) view_mode: FontViewMode,
@@ -647,13 +647,13 @@ pub(crate) struct SidebarState {
     /// What the sidebar has selected.
     pub(crate) filter: SidebarFilter,
     /// Names matched by the current sidebar filter (None = all).
-    pub(crate) matches: Option<std::collections::HashSet<String>>,
+    pub(crate) matches: Option<HashSet<String>>,
     /// Per-row glyph counts, rebuilt on load/reload/master switch.
     pub(crate) counts: Option<SidebarCounts>,
     /// Script group rows unfolded to show their languages.
-    pub(crate) expanded_scripts: std::collections::HashSet<usize>,
+    pub(crate) expanded_scripts: HashSet<usize>,
     /// Category rows unfolded to show their subfilters.
-    pub(crate) expanded_categories: std::collections::HashSet<usize>,
+    pub(crate) expanded_categories: HashSet<usize>,
     /// The same, for the editor sidebar's mini glyph grid.
     pub(crate) viewport: gpui::Size<gpui::Pixels>,
     /// The search pattern, compiled once instead of per glyph.

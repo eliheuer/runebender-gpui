@@ -7,6 +7,7 @@ use crate::Workspace;
 use gpui::Context;
 #[cfg(not(target_family = "wasm"))]
 use runebender_core::formats::svg::glyph_svg;
+use std::collections::HashSet;
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 impl Workspace {
@@ -113,7 +114,7 @@ impl Workspace {
         let Some(project) = self.project.as_mut() else {
             return;
         };
-        let taken: std::collections::HashSet<String> = project
+        let taken: HashSet<String> = project
             .masters
             .iter()
             .flat_map(|m| m.name_map.keys().cloned())
@@ -251,7 +252,7 @@ impl Workspace {
             return;
         };
         // First free name: glyph, glyph.001, glyph.002, ...
-        let taken: std::collections::HashSet<String> = project
+        let taken: HashSet<String> = project
             .masters
             .iter()
             .flat_map(|m| m.name_map.keys().cloned())

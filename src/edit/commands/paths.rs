@@ -19,6 +19,7 @@ use runebender_core::outline::effects::expand_stroke_contours;
 use runebender_core::outline::effects::extrude_glyph_contours;
 use runebender_core::outline::effects::offset_glyph_contours;
 use runebender_core::outline::effects::roughen_glyph_contours;
+use std::collections::HashSet;
 impl Workspace {
     /// Glyph menu: convert the open glyph's curves between cubic
     /// and quadratic, in every master (structure must stay shared).
@@ -385,7 +386,7 @@ impl Workspace {
             return;
         }
         self.push_undo_snapshot(index);
-        let selected_contours: std::collections::HashSet<usize> =
+        let selected_contours: HashSet<usize> =
             self.editor.selected.iter().map(|(c, _)| *c).collect();
         let changed = self
             .font_mut()
@@ -493,7 +494,7 @@ impl Workspace {
         self.push_undo_snapshot(index);
         self.roughen_seed = self.roughen_seed.wrapping_add(1);
         let seed = self.roughen_seed;
-        let selected_contours: std::collections::HashSet<usize> =
+        let selected_contours: HashSet<usize> =
             self.editor.selected.iter().map(|(c, _)| *c).collect();
         let changed = self
             .font_mut()

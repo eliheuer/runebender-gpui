@@ -44,6 +44,7 @@ use runebender_core::formats::lib_keys::read_annotations;
 use runebender_core::formats::lib_keys::read_hoi_intermediates;
 use runebender_core::formats::lib_keys::read_masks;
 use runebender_core::ui::editing::ViewPort;
+use std::collections::HashSet;
 
 /// A contour start marker: the point, the direction, and whether the
 /// contour is closed.
@@ -163,9 +164,9 @@ struct EditorScene {
     /// The zoom from the editor state.
     zoom: f64,
     /// The selected points as `(contour, index)`.
-    selected_points: std::collections::HashSet<(usize, usize)>,
+    selected_points: HashSet<(usize, usize)>,
     /// The locked points as `(contour, index)`.
-    locked_points: std::collections::HashSet<(usize, usize)>,
+    locked_points: HashSet<(usize, usize)>,
     /// The marquee drag's corners.
     marquee: Option<((f64, f64), (f64, f64))>,
     /// The free-transform box around a multi-point selection.

@@ -31,6 +31,7 @@ use runebender_core::analysis::search::parse_search_predicates;
 use runebender_core::document::project::Master;
 use runebender_core::formats::lib_keys::read_saved_filters;
 use runebender_core::formats::lib_keys::write_saved_filters;
+use std::collections::{HashMap, HashSet};
 impl Workspace {
     /// Left sidebar tile: search plus the category filter list,
     /// like runebender-web's CategorySidebar.
@@ -147,7 +148,7 @@ impl Workspace {
                 }
             })
             .collect();
-        let mut subfilters = std::collections::HashMap::new();
+        let mut subfilters = HashMap::new();
         for (ci, (category, label)) in SIDEBAR_CATEGORIES.iter().enumerate() {
             for (si, (sub, _)) in sb::category_subfilters(label).iter().enumerate() {
                 let count = glyphs
@@ -255,7 +256,7 @@ impl Workspace {
             self.sidebar.matches = None;
             return;
         };
-        let matches: std::collections::HashSet<String> = font
+        let matches: HashSet<String> = font
             .glyphs
             .iter()
             .filter(|entry| {

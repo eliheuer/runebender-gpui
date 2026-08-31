@@ -24,6 +24,7 @@ use gpui::Point;
 use gpui::Window;
 use kurbo::Affine;
 use runebender_core::formats::lib_keys::read_hoi_intermediates;
+use std::collections::HashMap;
 
 /// The nearest master-pair point to the pointer: distance, point id,
 /// and its position in each master.
@@ -309,7 +310,7 @@ impl Workspace {
                     self.editor.selected.insert(id);
                 }
                 if self.editor.selected.contains(&id) {
-                    let originals: std::collections::HashMap<(usize, usize), (f64, f64)> =
+                    let originals: HashMap<(usize, usize), (f64, f64)> =
                         all_points.iter().copied().collect();
                     let anchor = self.selected_anchor_origin(index);
                     self.push_undo_snapshot(index);
@@ -343,7 +344,7 @@ impl Workspace {
                             self.editor.selected_anchors = vec![ai];
                         }
                     }
-                    let originals: std::collections::HashMap<(usize, usize), (f64, f64)> =
+                    let originals: HashMap<(usize, usize), (f64, f64)> =
                         all_points.iter().copied().collect();
                     let anchor = self.selected_anchor_origin(index);
                     self.push_undo_snapshot(index);
@@ -409,7 +410,7 @@ impl Workspace {
                     } else {
                         self.editor.selected = ids.iter().copied().collect();
                     }
-                    let originals: std::collections::HashMap<(usize, usize), (f64, f64)> =
+                    let originals: HashMap<(usize, usize), (f64, f64)> =
                         all_points.iter().copied().collect();
                     let anchor = self.selected_anchor_origin(index);
                     self.push_undo_snapshot(index);

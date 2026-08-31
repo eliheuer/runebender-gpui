@@ -10,6 +10,7 @@ use runebender_core::document::project::Master;
 use runebender_core::formats::metrics_keys::MetricsFormula;
 use runebender_core::formats::metrics_keys::parse_metrics_key;
 use runebender_core::formats::metrics_keys::read_metrics_key;
+use std::collections::HashMap;
 impl Workspace {
     /// Glyph > Check Joining: for every positional form, measure
     /// the connecting stroke's band at its joining edges (init and
@@ -613,7 +614,7 @@ impl Workspace {
                 (axis.name.clone(), raw)
             })
             .collect();
-        let defaults: std::collections::HashMap<String, f64> = project
+        let defaults: HashMap<String, f64> = project
             .axes
             .iter()
             .map(|a| (a.name.clone(), a.default))

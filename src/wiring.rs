@@ -45,6 +45,7 @@ use gpui::Window;
 use gpui::px;
 use kurbo::Affine;
 use runebender_core::document::project::Project;
+use std::collections::HashSet;
 impl Workspace {
     /// Create the workspace for `project`, with every input widget
     /// wired. `load_error` is shown in the status bar when the project
@@ -607,8 +608,8 @@ impl Workspace {
             mode: start_mode,
             editor: EditorState::new(),
             edit_buffer: runebender_core::text::buffer::TextBuffer::new(),
-            collapsed_sections: std::collections::HashSet::new(),
-            reference_layers: std::collections::HashSet::new(),
+            collapsed_sections: HashSet::new(),
+            reference_layers: HashSet::new(),
             show_all_masters: false,
             left_collapsed: false,
             #[cfg(not(target_os = "macos"))]
@@ -712,15 +713,15 @@ impl Workspace {
                 order_key: None,
                 scroll_row: 0,
                 cell_slider: None,
-                multi_selected: std::collections::HashSet::new(),
+                multi_selected: HashSet::new(),
                 view_mode: FontViewMode::Grid,
             },
             sidebar: SidebarState {
                 filter: SidebarFilter::All,
                 matches: None,
                 counts: None,
-                expanded_scripts: std::collections::HashSet::new(),
-                expanded_categories: std::collections::HashSet::new(),
+                expanded_scripts: HashSet::new(),
+                expanded_categories: HashSet::new(),
                 viewport: gpui::size(px(0.0), px(0.0)),
                 search_re: None,
                 scroll_row: 0,

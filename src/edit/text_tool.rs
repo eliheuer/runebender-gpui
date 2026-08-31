@@ -13,6 +13,7 @@ use crate::workspace::HIT_RADIUS_PX;
 use crate::workspace::Tool;
 use gpui::Context;
 use gpui::Point;
+use std::collections::HashSet;
 impl Workspace {
     /// Paste the system clipboard's text into the editor's buffer,
     /// character by character (web pasteTextIntoBuffer): switches to
@@ -190,7 +191,7 @@ impl Workspace {
             .map(|(_, id)| id);
         if let Some(id) = point_hit {
             self.push_undo_snapshot(index);
-            let set: std::collections::HashSet<_> = [id].into();
+            let set: HashSet<_> = [id].into();
             let changed = self
                 .font_mut()
                 .is_some_and(|f| f.toggle_smooth(index, &set));

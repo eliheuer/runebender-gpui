@@ -10,6 +10,7 @@
 //! highlighting, a document model. The fields here hold a glyph name,
 //! a width, a kerning value, or a feature file.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{App, Context, EventEmitter, FocusHandle, Focusable, SharedString, Window};
@@ -551,8 +552,8 @@ type OutlineKey = (usize, u32, u32, u32);
 
 thread_local! {
     static OUTLINE_CACHE: std::cell::RefCell<
-        std::collections::HashMap<OutlineKey, Option<kurbo::BezPath>>,
-    > = std::cell::RefCell::new(std::collections::HashMap::new());
+        HashMap<OutlineKey, Option<kurbo::BezPath>>,
+    > = std::cell::RefCell::new(HashMap::new());
 }
 
 /// Cached outline lookup.
