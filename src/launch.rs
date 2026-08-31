@@ -20,7 +20,6 @@ use crate::NewFont;
 use crate::NewGlyph;
 use crate::OpenFont;
 use crate::PasteContours;
-use crate::PathBuf;
 use crate::Quit;
 use crate::Redo;
 use crate::RemoveOverlap;
@@ -33,12 +32,17 @@ use crate::TidyPaths;
 use crate::Undo;
 use crate::Workspace;
 use crate::ZoomToFit;
-use crate::default_font_path;
+#[cfg(not(target_family = "wasm"))]
+use crate::platform::host::default_font_path;
 use crate::widgets;
 use gpui::App;
+#[cfg(not(target_family = "wasm"))]
 use gpui::SharedString;
 use kurbo::Affine;
+#[cfg(not(target_family = "wasm"))]
 use runebender_core::document::project::Project;
+#[cfg(not(target_family = "wasm"))]
+use std::path::PathBuf;
 impl Workspace {
     /// Route keystrokes before any binding runs, so Tab cycles the
     /// point selection rather than walking tab stops. On the web

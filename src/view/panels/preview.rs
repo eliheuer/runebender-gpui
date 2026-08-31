@@ -5,9 +5,9 @@
 
 use crate::Arc;
 use crate::Workspace;
-use crate::blur_key;
-use crate::build_fill_path;
 use crate::view::blur;
+use crate::view::paint::blur_key;
+use crate::view::paint::build_fill_path;
 use crate::view::theme as t;
 use gpui::Bounds;
 use gpui::Context;

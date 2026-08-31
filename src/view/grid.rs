@@ -7,14 +7,14 @@
 //! shows, and multi-selection across cells.
 
 use crate::Arc;
-use crate::FontViewMode;
-use crate::GRID_GAP;
-use crate::GRID_PAD;
-use crate::GRID_PAD_SM;
-use crate::GRID_PAD_Y;
-use crate::GridFit;
-use crate::SidebarFilter;
 use crate::Workspace;
+use crate::workspace::FontViewMode;
+use crate::workspace::GRID_GAP;
+use crate::workspace::GRID_PAD;
+use crate::workspace::GRID_PAD_SM;
+use crate::workspace::GRID_PAD_Y;
+use crate::workspace::GridFit;
+use crate::workspace::SidebarFilter;
 use kurbo::Affine;
 impl Workspace {
     /// Solve the grid's cell size against the measured viewport, the

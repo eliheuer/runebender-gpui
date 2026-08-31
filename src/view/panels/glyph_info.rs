@@ -4,20 +4,20 @@
 //! The grid view's right panel: glyph info, the preview, mark colours, and the hover overlay.
 
 use crate::Arc;
-use crate::BOTTOM_BAR_H;
-use crate::GridFit;
-use crate::IconMark;
 use crate::Mode;
 use crate::Workspace;
-use crate::build_fill_path;
-use crate::build_path;
-use crate::cell_glyph_transform;
-use crate::cell_label_metrics;
-use crate::glyph_free_icon;
-use crate::paint_batched;
-use crate::place_cells;
+use crate::view::grid::cell_glyph_transform;
+use crate::view::grid::cell_label_metrics;
+use crate::view::grid::place_cells;
+use crate::view::paint::IconMark;
+use crate::view::paint::build_fill_path;
+use crate::view::paint::build_path;
+use crate::view::paint::glyph_free_icon;
+use crate::view::paint::paint_batched;
 use crate::view::theme as t;
 use crate::widgets;
+use crate::workspace::BOTTOM_BAR_H;
+use crate::workspace::GridFit;
 use gpui::Bounds;
 use gpui::Context;
 use gpui::InteractiveElement;

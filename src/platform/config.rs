@@ -24,6 +24,8 @@
 
 use std::path::PathBuf;
 
+#[cfg(not(target_family = "wasm"))]
+use crate::view::theme;
 use serde::Deserialize;
 
 /// What the file can say. Every field is optional.
@@ -115,15 +117,15 @@ mod tests {
     /// can switch to, or a config file silently does nothing.
     #[test]
     fn the_documented_theme_names_all_resolve() {
-        for (id, _) in crate::theme::THEMES {
+        for (id, _) in crate::view::theme::THEMES {
             let c = parse(&format!("theme = \"{id}\"\n")).expect("valid");
             assert_eq!(c.theme.as_deref(), Some(id));
             assert!(
-                crate::theme::set_theme(id),
+                crate::view::theme::set_theme(id),
                 "config could name {id} and it would fail"
             );
         }
-        crate::theme::set_theme("dark");
+        crate::view::theme::set_theme("dark");
     }
 
     /// What an Omarchy template would produce, checked as a whole so

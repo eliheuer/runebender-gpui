@@ -9,14 +9,14 @@
 //! one per cell, because gpui ends its render pass at every run of
 //! paths and a canvas per cell meant a pass switch per cell.
 
-use crate::FontViewMode;
 use crate::Mode;
 use crate::Workspace;
-use crate::build_fill_path;
-use crate::cell_label_metrics;
+use crate::view::grid::cell_label_metrics;
+use crate::view::paint::build_fill_path;
 /// The glyph editing canvas: the scene it gathers and the layers it
 /// paints.
 use crate::view::theme as t;
+use crate::workspace::FontViewMode;
 use gpui::Bounds;
 use gpui::Context;
 use gpui::InteractiveElement;

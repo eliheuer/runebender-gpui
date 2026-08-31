@@ -640,7 +640,9 @@ use gpui::{
     Pixels, Point, Rgba, Styled as _, canvas, div, px,
 };
 
-use crate::theme as t;
+#[cfg(not(target_family = "wasm"))]
+use crate::view::paint::build_fill_path;
+use crate::view::theme as t;
 
 /// A text field.
 #[derive(gpui::IntoElement)]
@@ -851,9 +853,11 @@ fn paint_layout(
                     continue;
                 };
                 let at = kurbo::Affine::translate((glyph.x as f64, glyph.y as f64));
-                if let Some(path) =
-                    crate::build_fill_path(&(at * outline), kurbo::Affine::IDENTITY, origin)
-                {
+                if let Some(path) = crate::view::paint::build_fill_path(
+                    &(at * outline),
+                    kurbo::Affine::IDENTITY,
+                    origin,
+                ) {
                     window.paint_path(path, color);
                 }
             }

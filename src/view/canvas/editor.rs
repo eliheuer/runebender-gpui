@@ -9,18 +9,18 @@
 //! named for what it paints, called in draw order.
 
 use crate::Arc;
-use crate::Drag;
-use crate::HIT_RADIUS_PX;
-use crate::MeasureOpts;
 use crate::Mutex;
-use crate::Tool;
 use crate::Workspace;
-use crate::build_fill_path;
-use crate::build_path;
-use crate::paint_batched;
+use crate::view::paint::build_fill_path;
+use crate::view::paint::build_path;
+use crate::view::paint::paint_batched;
 /// A contour start marker: the point, the direction, and whether the
 /// contour is closed.
 use crate::view::theme as t;
+use crate::workspace::Drag;
+use crate::workspace::HIT_RADIUS_PX;
+use crate::workspace::MeasureOpts;
+use crate::workspace::Tool;
 use gpui::App;
 use gpui::Bounds;
 use gpui::Context;

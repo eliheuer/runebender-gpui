@@ -3,16 +3,17 @@
 
 //! File menu: new, open, save, export, and the session-level toggles.
 
-use crate::EditSession;
-use crate::EditorState;
 use crate::Mode;
 use crate::PathBuf;
-use crate::SAMPLE_STRINGS;
-use crate::SidebarFilter;
 use crate::Workspace;
 use crate::app_menus;
-use crate::fontc_binary;
+#[cfg(not(target_family = "wasm"))]
+use crate::platform::host::fontc_binary;
 use crate::view::theme as t;
+use crate::workspace::EditSession;
+use crate::workspace::EditorState;
+use crate::workspace::SAMPLE_STRINGS;
+use crate::workspace::SidebarFilter;
 use gpui::Context;
 use gpui::Window;
 use runebender_core::document::project::Project;

@@ -3,19 +3,19 @@
 
 //! The editor view's left panel: related glyphs, shaping, transforms, curves, background, layers, and the context menu.
 
-use crate::BOTTOM_BAR_H;
-use crate::GRID_GAP;
 use crate::Mode;
-use crate::TabTooltip;
 use crate::Workspace;
-use crate::build_fill_path;
-use crate::flat_slider;
-use crate::glyph_column_span;
-use crate::icon_svg;
-use crate::pack_spans;
-use crate::panels::Thumb;
+use crate::view::grid::glyph_column_span;
+use crate::view::grid::pack_spans;
+use crate::view::paint::build_fill_path;
+use crate::view::paint::flat_slider;
+use crate::view::paint::icon_svg;
+use crate::view::panels::Thumb;
+use crate::view::render::TabTooltip;
 use crate::view::theme as t;
 use crate::widgets;
+use crate::workspace::BOTTOM_BAR_H;
+use crate::workspace::GRID_GAP;
 use gpui::AppContext;
 use gpui::Bounds;
 use gpui::Context;

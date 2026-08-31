@@ -13,6 +13,7 @@ use crate::Workspace;
 #[cfg(target_family = "wasm")]
 #[cfg(target_family = "wasm")]
 #[cfg(target_family = "wasm")]
+#[cfg(target_family = "wasm")]
 use crate::platform::web_host;
 use gpui::Context;
 use runebender_core::document::project::Master;

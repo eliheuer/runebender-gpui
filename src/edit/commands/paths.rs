@@ -4,8 +4,8 @@
 //! Paths menu: cleanup, booleans, transforms, curve operations, filters, and the clipboard.
 
 use crate::Mode;
-use crate::Tool;
 use crate::Workspace;
+use crate::workspace::Tool;
 use gpui::Context;
 use runebender_core::outline::cleanup::add_extreme_points;
 use runebender_core::outline::cleanup::correct_path_directions;

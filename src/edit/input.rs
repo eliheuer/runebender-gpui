@@ -8,19 +8,19 @@
 //! then call a command or a core operation to carry it out. Geometry
 //! belongs in runebender-core, not here.
 
-use crate::Drag;
-use crate::HIT_RADIUS_PX;
 use crate::Mode;
-use crate::POINT_HIT_RADIUS_PX;
-use crate::PenState;
-use crate::Tool;
 use crate::Workspace;
-use crate::ZOOM_KEY_STEP;
-use crate::ZOOM_MAX;
-use crate::ZOOM_MIN;
 /// The nearest master-pair point to the pointer: distance, point id,
 /// and its position in each master.
 use crate::widgets;
+use crate::workspace::Drag;
+use crate::workspace::HIT_RADIUS_PX;
+use crate::workspace::POINT_HIT_RADIUS_PX;
+use crate::workspace::PenState;
+use crate::workspace::Tool;
+use crate::workspace::ZOOM_KEY_STEP;
+use crate::workspace::ZOOM_MAX;
+use crate::workspace::ZOOM_MIN;
 use gpui::Context;
 use gpui::Point;
 use gpui::Window;

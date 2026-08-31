@@ -5,7 +5,7 @@
 
 use crate::Mode;
 use crate::Workspace;
-use crate::flat_slider;
+use crate::view::paint::flat_slider;
 use crate::view::theme as t;
 use gpui::Context;
 use gpui::InteractiveElement;

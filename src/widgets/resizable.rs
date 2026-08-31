@@ -16,7 +16,7 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, canvas, div, px,
 };
 
-use crate::theme as t;
+use crate::view::theme as t;
 
 /// How thick the divider is, and how much of it answers to the mouse.
 const DIVIDER: f32 = 1.0;

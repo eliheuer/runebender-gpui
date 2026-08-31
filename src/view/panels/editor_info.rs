@@ -4,11 +4,11 @@
 //! The editor view's right panel: one section per group of fields, from features to axes.
 
 use crate::Mode;
-use crate::Tool;
 use crate::Workspace;
-use crate::flat_slider;
+use crate::view::paint::flat_slider;
 use crate::view::theme as t;
 use crate::widgets;
+use crate::workspace::Tool;
 use gpui::Context;
 use gpui::InteractiveElement;
 use gpui::IntoElement;

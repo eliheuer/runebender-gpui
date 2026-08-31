@@ -3,10 +3,12 @@
 
 //! Glyph menu: add, remove, duplicate, generate, groups, and glyph export.
 
-use crate::PathBuf;
 use crate::Workspace;
 use gpui::Context;
+#[cfg(not(target_family = "wasm"))]
 use runebender_core::formats::svg::glyph_svg;
+#[cfg(not(target_family = "wasm"))]
+use std::path::PathBuf;
 impl Workspace {
     /// Copy the selection as text (the glyphs' characters), the web
     /// sidebar footer's action.

@@ -4,12 +4,12 @@
 //! The left edge: the tab strip and the category sidebar it opens.
 
 use crate::Mode;
-use crate::SIDEBAR_CATEGORIES;
-use crate::SidebarFilter;
-use crate::TAB_H;
 use crate::Workspace;
 use crate::view::theme as t;
 use crate::widgets;
+use crate::workspace::SIDEBAR_CATEGORIES;
+use crate::workspace::SidebarFilter;
+use crate::workspace::TAB_H;
 use gpui::Context;
 use gpui::InteractiveElement;
 use gpui::IntoElement;

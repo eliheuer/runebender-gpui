@@ -7,12 +7,12 @@
 //! `refresh_*` per group reads the font back into the fields, so a
 //! field never holds state the font does not.
 
-use crate::AnchorFamily;
-use crate::FontInfoField;
-use crate::MetricField;
 use crate::Mode;
 use crate::Workspace;
 use crate::widgets;
+use crate::workspace::AnchorFamily;
+use crate::workspace::FontInfoField;
+use crate::workspace::MetricField;
 use gpui::Context;
 use gpui::Window;
 use kurbo::Affine;

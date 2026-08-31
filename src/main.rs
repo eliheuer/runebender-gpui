@@ -21,20 +21,25 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
 
-use actions::*;
+use crate::actions::app_menus;
+#[cfg(not(target_family = "wasm"))]
+use crate::platform::config;
+#[cfg(target_family = "wasm")]
+use crate::platform::web_host;
+use crate::workspace::CONFIG;
+use crate::workspace::Mode;
+use crate::workspace::Workspace;
+#[cfg(target_family = "wasm")]
+use gpui::SharedString;
 use launch::keymap;
-use launch::*;
 #[cfg(not(target_family = "wasm"))]
 use launch::{open_from_args, print_font_families};
+#[cfg(target_family = "wasm")]
+use runebender_core::document::project::Project;
 #[cfg(not(target_family = "wasm"))]
-use platform::host::*;
-use platform::*;
-use view::grid::*;
-use view::paint::*;
 use view::render::TabTooltip;
+#[cfg(not(target_family = "wasm"))]
 use view::theme as t;
-use view::*;
-use workspace::*;
 
 // App-level commands, reachable from the native menu bar and the
 // keymap. GPUI does not populate the macOS menu bar on its own; the

@@ -8,19 +8,19 @@
 //! context menu that offers those operations.
 
 use crate::Arc;
-use crate::ContextMenu;
-use crate::HIT_RADIUS_PX;
-use crate::MEASURE_MENU;
-use crate::MeasureOpts;
 use crate::Mode;
-use crate::Tool;
 use crate::Workspace;
-use crate::ZOOM_MAX;
-use crate::ZOOM_MIN;
-use crate::ZOOM_PER_PIXEL;
 use crate::app_menus;
-use crate::seg_key;
+use crate::view::paint::seg_key;
 use crate::widgets;
+use crate::workspace::ContextMenu;
+use crate::workspace::HIT_RADIUS_PX;
+use crate::workspace::MEASURE_MENU;
+use crate::workspace::MeasureOpts;
+use crate::workspace::Tool;
+use crate::workspace::ZOOM_MAX;
+use crate::workspace::ZOOM_MIN;
+use crate::workspace::ZOOM_PER_PIXEL;
 use gpui::Context;
 use gpui::Point;
 use kurbo::Affine;

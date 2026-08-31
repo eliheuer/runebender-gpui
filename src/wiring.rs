@@ -9,32 +9,35 @@
 //! what a field does lives in `edit/inspector.rs` and its siblings.
 
 use crate::Arc;
-use crate::CELL;
-use crate::EditorState;
-use crate::FontInfoField;
-use crate::FontInfoInputs;
-use crate::FontViewMode;
-use crate::GlyphInputs;
-use crate::GridState;
-use crate::InputFields;
-use crate::KernInputs;
-use crate::MINI_CELL;
-use crate::MeasureOpts;
-use crate::MetricField;
-use crate::MetricInputs;
 use crate::Mode;
-use crate::ModelsState;
 use crate::Mutex;
-use crate::PreviewState;
-use crate::SidebarFilter;
-use crate::SidebarState;
 use crate::Workspace;
+#[cfg(not(target_os = "macos"))]
+use crate::actions::app_menus;
+#[cfg(target_family = "wasm")]
 #[cfg(target_family = "wasm")]
 #[cfg(target_family = "wasm")]
 #[cfg(target_family = "wasm")]
 #[cfg(target_family = "wasm")]
 use crate::platform::web_host;
 use crate::widgets;
+use crate::workspace::CELL;
+use crate::workspace::EditorState;
+use crate::workspace::FontInfoField;
+use crate::workspace::FontInfoInputs;
+use crate::workspace::FontViewMode;
+use crate::workspace::GlyphInputs;
+use crate::workspace::GridState;
+use crate::workspace::InputFields;
+use crate::workspace::KernInputs;
+use crate::workspace::MINI_CELL;
+use crate::workspace::MeasureOpts;
+use crate::workspace::MetricField;
+use crate::workspace::MetricInputs;
+use crate::workspace::ModelsState;
+use crate::workspace::PreviewState;
+use crate::workspace::SidebarFilter;
+use crate::workspace::SidebarState;
 use gpui::AppContext;
 use gpui::Context;
 use gpui::SharedString;

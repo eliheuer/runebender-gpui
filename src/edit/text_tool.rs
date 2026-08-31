@@ -6,11 +6,11 @@
 //! Sort geometry, the models behind each sort, kerning edits made by
 //! dragging sorts, and pasting into the buffer.
 
-use crate::Drag;
-use crate::HIT_RADIUS_PX;
 use crate::Mode;
-use crate::Tool;
 use crate::Workspace;
+use crate::workspace::Drag;
+use crate::workspace::HIT_RADIUS_PX;
+use crate::workspace::Tool;
 use gpui::Context;
 use gpui::Point;
 impl Workspace {

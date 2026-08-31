@@ -10,7 +10,7 @@ use gpui::{
     ParentElement as _, Render, SharedString, Styled as _, Window, div, px,
 };
 
-use crate::theme as t;
+use crate::view::theme as t;
 
 /// One menu's title and its flattened items.
 struct MenuEntry {

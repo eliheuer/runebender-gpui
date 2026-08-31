@@ -9,7 +9,6 @@
 
 use crate::Arc;
 use crate::Mutex;
-use crate::OrderKey;
 use crate::PathBuf;
 /// Font View's three modes (Glyphs 4): grid, detail, list.
 use crate::platform::config;
@@ -17,7 +16,9 @@ use crate::platform::config;
 #[cfg(target_family = "wasm")]
 #[cfg(target_family = "wasm")]
 #[cfg(target_family = "wasm")]
+#[cfg(target_family = "wasm")]
 use crate::platform::web_host;
+use crate::view::grid::OrderKey;
 use crate::widgets;
 use gpui::Bounds;
 use gpui::Point;

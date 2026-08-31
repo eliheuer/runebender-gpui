@@ -38,7 +38,6 @@ use crate::Harmonize;
 use crate::HyperToCubic;
 use crate::ImportSvg;
 use crate::InvertPointSelection;
-use crate::MEASURE_MENU;
 use crate::MeasureAllOff;
 use crate::MeasureAllOn;
 use crate::MeasureColorize;
@@ -96,6 +95,7 @@ use crate::ZoomToFit;
 /// silently hand it Dark's action and the menu item would do the wrong
 /// thing, so callers are made to notice instead.
 use crate::view::theme as t;
+use crate::workspace::MEASURE_MENU;
 pub(crate) fn theme_action(id: &str) -> Option<Box<dyn gpui::Action>> {
     Some(match id {
         "dark" => Box::new(SetThemeDark),

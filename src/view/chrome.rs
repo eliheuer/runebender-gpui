@@ -6,23 +6,23 @@
 //! Each `ensure_*` creates a control once and keeps it in step with
 //! the workspace on later renders.
 
-use crate::BAR_BUTTON;
-use crate::BOTTOM_BAR_H;
-use crate::CELL;
-use crate::Drag;
-use crate::FontViewMode;
-use crate::IconMark;
-use crate::MINI_CELL;
 use crate::Mode;
-use crate::TAB_H;
 use crate::Workspace;
-use crate::eye_icon;
-use crate::flat_slider;
-use crate::glyph_free_icon;
-use crate::icon_svg;
-use crate::invert_icon;
+use crate::view::paint::IconMark;
+use crate::view::paint::eye_icon;
+use crate::view::paint::flat_slider;
+use crate::view::paint::glyph_free_icon;
+use crate::view::paint::icon_svg;
+use crate::view::paint::invert_icon;
 use crate::view::theme as t;
 use crate::widgets;
+use crate::workspace::BAR_BUTTON;
+use crate::workspace::BOTTOM_BAR_H;
+use crate::workspace::CELL;
+use crate::workspace::Drag;
+use crate::workspace::FontViewMode;
+use crate::workspace::MINI_CELL;
+use crate::workspace::TAB_H;
 use gpui::AppContext;
 use gpui::Context;
 use gpui::InteractiveElement;

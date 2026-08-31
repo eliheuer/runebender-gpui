@@ -7,13 +7,13 @@
 //! the sidebar is built from.
 
 use crate::Mode;
-use crate::SIDEBAR_CATEGORIES;
-use crate::SidebarCounts;
-use crate::SidebarFilter;
-use crate::Tool;
 use crate::Workspace;
-use crate::icon_svg;
+use crate::view::paint::icon_svg;
 use crate::view::theme as t;
+use crate::workspace::SIDEBAR_CATEGORIES;
+use crate::workspace::SidebarCounts;
+use crate::workspace::SidebarFilter;
+use crate::workspace::Tool;
 use gpui::Bounds;
 use gpui::Context;
 use gpui::InteractiveElement;
