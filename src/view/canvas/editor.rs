@@ -14,8 +14,6 @@ use crate::Workspace;
 use crate::view::paint::build_fill_path;
 use crate::view::paint::build_path;
 use crate::view::paint::paint_batched;
-/// A contour start marker: the point, the direction, and whether the
-/// contour is closed.
 use crate::view::theme as t;
 use crate::workspace::Drag;
 use crate::workspace::HIT_RADIUS_PX;
@@ -46,6 +44,11 @@ use runebender_core::formats::lib_keys::read_annotations;
 use runebender_core::formats::lib_keys::read_hoi_intermediates;
 use runebender_core::formats::lib_keys::read_masks;
 use runebender_core::ui::editing::ViewPort;
+
+/// A contour start marker: the point, the direction, and whether the
+/// contour is closed.
+/// A contour start marker: its point, its direction, and whether the
+/// contour closes.
 type StartMarker = ((f64, f64), (f64, f64), bool);
 /// The pen tool's preview: last on-curve point, pointer, and the ring
 /// on the start point when closing would land.

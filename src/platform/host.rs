@@ -74,6 +74,7 @@ impl Workspace {
     }
 
     #[cfg(not(target_family = "wasm"))]
+    /// The native arm: watch each master's source directory with `notify` and reload masters that change on disk.
     pub(crate) fn start_watching(&mut self, cx: &mut Context<Self>) {
         use futures::StreamExt;
         self._watcher = None;
@@ -382,6 +383,7 @@ pub(crate) fn fontc_binary() -> Option<PathBuf> {
     cargo_bin.exists().then_some(cargo_bin)
 }
 
+/// The designspace a bare `cargo run` opens: Virtua Grotesk from a checkout beside this repository.
 pub(crate) fn default_font_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../virtua-grotesk/sources/VirtuaGrotesk.designspace")

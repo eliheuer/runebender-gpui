@@ -10,7 +10,6 @@
 use crate::Arc;
 use crate::Mutex;
 use crate::PathBuf;
-/// Font View's three modes (Glyphs 4): grid, detail, list.
 use crate::platform::config;
 #[cfg(target_family = "wasm")]
 #[cfg(target_family = "wasm")]
@@ -28,10 +27,16 @@ use runebender_core::analysis::search::SearchPred;
 use runebender_core::document::project::Project;
 use runebender_core::outline::glyph_ops::GlyphSnapshot;
 use runebender_core::ui::editing::ViewPort;
+
+/// Font View's three modes (Glyphs 4): grid, detail, list.
+/// How the font overview presents the glyph set.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum FontViewMode {
+    /// The classic grid of glyph cells.
     Grid,
+    /// The detail grid: info columns beside every cell (Glyphs 4).
     Detail,
+    /// The property table: one row per glyph.
     List,
     /// The positional-forms matrix: Arabic review, isol/init/
     /// medi/fina as columns per base letter.
@@ -53,28 +58,41 @@ pub(crate) const SAMPLE_STRINGS: &[&str] = &[
 /// Which metric field is being edited.
 #[derive(Clone, Copy)]
 pub(crate) enum MetricField {
+    /// The advance width field.
     Width,
+    /// The left sidebearing field.
     Lsb,
+    /// The right sidebearing field.
     Rsb,
 }
 
 /// The active editor tool.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tool {
+    /// Pointer tool: selects, moves, and transforms points.
     Select,
+    /// Bezier pen: places on-curve points, drags out handles.
     Pen,
+    /// Drags out rectangles or ellipses.
     Shapes,
+    /// Types glyphs into the editor's text buffer.
     Text,
+    /// Cuts contours along a dragged line.
     Knife,
+    /// Filled preview with the editing chrome hidden.
     Preview,
+    /// Pen that draws hyperbezier contours.
     HyperPen,
+    /// Measures distances and shows the measurement HUD layers.
     Measure,
 }
 
 /// Pen-tool drawing state: the open contour and the outgoing handle
 /// of the previously placed point (set by click-dragging it).
 pub(crate) struct PenState {
+    /// Index of the open contour being drawn.
     pub(crate) contour: usize,
+    /// The previous point's outgoing handle, if it was dragged out.
     pub(crate) prev_out_handle: Option<(f64, f64)>,
     /// While the mouse is down on a fresh point: its position, used
     /// to mirror the dragged handle.
@@ -89,7 +107,10 @@ pub(crate) enum Drag {
     /// positions too, so this covers the whole glyph rather than just
     /// the selection.
     Points {
+        /// Where the gesture began, in design space.
         start: (f64, f64),
+        /// Every point's position when the gesture began, keyed by
+        /// `(contour, point)`.
         originals: std::collections::HashMap<(usize, usize), (f64, f64)>,
         /// Selected anchors travel with the points (web moves points
         /// and anchors on one delta): index and start position each.
@@ -98,12 +119,20 @@ pub(crate) enum Drag {
     /// Manual kerning drag in the text buffer (engine session).
     TextKern,
     /// Alt-drag pans the viewport (select tool). Window-space anchor.
-    Pan { last: (f64, f64) },
+    Pan {
+        /// The last pointer position, in window space.
+        last: (f64, f64),
+    },
     /// Dragging a sidebearing edge (false = left, true = right).
     Sidebearing {
+        /// True when the right edge is dragged, false the left.
         right: bool,
+        /// Pointer x where the drag began, in design space.
         start_x: f64,
+        /// The delta already applied, so each move adds only the
+        /// difference.
         applied: f64,
+        /// The glyph's advance width when the drag began.
         start_width: f64,
     },
     /// Free transform from the selection bounding box: a handle
@@ -119,6 +148,7 @@ pub(crate) enum Drag {
         rotate: bool,
         /// Which axes a scale handle drives (edge handles pin one).
         scale_x: bool,
+        /// The same, for the y axis.
         scale_y: bool,
         /// Every point's position when the gesture began.
         originals: std::collections::HashMap<(usize, usize), (f64, f64)>,
@@ -126,42 +156,64 @@ pub(crate) enum Drag {
     /// Dragging a node's HOI intermediate knob: the point id and
     /// the node's positions in the axis-end masters.
     HoiKnob {
+        /// The dragged point, as `(contour, point)` indices.
         id: (usize, usize),
+        /// The node's position in the low axis-end master.
         a: (f64, f64),
+        /// The node's position in the high axis-end master.
         b: (f64, f64),
     },
     /// Dragging a guide: `local` picks the open glyph's guidelines
     /// over the master's fontinfo ones. Guides move live; the
     /// master is marked dirty as they move.
-    Guide { local: bool, index: usize },
+    Guide {
+        /// True picks the open glyph's guidelines, false the master's
+        /// fontinfo ones.
+        local: bool,
+        /// Index into the chosen guideline list.
+        index: usize,
+    },
     /// Dragging the selected component.
     Component {
+        /// Index of the dragged component in the glyph.
         index: usize,
+        /// Where the gesture began, in design space.
         start: (f64, f64),
+        /// The component's offset when the gesture began.
         orig: (f64, f64),
     },
     /// Knife line, in design space.
     Knife {
+        /// Where the cut line begins, in design space.
         start: (f64, f64),
+        /// The pointer's current position.
         current: (f64, f64),
     },
     /// Rubber-band selection rectangle, in design space. `base` is
     /// what was selected when the drag began: the live selection is
     /// always that plus whatever the box now encloses.
     Marquee {
+        /// The corner where the drag began.
         start: (f64, f64),
+        /// The pointer's current position.
         current: (f64, f64),
+        /// Points selected when the drag began.
         base: std::collections::HashSet<(usize, usize)>,
+        /// Anchors selected when the drag began.
         base_anchors: Vec<usize>,
     },
     /// Dragging out a rectangle/ellipse (shapes tool).
     Shape {
+        /// The corner where the drag began.
         start: (f64, f64),
+        /// The pointer's current position.
         current: (f64, f64),
     },
     /// Measuring (measure tool).
     Measure {
+        /// Where the measuring line begins.
         start: (f64, f64),
+        /// The pointer's current position.
         current: (f64, f64),
     },
 }
@@ -173,13 +225,23 @@ pub(crate) enum Drag {
 pub(crate) struct ContextMenu {
     /// Position inside the canvas, in canvas-local pixels.
     pub(crate) at: Point<gpui::Pixels>,
+    /// The click position, in design space.
     pub(crate) design: (f64, f64),
+    /// The contour under the click, if any.
     pub(crate) contour: Option<usize>,
+    /// How many contours the glyph has.
     pub(crate) contour_count: usize,
+    /// The nearest on-curve point (for Set Start Point), as
+    /// `(contour, point)`.
     pub(crate) start_point: Option<(usize, usize)>,
+    /// The anchor under the click, if any.
     pub(crate) anchor: Option<usize>,
+    /// The component under the click: its index and whether it is
+    /// aligned.
     pub(crate) component: Option<(usize, bool)>,
+    /// The glyph has at least one component.
     pub(crate) has_components: bool,
+    /// Inline component-name input mode (Add Component).
     pub(crate) adding_component: bool,
     /// Inline corner-name input mode (Apply Corner…).
     pub(crate) applying_corner: bool,
@@ -191,6 +253,8 @@ pub(crate) struct ContextMenu {
     pub(crate) guide: Option<(bool, usize)>,
 }
 
+/// The edit view's live state: viewport, tool, selection, undo,
+/// and the drag in progress.
 pub(crate) struct EditorState {
     /// The active text-buffer sort's layout position (design units);
     /// (0,0) when the glyph is alone in the editor.
@@ -214,12 +278,19 @@ pub(crate) struct EditorState {
     pub(crate) locked_points: std::collections::HashSet<(usize, usize)>,
     /// Mouse position in window coords, for pen previews.
     pub(crate) pointer: Option<Point<gpui::Pixels>>,
+    /// The shared `runebender_core` viewport (design Y-up, screen
+    /// Y-down).
     pub(crate) viewport: ViewPort,
+    /// The viewport has been fitted to the canvas; false refits on
+    /// the next paint.
     pub(crate) initialized: bool,
+    /// The active tool.
     pub(crate) tool: Tool,
+    /// Pen-tool drawing state, while a contour is open.
     pub(crate) pen: Option<PenState>,
     /// Shapes tool draws ellipses instead of rectangles.
     pub(crate) shape_ellipse: bool,
+    /// The selected points, as `(contour, point)` indices.
     pub(crate) selected: std::collections::HashSet<(usize, usize)>,
     /// Selected anchors, in the order they were picked. A selection
     /// may hold points and anchors at once (web keeps both in one
@@ -227,9 +298,11 @@ pub(crate) struct EditorState {
     pub(crate) selected_anchors: Vec<usize>,
     /// Last cursor position in design space (for A = add anchor).
     pub(crate) cursor: (f64, f64),
+    /// The mouse gesture in progress, if any.
     pub(crate) drag: Option<Drag>,
     /// Undo/redo stacks of glyph snapshots for the open glyph.
     pub(crate) undo: Vec<GlyphSnapshot>,
+    /// Snapshots undone from `undo`, replayed by redo.
     pub(crate) redo: Vec<GlyphSnapshot>,
     /// Canvas bounds in window coordinates, written during paint so
     /// mouse handlers can map window→design coordinates.
@@ -242,6 +315,8 @@ impl EditorState {
         self.selected_anchors.last().copied()
     }
 
+    /// A fresh state: select tool, empty selection, default
+    /// viewport.
     pub(crate) fn new() -> Self {
         Self {
             sort_offset: (0.0, 0.0),
@@ -278,6 +353,7 @@ impl EditorState {
         self.viewport.affine() * Affine::translate(self.sort_offset)
     }
 
+    /// The viewport's zoom factor (design units to pixels).
     pub(crate) fn zoom(&self) -> f64 {
         self.viewport.zoom
     }
@@ -296,6 +372,8 @@ impl EditorState {
         (p.x - self.sort_offset.0, p.y - self.sort_offset.1)
     }
 
+    /// Fits the viewport to the canvas around the glyph's metrics
+    /// and marks the state initialized.
     pub(crate) fn fit(&mut self, advance: f64, ascender: f64, descender: f64) {
         let bounds = *self.bounds.lock().unwrap();
         let w: f32 = bounds.size.width.into();
@@ -309,8 +387,12 @@ impl EditorState {
     }
 }
 
+/// What the window shows: the font overview or one glyph's
+/// editor.
 pub(crate) enum Mode {
+    /// The font overview.
     Grid,
+    /// The edit view, open on the glyph at this index.
     Editor(usize),
 }
 
@@ -334,14 +416,20 @@ pub(crate) const SIDEBAR_CATEGORIES: [(runebender_core::analysis::category::Glyp
 /// What the sidebar has selected (web GlyphSidebarFilter).
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum SidebarFilter {
+    /// No filter: every glyph.
     All,
+    /// One category row.
     Category(runebender_core::analysis::category::GlyphCategory),
+    /// A subfilter under a category row.
     Subfilter(
         runebender_core::analysis::category::GlyphCategory,
         &'static str,
     ),
+    /// A script group row (index into core's language groups).
     LanguageGroup(usize),
+    /// One language under a script group: (group, language) indices.
     Language(usize, usize),
+    /// A built-in smart filter (index into core's builtin filters).
     Builtin(usize),
     /// A user-saved search (index into the font's saved-filter list).
     Saved(usize),
@@ -349,16 +437,23 @@ pub(crate) enum SidebarFilter {
 
 /// Glyph counts for every sidebar row, computed once per font state.
 pub(crate) struct SidebarCounts {
+    /// Every glyph in the font.
     #[allow(dead_code)]
     pub(crate) total: usize,
+    /// One count per category row, in `SIDEBAR_CATEGORIES` order.
     pub(crate) categories: Vec<usize>,
+    /// Counts keyed by (category row, subfilter) indices.
     pub(crate) subfilters: std::collections::HashMap<(usize, usize), usize>,
+    /// One count per script group.
     pub(crate) groups: Vec<usize>,
+    /// Counts per group, then per language within it.
     pub(crate) languages: Vec<Vec<usize>>,
     /// Missing-target counts per (group, filter); 0 = complete or
     /// not target-bearing.
     pub(crate) missing: Vec<Vec<usize>>,
+    /// One count per built-in smart filter.
     pub(crate) builtins: Vec<usize>,
+    /// One count per user-saved search.
     pub(crate) saved: Vec<usize>,
 }
 
@@ -368,8 +463,11 @@ pub(crate) struct SidebarCounts {
 /// and `edit_buffer`; its slot here is stale until the next switch
 /// parks it back.
 pub(crate) struct EditSession {
+    /// The open glyph, by name.
     pub(crate) glyph_name: String,
+    /// The parked editor state.
     pub(crate) editor: EditorState,
+    /// The parked text buffer.
     pub(crate) buffer: runebender_core::text::buffer::TextBuffer,
 }
 
@@ -384,15 +482,21 @@ pub(crate) type AnchorFamily = (
 /// A blurred preview frame with the key it was rendered for.
 pub(crate) type BlurFrame = (u64, Arc<gpui::RenderImage>);
 
+/// The whole editor: the open project, the edit sessions, and every
+/// view's state. `wiring.rs` builds it; the window renders it.
 pub(crate) struct Workspace {
+    /// The open font project; None when nothing loaded.
     pub(crate) project: Option<Project>,
+    /// Why the project failed to open, shown in the status bar.
     pub(crate) load_error: Option<SharedString>,
+    /// The grid's primary selected glyph, by index.
     pub(crate) selected: Option<usize>,
     /// The glyph whose edit session the tab strip returns to after
     /// the Font tab switched back to the overview.
     pub(crate) last_editor: Option<usize>,
     /// Edit tabs, Glyphs-style. Empty until a glyph is first opened.
     pub(crate) sessions: Vec<EditSession>,
+    /// Index of the active edit tab in `sessions`.
     pub(crate) active_session: usize,
     /// A run of arrow-key nudges is in progress: they share one undo
     /// step until something else happens.
@@ -402,7 +506,9 @@ pub(crate) struct Workspace {
     /// mutex because rendering (which fills it) holds &self.
     pub(crate) glyph_image_cache:
         Arc<Mutex<std::collections::HashMap<String, Option<Arc<gpui::RenderImage>>>>>,
+    /// What the window shows: overview or editor.
     pub(crate) mode: Mode,
+    /// The active session's live editor state.
     pub(crate) editor: EditorState,
     /// The editor's text buffer (the text tool): the open glyph is
     /// the active sort; other sorts render as filled context around
@@ -425,7 +531,9 @@ pub(crate) struct Workspace {
     /// (Windows, Linux, the browser).
     #[cfg(not(target_os = "macos"))]
     pub(crate) app_menu_bar: gpui::Entity<widgets::menu_bar::MenuBar>,
+    /// The window's focus handle; keystrokes route through it.
     pub(crate) focus_handle: gpui::FocusHandle,
+    /// A transient message for the status bar.
     pub(crate) status_note: Option<SharedString>,
     /// Wall-clock time of the last save, for the header.
     pub(crate) last_save_label: Option<SharedString>,
@@ -450,18 +558,22 @@ pub(crate) struct Workspace {
     /// Preview shaping locale: (script tag, BCP 47 language), e.g.
     /// ("arab", "ur"). None = direction-derived defaults.
     pub(crate) shaping_locale: Option<(String, String)>,
+    /// Seed for the Roughen command, bumped on each apply so
+    /// results differ.
     pub(crate) roughen_seed: u64,
     /// Unapplied edits in the features editor: the refresh keeps its
     /// hands off until Apply or Revert.
     pub(crate) features_edited: bool,
     /// The last Apply's compile verdict, shown under the editor.
     pub(crate) features_status: Option<SharedString>,
+    /// The open right-click menu over the canvas, if any.
     pub(crate) context_menu: Option<ContextMenu>,
     /// The Selection panel's 9-point reference for numeric move and
     /// scale (web coordinate quadrant).
     pub(crate) coord_quadrant: runebender_core::outline::path::Quadrant,
     /// Curve overlays (web CurvePanel).
     pub(crate) curve_comb: bool,
+    /// Mark curvature continuity where curve segments join.
     pub(crate) curve_continuity: bool,
     /// Measure-tool HUD layers (web SelectPanel / MeasureOptions).
     pub(crate) measure_opts: MeasureOpts,
@@ -520,6 +632,7 @@ pub(crate) struct GridState {
     pub(crate) order_key: Option<OrderKey>,
     /// First visible row of each grid. Scrolling moves whole rows.
     pub(crate) scroll_row: usize,
+    /// The bottom bar's cell-zoom slider, built lazily in render.
     pub(crate) cell_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
     /// Multi-selected glyph names (grid cmd/shift-click); `selected`
     /// stays the primary.
@@ -531,29 +644,38 @@ pub(crate) struct GridState {
 
 /// The left sidebar: filter, search, expansion, scroll, and its inputs.
 pub(crate) struct SidebarState {
+    /// What the sidebar has selected.
     pub(crate) filter: SidebarFilter,
     /// Names matched by the current sidebar filter (None = all).
     pub(crate) matches: Option<std::collections::HashSet<String>>,
     /// Per-row glyph counts, rebuilt on load/reload/master switch.
     pub(crate) counts: Option<SidebarCounts>,
+    /// Script group rows unfolded to show their languages.
     pub(crate) expanded_scripts: std::collections::HashSet<usize>,
+    /// Category rows unfolded to show their subfilters.
     pub(crate) expanded_categories: std::collections::HashSet<usize>,
     /// The same, for the editor sidebar's mini glyph grid.
     pub(crate) viewport: gpui::Size<gpui::Pixels>,
     /// The search pattern, compiled once instead of per glyph.
     pub(crate) search_re: Option<regex::Regex>,
+    /// First visible row of the mini grid.
     pub(crate) scroll_row: usize,
     /// Which editor-sidebar tab is up: 0 glyphs, 1 shapes, 2 axes,
     /// 3 chat.
     pub(crate) tab: u8,
     /// Target cell size for the editor sidebar's mini grid.
     pub(crate) cell_size: f32,
+    /// The mini grid's cell-size slider, built lazily in render.
     pub(crate) slider: Option<gpui::Entity<widgets::slider::SliderState>>,
+    /// The search box's widget state.
     pub(crate) search_input: gpui::Entity<widgets::input::InputState>,
+    /// The search text, lowercased on each edit.
     pub(crate) search_query: String,
     /// Search scope: 0 = all, 1 = name, 2 = unicode.
     pub(crate) search_mode: u8,
+    /// Treat the search as a regular expression.
     pub(crate) search_regex: bool,
+    /// Match case instead of ignoring it.
     pub(crate) search_case: bool,
     /// Parsed predicate query, rebuilt when the search changes.
     pub(crate) search_predicates: Option<Vec<SearchPred>>,
@@ -565,11 +687,14 @@ pub(crate) struct PreviewState {
     /// type size in pixels, how far it is blurred (a spacing check),
     /// whether the colors are flipped, and how the line is aligned.
     pub(crate) visible: bool,
+    /// How far the strip is blurred, in pixels; 0 draws it sharp.
     pub(crate) blur: f32,
     /// The last blurred frame, kept so dragging a point does not
     /// re-rasterize the preview on every mouse move.
     pub(crate) blur_cache: Arc<Mutex<Option<BlurFrame>>>,
+    /// Draw light-on-dark instead of dark-on-light.
     pub(crate) invert: bool,
+    /// The blur slider, built lazily in render.
     pub(crate) blur_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
     /// Which built-in sample string the buffer shows.
     pub(crate) sample_index: usize,
@@ -589,14 +714,18 @@ pub(crate) struct ModelsState {
     pub(crate) loaded: Option<std::rc::Rc<font_ml::outline::OutlineModel>>,
     /// Last judgement: glyph, model error, baseline error.
     pub(crate) score: Option<(SharedString, f64, f64)>,
+    /// The strength slider, built lazily in render.
     pub(crate) strength_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
 }
 
 /// Every input field the inspector owns. The widgets are built in
 /// `wiring.rs`; what typing in one does lives in `edit/inspector.rs`.
 pub(crate) struct InputFields {
+    /// The editor's metric and Selection fields.
     pub(crate) metric: MetricInputs,
+    /// The Font Info section's fields.
     pub(crate) font_info: FontInfoInputs,
+    /// The Kerning section's inputs.
     pub(crate) kern: KernInputs,
     /// Slant angle field in the Transformations section (degrees).
     pub(crate) slant: gpui::Entity<widgets::input::InputState>,
@@ -620,8 +749,12 @@ pub(crate) struct InputFields {
     pub(crate) instance_name: gpui::Entity<widgets::input::InputState>,
     /// The Features section's features.fea editor (grid mode).
     pub(crate) features: gpui::Entity<widgets::input::InputState>,
+    /// The Glyph panel's fields.
     pub(crate) glyph: GlyphInputs,
+    /// Names the glyph ghosted behind the drawing for comparison.
     pub(crate) reference_glyph: gpui::Entity<widgets::input::InputState>,
+    /// Component-glyph name typed in the context menu (Add
+    /// Component).
     pub(crate) component_name: gpui::Entity<widgets::input::InputState>,
     /// Corner-glyph name typed in the context menu (Apply Corner…).
     pub(crate) corner_name: gpui::Entity<widgets::input::InputState>,
@@ -636,6 +769,7 @@ pub(crate) struct InputFields {
     pub(crate) axis_map: gpui::Entity<widgets::input::InputState>,
     /// The selected smart component's value on its first axis.
     pub(crate) smart_value: gpui::Entity<widgets::input::InputState>,
+    /// Renames the selected anchor on Enter.
     pub(crate) anchor_name: gpui::Entity<widgets::input::InputState>,
 }
 
@@ -691,6 +825,8 @@ pub(crate) static MEASURE_MENU: std::sync::Mutex<MeasureOpts> =
     });
 
 impl MeasureOpts {
+    /// Whether any measurement layer is on; popcount alone does not
+    /// count.
     pub(crate) fn any(&self) -> bool {
         self.colorize
             || self.handles
@@ -700,6 +836,8 @@ impl MeasureOpts {
             || self.sizes
     }
 
+    /// Formats a length: popcount spelling when enabled, plain
+    /// digits otherwise.
     pub(crate) fn label(&self, value: i64) -> String {
         if self.popcount {
             runebender_core::analysis::measure::label(value)
@@ -711,9 +849,13 @@ impl MeasureOpts {
 
 /// Editable glyph-data fields in the Glyph panel.
 pub(crate) struct GlyphInputs {
+    /// The glyph's name; Enter renames it.
     pub(crate) name: gpui::Entity<widgets::input::InputState>,
+    /// The glyph's codepoint, in hex.
     pub(crate) unicode: gpui::Entity<widgets::input::InputState>,
+    /// The left kerning group (kern1).
     pub(crate) group_l: gpui::Entity<widgets::input::InputState>,
+    /// The right kerning group (kern2).
     pub(crate) group_r: gpui::Entity<widgets::input::InputState>,
     /// Free-text glyph note (UFO glif note element), like Glyphs'
     /// note field; shows as a tooltip in its font view.
@@ -724,83 +866,134 @@ pub(crate) struct GlyphInputs {
     /// Metrics keys ("=n", "=|o", "=n+10"): linked sidebearings,
     /// synced across every master.
     pub(crate) lsb_key: gpui::Entity<widgets::input::InputState>,
+    /// The same, for the right sidebearing.
     pub(crate) rsb_key: gpui::Entity<widgets::input::InputState>,
     /// Export (production) name, written to public.postscriptNames
     /// in every master's lib; ufo2ft renames on compile.
     pub(crate) production: gpui::Entity<widgets::input::InputState>,
 }
 
+/// The editor's Width / LSB / RSB fields and the Selection
+/// section's coordinate fields.
 pub(crate) struct MetricInputs {
+    /// The advance width field.
     pub(crate) width: gpui::Entity<widgets::input::InputState>,
+    /// The left sidebearing field.
     pub(crate) lsb: gpui::Entity<widgets::input::InputState>,
+    /// The right sidebearing field.
     pub(crate) rsb: gpui::Entity<widgets::input::InputState>,
     /// Selection reference coordinates and size (Selection section).
     pub(crate) x: gpui::Entity<widgets::input::InputState>,
+    /// The reference point's y coordinate.
     pub(crate) y: gpui::Entity<widgets::input::InputState>,
+    /// The selection's width.
     pub(crate) w: gpui::Entity<widgets::input::InputState>,
+    /// The selection's height.
     pub(crate) h: gpui::Entity<widgets::input::InputState>,
 }
 
 /// Editable fields in the Font Info section (grid mode). Each commits
 /// on Enter and writes fontinfo.plist through the normal save path.
 pub(crate) struct FontInfoInputs {
+    /// The family name.
     pub(crate) family: gpui::Entity<widgets::input::InputState>,
+    /// The style name.
     pub(crate) style: gpui::Entity<widgets::input::InputState>,
+    /// Units per em.
     pub(crate) upm: gpui::Entity<widgets::input::InputState>,
+    /// The italic angle, in degrees.
     pub(crate) italic_angle: gpui::Entity<widgets::input::InputState>,
+    /// The ascender, in design units.
     pub(crate) ascender: gpui::Entity<widgets::input::InputState>,
+    /// The descender, in design units (negative below the baseline).
     pub(crate) descender: gpui::Entity<widgets::input::InputState>,
+    /// The x-height, in design units.
     pub(crate) x_height: gpui::Entity<widgets::input::InputState>,
+    /// The cap height, in design units.
     pub(crate) cap_height: gpui::Entity<widgets::input::InputState>,
     /// PostScript hinting data per master: alignment zones (blue
     /// values in pairs) and standard stems, comma-separated lists.
     pub(crate) blue_values: gpui::Entity<widgets::input::InputState>,
+    /// Descender-side alignment zones, in pairs.
     pub(crate) other_blues: gpui::Entity<widgets::input::InputState>,
+    /// Standard horizontal stem widths.
     pub(crate) stems_h: gpui::Entity<widgets::input::InputState>,
+    /// Standard vertical stem widths.
     pub(crate) stems_v: gpui::Entity<widgets::input::InputState>,
     /// The OS/2 and hhea vertical metrics (typo/hhea/win), the
     /// parameters the Google Fonts vertical-metrics checks read.
     pub(crate) typo_asc: gpui::Entity<widgets::input::InputState>,
+    /// OS/2 `sTypoDescender`.
     pub(crate) typo_desc: gpui::Entity<widgets::input::InputState>,
+    /// OS/2 `sTypoLineGap`.
     pub(crate) typo_gap: gpui::Entity<widgets::input::InputState>,
+    /// The `hhea` ascender.
     pub(crate) hhea_asc: gpui::Entity<widgets::input::InputState>,
+    /// The `hhea` descender.
     pub(crate) hhea_desc: gpui::Entity<widgets::input::InputState>,
+    /// The `hhea` line gap.
     pub(crate) hhea_gap: gpui::Entity<widgets::input::InputState>,
+    /// OS/2 `usWinAscent`.
     pub(crate) win_asc: gpui::Entity<widgets::input::InputState>,
+    /// OS/2 `usWinDescent`.
     pub(crate) win_desc: gpui::Entity<widgets::input::InputState>,
 }
 
 /// The Kerning section's inputs: a live filter over the pair list,
 /// and a first/second/value editor that commits on Enter.
 pub(crate) struct KernInputs {
+    /// Live filter over the pair list.
     pub(crate) filter: gpui::Entity<widgets::input::InputState>,
+    /// The pair's first glyph or group.
     pub(crate) first: gpui::Entity<widgets::input::InputState>,
+    /// The pair's second glyph or group.
     pub(crate) second: gpui::Entity<widgets::input::InputState>,
+    /// The pair's kerning value.
     pub(crate) value: gpui::Entity<widgets::input::InputState>,
 }
 
 /// Which Font Info field an input commits to.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum FontInfoField {
+    /// The family name.
     Family,
+    /// The style name.
     Style,
+    /// Units per em.
     Upm,
+    /// The italic angle.
     ItalicAngle,
+    /// The ascender.
     Ascender,
+    /// The descender.
     Descender,
+    /// The x-height.
     XHeight,
+    /// The cap height.
     CapHeight,
+    /// OS/2 `sTypoAscender`.
     TypoAscender,
+    /// OS/2 `sTypoDescender`.
     TypoDescender,
+    /// OS/2 `sTypoLineGap`.
     TypoLineGap,
+    /// The `hhea` ascender.
     HheaAscender,
+    /// The `hhea` descender.
     HheaDescender,
+    /// The `hhea` line gap.
     HheaLineGap,
+    /// OS/2 `usWinAscent`.
     WinAscent,
+    /// OS/2 `usWinDescent`.
     WinDescent,
+    /// PostScript blue values (alignment zones).
     BlueValues,
+    /// PostScript other blues.
     OtherBlues,
+    /// Standard horizontal stems.
     StemsH,
+    /// Standard vertical stems.
     StemsV,
 }
 
@@ -808,9 +1001,14 @@ pub(crate) enum FontInfoField {
 /// columns and whole rows are on screen.
 #[derive(Clone, Copy)]
 pub(crate) struct GridFit {
+    /// Cell width in pixels, stretched from the target to fill the
+    /// row.
     pub(crate) cell_w: f32,
+    /// Cell height in pixels.
     pub(crate) cell_h: f32,
+    /// Columns per row.
     pub(crate) cols: usize,
+    /// Whole rows on screen.
     pub(crate) rows: usize,
 }
 
@@ -821,6 +1019,7 @@ impl GridFit {
     }
 }
 
+/// Default target cell size for the glyph grid, in pixels.
 pub(crate) const CELL: f32 = 96.0;
 
 /// Target cell size for the editor sidebar's mini grid.
@@ -837,8 +1036,10 @@ pub(crate) const BAR_BUTTON: f32 = 20.0;
 /// Wheel zoom response and limits, matching the web editor.
 pub(crate) const ZOOM_PER_PIXEL: f64 = 0.0015;
 
+/// Smallest allowed zoom factor.
 pub(crate) const ZOOM_MIN: f64 = 1e-3;
 
+/// Largest allowed zoom factor.
 pub(crate) const ZOOM_MAX: f64 = 1e4;
 
 /// One press of the zoom keys.
@@ -851,14 +1052,18 @@ pub(crate) const TAB_H: f32 = 24.0;
 /// Gap between grid cells, and the grid's inner padding.
 pub(crate) const GRID_GAP: f32 = 8.0;
 
+/// The grid's horizontal inner padding, in pixels.
 pub(crate) const GRID_PAD: f32 = 12.0;
 
+/// The grid's vertical inner padding, in pixels.
 pub(crate) const GRID_PAD_Y: f32 = 8.0;
 
 /// The sidebar's mini grid is narrow: it spares less padding, but the
 /// fit is solved the same way.
 pub(crate) const GRID_PAD_SM: f32 = 6.0;
 
+/// Hit-test radius in screen pixels for segments, guides,
+/// metric edges, and components.
 pub(crate) const HIT_RADIUS_PX: f64 = 10.0;
 
 /// Points are easier to grab than segments: the web select tool gives

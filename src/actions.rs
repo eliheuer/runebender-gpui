@@ -86,6 +86,9 @@ use crate::TidyPaths;
 use crate::TraceImage;
 use crate::Undo;
 use crate::ZoomToFit;
+use crate::view::theme as t;
+use crate::workspace::MEASURE_MENU;
+
 /// The application menu, used three ways: the native macOS menu bar,
 /// the stored menu Windows/Linux expose to `get_menus`, and the
 /// in-window menu bar drawn on every platform that has no native bar,
@@ -94,8 +97,7 @@ use crate::ZoomToFit;
 /// gained a theme that nothing here can reach: a fallback arm would
 /// silently hand it Dark's action and the menu item would do the wrong
 /// thing, so callers are made to notice instead.
-use crate::view::theme as t;
-use crate::workspace::MEASURE_MENU;
+/// The action that switches to the theme named `id`. `None` for a name no arm handles, so a new theme cannot silently land on the wrong action.
 pub(crate) fn theme_action(id: &str) -> Option<Box<dyn gpui::Action>> {
     Some(match id {
         "dark" => Box::new(SetThemeDark),
@@ -160,6 +162,7 @@ pub(crate) fn measure_menu_items() -> Vec<gpui::MenuItem> {
     ]
 }
 
+/// The whole application menu, one `Menu` per top-level title, with the current option states checked.
 pub(crate) fn app_menus() -> Vec<gpui::Menu> {
     use gpui::{Menu, MenuItem};
     vec![

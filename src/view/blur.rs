@@ -143,6 +143,8 @@ fn box_pass(
     data.copy_from_slice(scratch);
 }
 
+/// Converts a gpui `Rgba` to a `tiny_skia` colour; black for
+/// out-of-range channels.
 fn color(c: Rgba) -> tiny_skia::Color {
     tiny_skia::Color::from_rgba(c.r, c.g, c.b, c.a).unwrap_or(tiny_skia::Color::BLACK)
 }

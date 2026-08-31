@@ -74,6 +74,7 @@ impl Workspace {
         None
     }
 
+    /// Set one metric to a typed value, on every selected glyph when the grid has a multi-selection.
     pub(crate) fn apply_metric(&mut self, which: MetricField, value: f64) {
         // A grid multi-selection batch-edits: the typed value lands
         // on every selected glyph, the Glyphs list-edit behavior.
@@ -1027,6 +1028,7 @@ impl Workspace {
         )
     }
 
+    /// Push the current glyph's metrics into the input fields. Skipped while another element has focus, unless `force`.
     pub(crate) fn refresh_metric_inputs(
         &mut self,
         force: bool,

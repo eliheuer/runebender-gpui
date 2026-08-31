@@ -320,6 +320,7 @@ impl Workspace {
         })
     }
 
+    /// Whether a glyph passes the sidebar search: predicate terms when the query parses as them, text search otherwise. An empty query matches everything.
     pub(crate) fn search_matches(&self, name: &str, codepoint: Option<char>) -> bool {
         let query = self.sidebar.search_query.trim();
         if query.is_empty() {

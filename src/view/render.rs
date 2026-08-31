@@ -85,8 +85,6 @@ use crate::ZoomToFit;
 use crate::launch::ui_font_family;
 use crate::view::grid::glyph_column_span;
 use crate::view::grid::pack_spans;
-/// The label a sidebar tab shows on hover, now that the tabs are
-/// icons. Placeholder icons for the two that have none of their own.
 use crate::view::theme as t;
 use crate::widgets;
 use crate::workspace::FontViewMode;
@@ -107,7 +105,12 @@ use gpui::prelude::FluentBuilder;
 use gpui::px;
 use kurbo::Affine;
 use runebender_core::outline::glyph_ops::CurveOp;
+
+/// The label a sidebar tab shows on hover, now that the tabs are
+/// icons. Placeholder icons for the two that have none of their own.
+/// The hover tooltip on a sidebar tab icon.
 pub(crate) struct TabTooltip {
+    /// The tab's full name.
     pub(crate) label: &'static str,
 }
 

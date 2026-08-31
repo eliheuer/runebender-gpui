@@ -773,6 +773,7 @@ impl Workspace {
         }
     }
 
+    /// End any pen or hyper-pen stroke, dropping a contour too degenerate to keep.
     pub(crate) fn pen_finish(&mut self) {
         self.hyper_pen_finish();
         let Mode::Editor(index) = self.mode else {
@@ -840,6 +841,8 @@ impl Workspace {
         bounds.map(|b| (count, b))
     }
 
+    /// The bounding box of the selection: the selected points, else the
+    /// selected component or anchor. `None` when nothing is selected.
     pub(crate) fn selection_bounds(&self) -> Option<kurbo::Rect> {
         let Mode::Editor(index) = self.mode else {
             return None;
@@ -1006,6 +1009,7 @@ impl Workspace {
         });
     }
 
+    /// Put an image file into the UFO images store and set it as the glyph's background.
     pub(crate) fn apply_place_image(
         &mut self,
         index: usize,
@@ -1063,6 +1067,7 @@ impl Workspace {
         self.status_note = Some(format!("Placed {file_name} · {img_w:.0}×{img_h:.0}px").into());
     }
 
+    /// The smart-axis input field's state entity.
     pub(crate) fn glyph_smart_axis_ref(&self) -> gpui::Entity<widgets::input::InputState> {
         self.inputs.smart_axis.clone()
     }
@@ -1104,6 +1109,7 @@ impl Workspace {
         decoded
     }
 
+    /// Trace an image into contours for the glyph at `index`, under one undo step.
     pub(crate) fn apply_image_trace(&mut self, index: usize, bytes: &[u8]) {
         let Some(font) = self.font() else { return };
         let (ascender, descender) = (font.ascender, font.descender);
@@ -1166,6 +1172,7 @@ impl Workspace {
         }
     }
 
+    /// Apply a curve operation to the selected points, under one undo step.
     pub(crate) fn apply_curve_op(&mut self, op: CurveOp) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -1258,6 +1265,7 @@ impl Workspace {
         changed
     }
 
+    /// Pan the editor view by a scroll wheel or trackpad delta.
     pub(crate) fn editor_scroll(&mut self, event: &gpui::ScrollWheelEvent) {
         self.ensure_editor_fit();
         let delta = match event.delta {

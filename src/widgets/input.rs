@@ -19,14 +19,18 @@ use parley::{FontContext, LayoutContext, PlainEditor};
 /// value is committed.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InputEvent {
+    /// The text changed under user editing.
     Change,
+    /// Enter was pressed in a single-line field.
     PressEnter,
 }
 
 /// Shared parley contexts. Building a `FontContext` scans the system
 /// font list, so every field borrows one rather than owning it.
 pub struct TextContexts {
+    /// The system font list parley shapes against.
     pub font: FontContext,
+    /// Parley's reusable layout scratch space.
     pub layout: LayoutContext<[u8; 4]>,
 }
 
@@ -49,6 +53,7 @@ struct FieldFocus(Vec<FocusHandle>);
 
 impl gpui::Global for FieldFocus {}
 
+/// Add a field's focus handle to the list `any_field_focused` checks.
 fn register_field(cx: &mut App, handle: &FocusHandle) {
     cx.default_global::<FieldFocus>().0.push(handle.clone());
 }
@@ -65,6 +70,7 @@ pub fn any_field_focused(window: &Window, cx: &App) -> bool {
 /// The contexts, in a global so the whole window shares one font list.
 pub struct GlobalTextContexts(pub Arc<std::sync::Mutex<TextContexts>>);
 
+/// The window's shared contexts, created on first use.
 pub fn text_contexts(cx: &mut App) -> Arc<std::sync::Mutex<TextContexts>> {
     if !cx.has_global::<GlobalTextContexts>() {
         let contexts = Arc::new(std::sync::Mutex::new(TextContexts::default()));
@@ -75,10 +81,15 @@ pub fn text_contexts(cx: &mut App) -> Arc<std::sync::Mutex<TextContexts>> {
 
 /// One text field.
 pub struct InputState {
+    /// The parley editor: text, cursor, selection, IME.
     editor: PlainEditor<[u8; 4]>,
+    /// The shared font and layout contexts.
     contexts: Arc<std::sync::Mutex<TextContexts>>,
+    /// This field's focus handle, registered so the app can tell a field has the keyboard.
     focus_handle: FocusHandle,
+    /// Text shown dimmed while the field is empty.
     placeholder: SharedString,
+    /// Whether Enter inserts a line break rather than committing.
     multi_line: bool,
     /// The value as a string, kept beside the editor so `value()` can
     /// hand out a `&str` without borrowing the editor mutably.
@@ -95,6 +106,7 @@ pub struct InputState {
 pub const FONT_SIZE: f32 = 13.0;
 
 impl InputState {
+    /// An empty single-line field.
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let contexts = text_contexts(cx);
         let focus_handle = cx.focus_handle();
@@ -114,6 +126,7 @@ impl InputState {
         }
     }
 
+    /// Set the text shown while the field is empty.
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
         self
@@ -125,6 +138,7 @@ impl InputState {
         self
     }
 
+    /// The current text.
     pub fn value(&self) -> &str {
         &self.text
     }
@@ -306,6 +320,7 @@ impl InputState {
         cx.notify();
     }
 
+    /// A window position as coordinates relative to where the text painted.
     fn to_text_space(&self, position: gpui::Point<gpui::Pixels>) -> (f32, f32) {
         (
             f32::from(position.x - self.origin.x),
@@ -477,6 +492,7 @@ impl InputState {
         cx.notify();
     }
 
+    /// The shared contexts, for callers that shape text themselves.
     pub fn contexts(&self) -> Arc<std::sync::Mutex<TextContexts>> {
         self.contexts.clone()
     }
@@ -498,6 +514,7 @@ impl Focusable for InputState {
 /// editor already paints with.
 #[derive(Default)]
 struct OutlineToPath {
+    /// The path collected so far.
     path: kurbo::BezPath,
 }
 
@@ -645,12 +662,16 @@ use crate::view::theme as t;
 /// A text field.
 #[derive(gpui::IntoElement)]
 pub struct Input {
+    /// The field this element draws.
     state: gpui::Entity<InputState>,
+    /// Whether the field fills the height it is given.
     full_height: bool,
+    /// Whether the field draws at the shorter height.
     small: bool,
 }
 
 impl Input {
+    /// An element drawing `state` at the standard height.
     pub fn new(state: &gpui::Entity<InputState>) -> Self {
         Self {
             state: state.clone(),
@@ -674,6 +695,7 @@ impl Input {
 
 /// Inset of the text from the field's border.
 const PAD_X: f32 = 6.0;
+/// Inset of the text from the field's top and bottom edges.
 const PAD_Y: f32 = 4.0;
 /// How tall a single-line field is.
 const LINE_HEIGHT: f32 = 20.0;

@@ -10,8 +10,6 @@
 
 use crate::Mode;
 use crate::Workspace;
-/// The nearest master-pair point to the pointer: distance, point id,
-/// and its position in each master.
 use crate::widgets;
 use crate::workspace::Drag;
 use crate::workspace::HIT_RADIUS_PX;
@@ -26,9 +24,14 @@ use gpui::Point;
 use gpui::Window;
 use kurbo::Affine;
 use runebender_core::formats::lib_keys::read_hoi_intermediates;
+
+/// The nearest master-pair point to the pointer: distance, point id,
+/// and its position in each master.
+/// A trajectory-knob hit: distance to the cursor, the point's (contour, index), and the point's position in each end master.
 type NearestPair = (f64, (usize, usize), (f64, f64), (f64, f64));
 
 impl Workspace {
+    /// Route a mouse press in the editor canvas to the active tool, starting a drag or changing the selection.
     pub(crate) fn editor_mouse_down(
         &mut self,
         pos: Point<gpui::Pixels>,
@@ -524,6 +527,7 @@ impl Workspace {
         }
     }
 
+    /// Advance the drag in progress. Returns whether anything moved and needs a repaint.
     pub(crate) fn editor_mouse_drag(
         &mut self,
         pos: Point<gpui::Pixels>,
@@ -863,6 +867,7 @@ impl Workspace {
         }
     }
 
+    /// End the drag in progress, committing what it changed.
     pub(crate) fn editor_mouse_up(&mut self) {
         if let Some(Drag::HoiKnob { id, .. }) = self.editor.drag.as_ref() {
             let id = *id;
@@ -1238,6 +1243,7 @@ impl Workspace {
         true
     }
 
+    /// Route a keystroke that reached the window. Returns whether it was used; a focused text field takes it first.
     pub(crate) fn handle_key(
         &mut self,
         event: &gpui::KeyDownEvent,

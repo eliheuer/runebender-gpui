@@ -529,6 +529,7 @@ impl Workspace {
         }
     }
 
+    /// Combine the glyph's contours with a boolean operation, under one undo step. A no-op pops the snapshot.
     pub(crate) fn command_boolean(&mut self, op: linesweeper::BinaryOp) {
         let Mode::Editor(index) = self.mode else {
             return;

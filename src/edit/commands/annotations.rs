@@ -34,6 +34,7 @@ impl Workspace {
         }
     }
 
+    /// Remove the annotation at position `i` from the open glyph and rewrite the stored list.
     pub(crate) fn command_delete_annotation(&mut self, i: usize) {
         let Some(index) = self.current_glyph_index() else {
             return;

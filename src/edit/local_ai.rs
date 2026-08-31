@@ -57,6 +57,7 @@ impl Workspace {
         found
     }
 
+    /// Load the outline model from a checkpoint directory into `models`, reporting failure in the status bar.
     pub(crate) fn load_model(&mut self, dir: &std::path::Path) {
         let checkpoint = match font_ml::Checkpoint::open(dir) {
             Ok(c) => c,
@@ -122,6 +123,7 @@ impl Workspace {
         font_ml::stems::reference_delta(&pairs, height).map(|d| (d, height))
     }
 
+    /// Bolden the glyph at `index` with the model from `dir`, loading it first if needed, under one undo step.
     pub(crate) fn apply_bolden(&mut self, index: usize, dir: &std::path::Path) {
         let checkpoint = match font_ml::Checkpoint::open(dir) {
             Ok(c) => c,

@@ -5,8 +5,6 @@
 //! kurbo paths into gpui paths, icons drawn from paths, batched fills,
 //! and the blur cache key.
 
-/// Convert a kurbo path (font units, Y-up) into a gpui path mapped
-/// into `bounds` (pixels, Y-down) with the given design→local affine.
 use crate::view::theme as t;
 use crate::widgets;
 use gpui::Bounds;
@@ -22,6 +20,11 @@ use gpui::px;
 use kurbo::Affine;
 use kurbo::BezPath;
 use kurbo::PathEl;
+
+/// Convert a kurbo path (font units, Y-up) into a gpui path mapped
+/// into `bounds` (pixels, Y-down) with the given design→local affine.
+/// Builds a gpui path from `outline` through `transform`, offset by
+/// `origin`. Returns `None` for an empty outline or a failed build.
 pub(crate) fn build_path(
     outline: &BezPath,
     transform: Affine,
@@ -97,6 +100,7 @@ pub(crate) fn seg_key(seg: kurbo::PathSeg) -> [u64; 8] {
     }
 }
 
+/// `build_path` with a fill builder.
 pub(crate) fn build_fill_path(
     outline: &BezPath,
     transform: Affine,
@@ -269,9 +273,13 @@ pub(crate) fn glyph_free_icon(color: gpui::Rgba, kind: IconMark) -> impl IntoEle
 }
 
 #[derive(Clone, Copy)]
+/// The mark `glyph_free_icon` strokes.
 pub(crate) enum IconMark {
+    /// A plus sign.
     Plus,
+    /// A horizontal minus stroke.
     Minus,
+    /// A diagonal cross.
     Cross,
 }
 

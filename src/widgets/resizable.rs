@@ -20,9 +20,11 @@ use crate::view::theme as t;
 
 /// How thick the divider is, and how much of it answers to the mouse.
 const DIVIDER: f32 = 1.0;
+/// The width of the invisible strip over the divider that catches the mouse.
 const GRIP: f32 = 6.0;
 
 #[derive(Default)]
+/// Every group's sizes and painted bounds, held as a global.
 struct ResizableState {
     /// Panel sizes, per group id, indexed by panel position.
     sizes: HashMap<SharedString, Vec<Option<Pixels>>>,
@@ -32,6 +34,7 @@ struct ResizableState {
 
 impl Global for ResizableState {}
 
+/// The size stored for one panel, if a drag or builder has set one.
 fn stored_size(cx: &App, group: &SharedString, index: usize) -> Option<Pixels> {
     cx.try_global::<ResizableState>()?
         .sizes
@@ -41,6 +44,7 @@ fn stored_size(cx: &App, group: &SharedString, index: usize) -> Option<Pixels> {
         .flatten()
 }
 
+/// Record a panel's size, growing the group's list to reach it.
 fn store_size(cx: &mut App, group: &SharedString, index: usize, size: Pixels) {
     let state = cx.default_global::<ResizableState>();
     let sizes = state.sizes.entry(group.clone()).or_default();
@@ -50,12 +54,14 @@ fn store_size(cx: &mut App, group: &SharedString, index: usize, size: Pixels) {
     sizes[index] = Some(size);
 }
 
+/// Record where a panel painted.
 fn store_bounds(cx: &mut App, group: &SharedString, index: usize, bounds: Bounds<Pixels>) {
     cx.default_global::<ResizableState>()
         .bounds
         .insert((group.clone(), index), bounds);
 }
 
+/// Where a panel last painted, if it has.
 fn panel_bounds(cx: &App, group: &SharedString, index: usize) -> Option<Bounds<Pixels>> {
     cx.try_global::<ResizableState>()?
         .bounds
@@ -65,12 +71,17 @@ fn panel_bounds(cx: &App, group: &SharedString, index: usize) -> Option<Bounds<P
 
 /// One panel in a group.
 pub struct ResizablePanel {
+    /// The panel's size. `None` means take the space the sized panels leave.
     size: Option<Pixels>,
+    /// The limits a drag clamps to, when set.
     range: Option<Range<Pixels>>,
+    /// Whether the panel takes space and grows a divider.
     visible: bool,
+    /// The panel's content.
     child: Option<AnyElement>,
 }
 
+/// An empty, visible panel with no size of its own.
 pub fn resizable_panel() -> ResizablePanel {
     ResizablePanel {
         size: None,
@@ -100,6 +111,7 @@ impl ResizablePanel {
         self
     }
 
+    /// Set the panel's content.
     pub fn child(mut self, child: impl IntoElement) -> Self {
         self.child = Some(child.into_any_element());
         self
@@ -109,8 +121,11 @@ impl ResizablePanel {
 /// A row or column of panels.
 #[derive(gpui::IntoElement)]
 pub struct ResizableGroup {
+    /// Keys the group's stored sizes and bounds.
     id: SharedString,
+    /// Whether the panels run in a row or a column.
     axis: Axis,
+    /// The panels, in order.
     panels: Vec<ResizablePanel>,
 }
 
@@ -133,11 +148,13 @@ pub fn v_resizable(id: impl Into<SharedString>) -> ResizableGroup {
 }
 
 impl ResizableGroup {
+    /// Append a panel to the group.
     pub fn child(mut self, panel: ResizablePanel) -> Self {
         self.panels.push(panel);
         self
     }
 
+    /// Assemble the panels and their dividers into one flex element.
     fn build(self, cx: &mut App) -> AnyElement {
         let horizontal = matches!(self.axis, Axis::Horizontal);
         let group = self.id.clone();
@@ -325,6 +342,7 @@ impl gpui::RenderOnce for ResizableGroup {
 }
 
 #[derive(Clone)]
+/// The drag payload: the divider's slot, so drag moves only reach their own divider.
 struct DragDivider(usize);
 
 impl gpui::Render for DragDivider {

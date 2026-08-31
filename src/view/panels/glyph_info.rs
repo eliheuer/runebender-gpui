@@ -510,6 +510,8 @@ impl Workspace {
         div().flex_1().min_h(px(200.0)).p_1().child(body)
     }
 
+    /// The row of mark colour swatches: clicking one sets the selected
+    /// glyph's mark, and the last swatch clears it.
     pub(crate) fn mark_colors_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
         let current = self
             .selected

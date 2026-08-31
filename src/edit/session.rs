@@ -14,10 +14,12 @@ use crate::workspace::EditorState;
 use crate::workspace::Tool;
 use runebender_core::document::project::Master;
 impl Workspace {
+    /// The active master, if a project is open.
     pub(crate) fn font(&self) -> Option<&Master> {
         self.project.as_ref().map(|p| p.active_font())
     }
 
+    /// The active master, mutably, if a project is open.
     pub(crate) fn font_mut(&mut self) -> Option<&mut Master> {
         self.project.as_mut().map(|p| p.active_font_mut())
     }
@@ -153,6 +155,7 @@ impl Workspace {
         }
     }
 
+    /// Open the glyph at `index` in the editor, resetting tool, selection, and undo history.
     pub(crate) fn open_editor(&mut self, index: usize) {
         // Opening from the grid lands in the active tab; the first
         // open creates it.
@@ -195,6 +198,7 @@ impl Workspace {
         }
     }
 
+    /// Fit the editor view to the open glyph's metrics, once per open.
     pub(crate) fn ensure_editor_fit(&mut self) {
         if self.editor.initialized {
             return;
@@ -244,6 +248,7 @@ impl Workspace {
         });
     }
 
+    /// Snapshot the glyph's contours onto the undo stack and clear redo.
     pub(crate) fn push_undo_snapshot(&mut self, index: usize) {
         // Any other edit ends a nudge burst, so the next arrow press
         // opens a fresh undo group.
@@ -265,6 +270,7 @@ impl Workspace {
         self.nudging = true;
     }
 
+    /// Restore the last undo snapshot, pushing the current state onto redo.
     pub(crate) fn undo(&mut self) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -281,6 +287,7 @@ impl Workspace {
         }
     }
 
+    /// Restore the last redo snapshot, pushing the current state onto undo.
     pub(crate) fn redo(&mut self) {
         let Mode::Editor(index) = self.mode else {
             return;

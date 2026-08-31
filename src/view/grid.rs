@@ -63,6 +63,9 @@ impl Workspace {
         changed
     }
 
+    /// The shared solve behind both grids: columns from the `target`
+    /// size, then width and height divided evenly. Falls back to one
+    /// target-size cell before the viewport reports a size.
     pub(crate) fn solve_grid(viewport: gpui::Size<gpui::Pixels>, target: f32, pad: f32) -> GridFit {
         let label_h = |w: f32| cell_label_metrics(w).height;
         let target = target.max(24.0);
@@ -236,10 +239,15 @@ impl Workspace {
 /// occupies inside the grid's viewport.
 #[derive(Clone, Copy)]
 pub(crate) struct PlacedCell {
+    /// The glyph's index in the font's glyph list.
     pub(crate) glyph: usize,
+    /// The cell's left edge, in viewport-local pixels.
     pub(crate) x: f32,
+    /// The cell's top edge, in viewport-local pixels.
     pub(crate) y: f32,
+    /// The cell's width in pixels, spans included.
     pub(crate) w: f32,
+    /// The cell's height in pixels, label block included.
     pub(crate) h: f32,
 }
 
@@ -365,11 +373,17 @@ pub(crate) fn cell_label_metrics(cell_w: f32) -> CellLabels {
 /// this is unchanged, the order is too.
 #[derive(Clone, PartialEq)]
 pub(crate) struct OrderKey {
+    /// The search box text.
     pub(crate) query: String,
+    /// The search scope: 0 is all, 1 is name, 2 is unicode.
     pub(crate) mode: u8,
+    /// Whether the query is treated as a regex.
     pub(crate) regex: bool,
+    /// Whether the search is case-sensitive.
     pub(crate) case: bool,
+    /// True for unicode order, false for name order.
     pub(crate) sort_unicode: bool,
+    /// The sidebar's category filter.
     pub(crate) filter: SidebarFilter,
     /// Structural changes to the font (a glyph added, removed or
     /// renamed) bump this.
@@ -381,9 +395,13 @@ pub(crate) struct OrderKey {
 /// The label block's type size, line height and total height.
 #[derive(Clone, Copy)]
 pub(crate) struct CellLabels {
+    /// Whether the cell shows labels at all.
     pub(crate) show: bool,
+    /// The label type size, in pixels.
     pub(crate) size: f32,
+    /// The stated line height, in pixels.
     pub(crate) line: f32,
+    /// The whole block's height, padding included, in pixels.
     pub(crate) height: f32,
 }
 

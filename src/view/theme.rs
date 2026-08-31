@@ -32,6 +32,7 @@ static CURRENT: RwLock<Option<(&'static str, &'static Theme)>> = RwLock::new(Non
 /// `current_theme()` cannot disagree about what "no choice yet" means.
 pub const DEFAULT_THEME: &str = "gray";
 
+/// The resolved live theme, loading `DEFAULT_THEME` on the first call.
 fn theme() -> &'static Theme {
     if let Some((_, theme)) = *CURRENT.read().expect("theme lock") {
         return theme;
@@ -67,6 +68,8 @@ pub fn current_theme() -> &'static str {
         .unwrap_or(DEFAULT_THEME)
 }
 
+/// Converts a core `ColorRgba` with 0..=255 channels to a gpui `Rgba`
+/// with 0.0..=1.0 channels.
 fn c(color: ColorRgba) -> Rgba {
     Rgba {
         r: color.r as f32 / 255.0,
@@ -136,6 +139,7 @@ pub fn stroke_emphasis() -> gpui::Pixels {
     gpui::px(theme().geometry.stroke_emphasis)
 }
 
+/// Converts `color` like `c`, then replaces the alpha with `a`.
 fn with_alpha(color: ColorRgba, a: f32) -> Rgba {
     let mut rgba = c(color);
     rgba.a = a;
@@ -144,21 +148,27 @@ fn with_alpha(color: ColorRgba, a: f32) -> Rgba {
 
 // ---- surfaces ----
 
+/// The window ground, behind every panel.
 pub fn window_bg() -> Rgba {
     c(theme().surface("app"))
 }
+/// The fill of panels and bars.
 pub fn panel_bg() -> Rgba {
     c(theme().surface("panel"))
 }
+/// The rule around a panel.
 pub fn panel_outline() -> Rgba {
     c(theme().surface("outline"))
 }
+/// The fill of an unselected grid cell; the panel fill.
 pub fn cell_bg() -> Rgba {
     panel_bg()
 }
+/// The rule around a grid cell.
 pub fn cell_border() -> Rgba {
     c(theme().surface("outline"))
 }
+/// The fill of a selected grid cell.
 pub fn cell_selected_bg() -> Rgba {
     // Half way between the cell's own ground and the hover surface:
     // enough to read as picked, not so much that the cell jumps out of
@@ -179,12 +189,15 @@ pub fn cell_selected_ring() -> Rgba {
 
 // ---- accents and text ----
 
+/// The accent hue, used for selection and emphasis.
 pub fn accent() -> Rgba {
     c(theme().role("accent"))
 }
+/// The primary text ink.
 pub fn text() -> Rgba {
     c(theme().text("primary"))
 }
+/// The secondary, quieter text ink.
 pub fn text_muted() -> Rgba {
     c(theme().text("secondary"))
 }
@@ -194,30 +207,39 @@ pub fn accent_soft() -> Rgba {
     let a = accent();
     Rgba { a: 0.28, ..a }
 }
+/// The warning hue, used for status text and the preview glyph.
 pub fn status_yellow() -> Rgba {
     c(theme().role("warning"))
 }
 
 // ---- glyph rendering ----
 
+/// The fill of glyph outlines in cells and previews.
 pub fn glyph_fill() -> Rgba {
     c(theme().text("glyph"))
 }
+/// The stroke of a glyph path in the editing view.
 pub fn path_stroke() -> Rgba {
     c(theme().role("pathStroke"))
 }
+/// Metric lines such as baseline and x-height; the accent hue.
 pub fn metrics_line() -> Rgba {
     accent()
 }
+/// The preview-mode glyph fill; the status yellow.
 pub fn preview_glyph() -> Rgba {
     status_yellow()
 }
+/// The translucent fill of a component.
 pub fn component_fill() -> Rgba {
     with_alpha(theme().role("component"), 0.35)
 }
+/// The translucent fill of a selected component.
 pub fn component_selected_fill() -> Rgba {
     with_alpha(theme().role("componentSelected"), 0.45)
 }
+/// The interpolated-instance ghost outline; the component hue at full
+/// alpha.
 pub fn ghost() -> Rgba {
     c(theme().role("component"))
 }
@@ -228,6 +250,7 @@ pub fn design_grid_fine(alpha: f32) -> Rgba {
     rgba.a *= alpha;
     rgba
 }
+/// The coarse design grid line, faded by `alpha` like the fine one.
 pub fn design_grid_coarse(alpha: f32) -> Rgba {
     let mut rgba = c(runebender_core::ui::theme::design_grid::COARSE);
     rgba.a *= alpha;
@@ -245,33 +268,42 @@ pub fn point_readonly() -> Rgba {
 
 // ---- points (dark inner, colored ring — the web style) ----
 
+/// The dark inner fill every point marker shares.
 pub fn point_inner() -> Rgba {
     c(theme().role("pointInner"))
 }
+/// The ring on a smooth on-curve point.
 pub fn point_smooth_outer() -> Rgba {
     c(theme().role("pointSmooth"))
 }
+/// The ring on a corner on-curve point.
 pub fn point_corner_outer() -> Rgba {
     c(theme().role("pointCorner"))
 }
+/// The ring on a hyperbezier point.
 pub fn point_hyper_outer() -> Rgba {
     c(theme().role("pointHyper"))
 }
+/// The ring on an off-curve control point.
 pub fn point_offcurve_outer() -> Rgba {
     c(theme().role("pointOffcurve"))
 }
+/// The fill of a selected point marker.
 pub fn point_selected() -> Rgba {
     c(theme().role("pointSelected"))
 }
+/// The line from an on-curve point to its off-curve handle.
 pub fn handle_line() -> Rgba {
     c(theme().text("secondary"))
 }
 
 // ---- selection marquee ----
 
+/// The translucent interior of the drag-selection marquee.
 pub fn marquee_fill() -> Rgba {
     with_alpha(theme().role("selection"), 0.125)
 }
+/// The outline of the drag-selection marquee.
 pub fn marquee_stroke() -> Rgba {
     c(theme().role("selection"))
 }
@@ -386,6 +418,8 @@ pub fn comb_gradient(t: f64) -> Rgba {
     }
 }
 
+/// Continuity badge for a curvature-continuous (G2 or better) joint:
+/// green.
 pub fn continuity_g2() -> Rgba {
     Rgba {
         r: 0.30,
@@ -394,6 +428,7 @@ pub fn continuity_g2() -> Rgba {
         a: 1.0,
     }
 }
+/// Continuity badge for a tangent-only (G1) joint: yellow.
 pub fn continuity_g1() -> Rgba {
     Rgba {
         r: 0.95,
@@ -402,6 +437,7 @@ pub fn continuity_g1() -> Rgba {
         a: 1.0,
     }
 }
+/// Continuity badge where a curve meets a straight line: neutral grey.
 pub fn continuity_line() -> Rgba {
     Rgba {
         r: 0.55,
@@ -410,6 +446,7 @@ pub fn continuity_line() -> Rgba {
         a: 1.0,
     }
 }
+/// Continuity badge for a kink: red.
 pub fn continuity_kink() -> Rgba {
     Rgba {
         r: 0.95,

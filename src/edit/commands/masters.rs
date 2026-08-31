@@ -560,6 +560,7 @@ impl Workspace {
         self.status_note = Some(format!("Axis map: {input:.0} → {output:.0}").into());
     }
 
+    /// Remove the mapping at `index` from the first axis's map, dropping the map entirely when it empties.
     pub(crate) fn command_remove_axis_mapping(&mut self, index: usize) {
         let Some(project) = self.project.as_mut() else {
             return;

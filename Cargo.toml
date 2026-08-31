@@ -18,6 +18,12 @@ strip = "debuginfo"
 [lints.rust]
 unsafe_code = "deny"
 
+[lints.clippy]
+# Every item gets a doc comment, pub(crate) and private included.
+# missing_docs cannot see them in a binary crate, so clippy holds
+# the line instead; CI denies warnings.
+missing_docs_in_private_items = "warn"
+
 [dependencies]
 regex = "1"
 chrono = "0.4"

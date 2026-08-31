@@ -5,6 +5,7 @@ use gpui::{
     Window, WindowBounds, WindowOptions, div, px, rgb, size,
 };
 
+/// The window's only view: a dark panel with one line of text.
 struct Probe;
 
 impl Render for Probe {

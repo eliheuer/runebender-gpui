@@ -20,6 +20,8 @@ use gpui::px;
 use kurbo::Affine;
 use kurbo::BezPath;
 impl Workspace {
+    /// The strip along the editor's bottom that renders the text
+    /// buffer's line as filled outlines, blurred when asked.
     pub(crate) fn preview_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let Some(font) = self.font() else {
             return div().into_any_element();

@@ -36,6 +36,7 @@ use gpui::div;
 use gpui::prelude::FluentBuilder;
 use gpui::px;
 impl Workspace {
+    /// The header bar: the file name and its save status.
     pub(crate) fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (title, status): (SharedString, SharedString) = match (self.font(), &self.load_error) {
             (Some(font), _) => (
@@ -346,6 +347,8 @@ impl Workspace {
         self.models.strength_slider = Some(slider);
     }
 
+    /// Creates the editor sidebar's mini-grid zoom slider once,
+    /// 24 to 120 pixels in steps of 2.
     pub(crate) fn ensure_sidebar_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sidebar.slider.is_some() {
             return;
@@ -369,6 +372,8 @@ impl Workspace {
         self.sidebar.slider = Some(slider);
     }
 
+    /// Creates the grid's cell zoom slider once, 48 to 200 pixels in
+    /// steps of 4.
     pub(crate) fn ensure_cell_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.grid.cell_slider.is_some() {
             return;
@@ -391,6 +396,8 @@ impl Workspace {
         self.grid.cell_slider = Some(slider);
     }
 
+    /// The bar along the bottom: glyph add/remove, the selection count
+    /// and cell zoom in grid mode; live readouts in the editor.
     pub(crate) fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         // Grid mode gets the Glyphs bottom bar: add/remove glyph on
         // the left, the selection count centered, cell zoom on the

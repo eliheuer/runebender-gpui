@@ -22,6 +22,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::px;
 use runebender_core::formats::lib_keys::read_saved_filters;
 impl Workspace {
+    /// The category sidebar: expandable category rows with glyph
+    /// counts, plus the saved filters.
     pub(crate) fn category_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         use runebender_core::ui::sidebar as sb;
         let counts = self.sidebar.counts.as_ref();

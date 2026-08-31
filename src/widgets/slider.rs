@@ -18,14 +18,19 @@ use gpui::{
 
 /// Emitted while the value is being changed by the user.
 pub enum SliderEvent {
+    /// The new value, already snapped and clamped.
     Change(f32),
 }
 
 /// A value between `min` and `max`, snapped to `step`.
 pub struct SliderState {
+    /// The low end of the range.
     min: f32,
+    /// The high end of the range.
     max: f32,
+    /// The increment a drag snaps to. Always positive.
     step: f32,
+    /// The current value, kept inside the range.
     value: f32,
     /// The track's bounds, recorded when it paints. A drag has to turn
     /// a window position into a value, which needs them.
@@ -33,6 +38,7 @@ pub struct SliderState {
 }
 
 impl SliderState {
+    /// A state spanning 0 to 100, stepping by 1, starting at 0.
     pub fn new() -> Self {
         Self {
             min: 0.0,
@@ -43,23 +49,27 @@ impl SliderState {
         }
     }
 
+    /// Set the low end of the range and clamp the value into it.
     pub fn min(mut self, min: f32) -> Self {
         self.min = min;
         self.clamp_value();
         self
     }
 
+    /// Set the high end of the range and clamp the value into it.
     pub fn max(mut self, max: f32) -> Self {
         self.max = max;
         self.clamp_value();
         self
     }
 
+    /// Set the snap increment. Zero or less falls back to 1.
     pub fn step(mut self, step: f32) -> Self {
         self.step = if step > 0.0 { step } else { 1.0 };
         self
     }
 
+    /// Set the starting value, clamped into the range.
     pub fn default_value(mut self, value: f32) -> Self {
         self.value = value;
         self.clamp_value();
@@ -83,6 +93,7 @@ impl SliderState {
         cx.notify();
     }
 
+    /// Clamp the value into the range, whichever way round `min` and `max` are.
     fn clamp_value(&mut self) {
         let (lo, hi) = if self.min <= self.max {
             (self.min, self.max)
@@ -92,6 +103,7 @@ impl SliderState {
         self.value = self.value.clamp(lo, hi);
     }
 
+    /// Record where the track painted, for `drag_to` to measure against.
     fn set_bounds(&mut self, bounds: Bounds<Pixels>) {
         self.bounds = bounds;
     }

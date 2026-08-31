@@ -13,8 +13,6 @@ use crate::Mode;
 use crate::Workspace;
 use crate::view::grid::cell_label_metrics;
 use crate::view::paint::build_fill_path;
-/// The glyph editing canvas: the scene it gathers and the layers it
-/// paints.
 use crate::view::theme as t;
 use crate::workspace::FontViewMode;
 use gpui::Bounds;
@@ -30,9 +28,15 @@ use gpui::div;
 use gpui::prelude::FluentBuilder;
 use gpui::px;
 use kurbo::Affine;
+
+/// The glyph editing canvas: the scene it gathers and the layers it
+/// paints.
 mod editor;
 
 impl Workspace {
+    /// Builds one grid cell for the glyph at `index`, `cell` by `cell_h`
+    /// pixels. `jump_on_click` (the editor sidebar) opens the glyph on a
+    /// single click instead of selecting it.
     pub(crate) fn glyph_cell_sized(
         &self,
         index: usize,
