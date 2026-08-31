@@ -18,6 +18,7 @@ use crate::platform::web_host;
 use gpui::Context;
 use runebender_core::document::project::Master;
 use runebender_core::document::project::Project;
+#[cfg(target_family = "wasm")]
 use std::collections::HashMap;
 impl Workspace {
     /// The repo's own Google Fonts build script above the source
