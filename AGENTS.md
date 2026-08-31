@@ -86,6 +86,15 @@ fails there, run it under the toolchain CI reports.
 - Strip `[[patch.unused]]` from `Cargo.lock` before committing; a
   local `paths` override adds it.
 
+## Supply chain and releases
+
+Dependencies are vetted with cargo-vet; `supply-chain/` holds the
+audits and exemptions, and CI runs `cargo vet --locked`. When you
+add or bump a dependency, run `cargo vet` and record the result on
+purpose. Releases do not exist yet; `RELEASING.md` is the checklist
+for the first one, and user-visible changes go under `Unreleased`
+in `CHANGELOG.md`.
+
 ## Git
 
 - Commit locally as you work. Push when a phase is coherent.
