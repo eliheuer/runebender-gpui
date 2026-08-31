@@ -1,3 +1,6 @@
+// Copyright 2026 the Runebender Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! Text fields, on Linebender's text stack.
 //!
 //! The editing model is `parley::PlainEditor`: cursor and word motion,

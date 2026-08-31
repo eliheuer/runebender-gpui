@@ -1,3 +1,6 @@
+// Copyright 2026 the Runebender Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! Widgets this editor needs, written here rather than pulled in.
 //!
 //! See `slider.rs` for why: the dependency they replace forces

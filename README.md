@@ -1,5 +1,7 @@
 # runebender-gpui
 
+[![CI](https://github.com/eliheuer/runebender-gpui/actions/workflows/ci.yml/badge.svg)](https://github.com/eliheuer/runebender-gpui/actions/workflows/ci.yml)
+
 The main [Runebender](https://runebender.org) font editor, built on
 [GPUI](https://gpui.rs/) and [Linebender](https://linebender.org/)
 crates. The window, the input, and the drawing live here; every

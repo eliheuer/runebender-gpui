@@ -1,3 +1,6 @@
+// Copyright 2026 the Runebender Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! An in-window menu bar, for the platforms with no native one:
 //! Windows, Linux, and the browser.
 //!

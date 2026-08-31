@@ -1,3 +1,6 @@
+// Copyright 2026 the Runebender Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 //! A slider, in the shape this editor uses one.
 //!
 //! Replaces `gpui_component::slider`, whose version carries range

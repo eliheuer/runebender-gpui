@@ -3,7 +3,8 @@ name = "runebender-gpui"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0 OR MIT"
-description = "A font editor built on GPUI, a sibling of runebender-xilem for comparing UI frameworks"
+description = "The main Runebender font editor, built on GPUI"
+rust-version = "1.96"
 repository = "https://github.com/eliheuer/runebender-gpui"
 
 # The browser build is the one that feels the difference: fewer, larger

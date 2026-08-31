@@ -1,2 +1,10 @@
 /target
+.DS_Store
+.idea/
+.vscode/
+
+# Agent worktrees
+.claude/worktrees/
+
+# Trunk output for the browser build
 dist/
