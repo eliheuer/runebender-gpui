@@ -60,7 +60,11 @@ machine. Verify through tests.
 
 CI runs on every push, on Linux and macOS: `cargo fmt --check`,
 `cargo clippy --all-targets`, `cargo doc --no-deps`, `cargo test`,
-and a release build, with warnings denied. The Linux job installs
+and a release build, with warnings denied.
+Clippy's `missing_docs_in_private_items` is on in the manifest, so
+every item, `pub(crate)` and private included, needs a doc comment
+or the build fails. Imports are named; no glob imports outside test
+modules. The Linux job installs
 the libraries gpui's Wayland and X11 backends link against. `unsafe`
 is denied; a test that must set an environment variable allows it
 explicitly.
