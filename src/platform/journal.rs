@@ -16,8 +16,6 @@
 //! Off unless `RUNEBENDER_JOURNAL` names a file, so no session writes
 //! anywhere the user did not ask for.
 
-#[cfg(not(target_family = "wasm"))]
-use crate::workspace::CONFIG;
 use std::io::Write;
 use std::path::PathBuf;
 

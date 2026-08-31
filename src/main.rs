@@ -37,8 +37,6 @@ use launch::{open_from_args, print_font_families};
 #[cfg(target_family = "wasm")]
 use runebender_core::document::project::Project;
 #[cfg(not(target_family = "wasm"))]
-use view::render::TabTooltip;
-#[cfg(not(target_family = "wasm"))]
 use view::theme as t;
 
 // App-level commands, reachable from the native menu bar and the

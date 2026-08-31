@@ -6,8 +6,6 @@
 //! Anything checkable without a window belongs in runebender-core
 //! instead. What is left here is the shell's own behaviour.
 
-use crate::actions::theme_action;
-use crate::workspace::Workspace;
 #[cfg(test)]
 mod shell_tests {
     /// A two-master Glyphs 3 source, used by the import tests.

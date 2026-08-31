@@ -640,8 +640,6 @@ use gpui::{
     Pixels, Point, Rgba, Styled as _, canvas, div, px,
 };
 
-#[cfg(not(target_family = "wasm"))]
-use crate::view::paint::build_fill_path;
 use crate::view::theme as t;
 
 /// A text field.

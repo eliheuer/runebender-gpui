@@ -24,8 +24,6 @@
 
 use std::path::PathBuf;
 
-#[cfg(not(target_family = "wasm"))]
-use crate::view::theme;
 use serde::Deserialize;
 
 /// What the file can say. Every field is optional.
