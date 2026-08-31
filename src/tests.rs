@@ -415,12 +415,8 @@ mod theme_geometry_tests {
     /// they interleave and read each other's theme.
     static THEME: Mutex<()> = Mutex::new(());
 
-    /// The bug this catches: `theme_menu_items` used to end in a
-    /// `_ => Box::new(SetThemeDark)` arm, so a theme added to the token
-    /// file got a menu entry that switched to Dark. It looked wired up
-    /// and was not.
-    /// The default is a name, and a name can be wrong. Without this a
-    /// typo would only show up as a window that came up in whatever
+    /// The default is a name, and a name can be wrong. Without this
+    /// a typo would only show up as a window that came up in whatever
     /// theme the fallback happened to reach.
     #[test]
     fn the_default_theme_exists() {
@@ -432,6 +428,10 @@ mod theme_geometry_tests {
         assert!(t::set_theme(t::DEFAULT_THEME), "the default must load");
     }
 
+    /// The bug this catches: `theme_menu_items` used to end in a
+    /// `_ => Box::new(SetThemeDark)` arm, so a theme added to the
+    /// token file got a menu entry that switched to Dark. It looked
+    /// wired up and was not.
     #[test]
     fn every_theme_has_its_own_action() {
         for (id, _) in t::THEMES {
@@ -511,7 +511,7 @@ mod model_discovery_tests {
     use crate::*;
     use std::sync::Mutex;
 
-    /// These set RUNEBENDER_MODELS, which is process-wide, and cargo
+    /// These set `RUNEBENDER_MODELS`, which is process-wide, and cargo
     /// runs tests in parallel. Without this they read each other's
     /// environment.
     static ENV: Mutex<()> = Mutex::new(());
@@ -533,7 +533,7 @@ mod model_discovery_tests {
         );
     }
 
-    /// A directory only counts as a model if it holds a config.json.
+    /// A directory only counts as a model if it holds a `config.json`.
     /// Without that check, every stray folder becomes a broken entry.
     #[test]
     #[allow(unsafe_code)]

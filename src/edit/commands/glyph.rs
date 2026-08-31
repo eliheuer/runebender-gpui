@@ -11,8 +11,8 @@ use std::collections::HashSet;
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 impl Workspace {
-    /// Copy the selection as text (the glyphs' characters), the web
-    /// sidebar footer's action.
+    /// Copy the selection as text: the glyphs' characters. This is
+    /// the sidebar footer's action in the web editor.
     pub(crate) fn command_copy_selection_text(&mut self, cx: &mut Context<Self>) {
         let Some(font) = self.font() else { return };
         let text: String = self
@@ -37,9 +37,10 @@ impl Workspace {
         );
     }
 
-    /// Add every glyph a target-bearing language filter still misses
-    /// (web generateMissing): empty glyphs named and encoded from the
-    /// filter's targets, in every master.
+    /// Add every glyph a target-bearing language filter still
+    /// misses: empty glyphs named and encoded from the filter's
+    /// targets, in every master. This is `generateMissing` in the
+    /// web editor.
     pub(crate) fn command_generate_missing(&mut self, group: usize, filter_index: usize) {
         use runebender_core::ui::sidebar as sb;
         let Some(filter) = sb::language_groups()
@@ -245,8 +246,8 @@ impl Workspace {
         self.rebuild_text_models();
     }
 
-    /// Add an empty glyph to every master (bottom bar +), like
-    /// Glyphs' new-glyph command, and select it.
+    /// Add an empty glyph to every master and select it. This is
+    /// the bottom bar's "+", like Glyphs' new-glyph command.
     pub(crate) fn command_add_glyph(&mut self) {
         let Some(project) = self.project.as_mut() else {
             return;
@@ -274,7 +275,8 @@ impl Workspace {
         self.status_note = Some(format!("Added {name}").into());
     }
 
-    /// Remove the selected glyph from every master (bottom bar −).
+    /// Remove the selected glyph from every master. This is the
+    /// bottom bar's "−".
     pub(crate) fn command_remove_glyph(&mut self) {
         let Some(index) = self.selected else {
             self.status_note = Some("Select a glyph to remove".into());

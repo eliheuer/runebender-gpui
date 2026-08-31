@@ -106,9 +106,9 @@ use gpui::px;
 use kurbo::Affine;
 use runebender_core::outline::glyph_ops::CurveOp;
 
-/// The label a sidebar tab shows on hover, now that the tabs are
-/// icons. Placeholder icons for the two that have none of their own.
 /// The hover tooltip on a sidebar tab icon.
+///
+/// The tabs show icons only, so the full name appears on hover.
 pub(crate) struct TabTooltip {
     /// The tab's full name.
     pub(crate) label: &'static str,

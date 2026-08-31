@@ -214,11 +214,9 @@ impl Workspace {
         self.editor.fit(advance, asc, desc);
     }
 
-    /// Push current glyph metrics into the input fields. Skipped when
-    /// an input has focus (unless forced) so typing is not clobbered.
-    /// After a rename or unicode change reorders the glyph list,
-    /// re-point selection, the open editor, and the parked session at
-    /// the glyph by name.
+    /// Re-point selection, the open editor, and the parked session
+    /// at the glyph named `name`. Called after a rename or unicode
+    /// change reorders the glyph list.
     pub(crate) fn remap_glyph_indices(&mut self, name: &str) {
         let Some(&index) = self.font().and_then(|f| f.name_map.get(name)) else {
             return;

@@ -15,8 +15,9 @@ impl Workspace {
     /// Glyph > Check Joining: for every positional form, measure
     /// the connecting stroke's band at its joining edges (init and
     /// medi join at x = 0, medi and fina at x = advance), find the
-    /// font's common band, and select every form that misses it —
-    /// the Arabic joining-line rule, measured instead of eyeballed.
+    /// font's common band, and select every form that misses it.
+    /// This is the Arabic joining-line rule, measured instead of
+    /// eyeballed.
     pub(crate) fn command_check_joining(&mut self) {
         let Some(font) = self.font() else { return };
         let tolerance_edge = 2.0;
@@ -209,8 +210,8 @@ impl Workspace {
     /// preview location. Positive ease means the change comes late
     /// (the light shape holds on), negative means early. Selected
     /// points ease; the rest stay on the straight interpolation, so
-    /// the layer stays point-compatible. Standard designspace out —
-    /// every compiler understands the result.
+    /// the layer stays point-compatible. Standard designspace comes
+    /// out; every compiler understands the result.
     pub(crate) fn command_ease_interpolation(&mut self, ease: f64) {
         let Some(index) = self.current_glyph_index() else {
             return;
@@ -280,11 +281,11 @@ impl Workspace {
         );
     }
 
-    /// Add a shape switch (bracket layer): an unencoded `.bold`
-    /// alternate copied into every master, plus a designspace rule
-    /// substituting it from `at` up to the end of the first axis.
-    /// The repo convention (DESIGN.md): design the alternate in the
-    /// Regular master; the copies start red.
+    /// Add a shape switch: an unencoded `.bold` alternate copied
+    /// into every master, plus a designspace rule substituting it
+    /// from `at` up to the end of the first axis. This is a bracket
+    /// layer in Glyphs. The repo convention (DESIGN.md): design the
+    /// alternate in the Regular master; the copies start red.
     pub(crate) fn command_add_shape_switch(&mut self, at: f64) {
         let Some(index) = self.current_glyph_index() else {
             return;
@@ -400,7 +401,7 @@ impl Workspace {
     /// "Smart Axis" on a part glyph: "Width,0,100" writes the
     /// glyphsLib smartComponentAxes entry, marks the default glyph
     /// as the bottom pole, and seeds a part.top layer copy marked
-    /// as the top — edit it through the swap arrows, place the part
+    /// as the top. Edit it through the swap arrows; place the part
     /// with a value through the Selection panel.
     pub(crate) fn command_make_smart_axis(&mut self, text: &str) {
         let Some(index) = self.current_glyph_index() else {

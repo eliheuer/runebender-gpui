@@ -16,9 +16,9 @@ use gpui::Point;
 use std::collections::HashSet;
 impl Workspace {
     /// Paste the system clipboard's text into the editor's buffer,
-    /// character by character (web pasteTextIntoBuffer): switches to
-    /// the Text tool, line breaks for newlines, characters with no
-    /// glyph skipped.
+    /// character by character. Switches to the Text tool; newlines
+    /// become line breaks; characters with no glyph are skipped.
+    /// This is `pasteTextIntoBuffer` in the web editor.
     pub(crate) fn paste_text_into_buffer(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
@@ -68,11 +68,9 @@ impl Workspace {
         );
     }
 
-    /// Bottom bar in editor mode: Width / LSB / RSB fields.
-    /// The resolved preview line: glyph index, pen x position (font
-    /// units, kerning applied), and advance.
     /// The text sort metric box bounds: top = max(upm, ascender),
-    /// bottom = descender — the web editor's text_sort_metric_bounds.
+    /// bottom = descender. This is `text_sort_metric_bounds` in the
+    /// web editor.
     pub(crate) fn text_sort_bounds(&self) -> (f64, f64) {
         let Some(font) = self.font() else {
             return (1000.0, -200.0);
@@ -140,7 +138,7 @@ impl Workspace {
         self.editor.sort_offset = offset;
     }
 
-    /// Text tool click: place the caret (like the web editor). A
+    /// Text tool click: place the caret, as in the web editor. A
     /// shift-click on a sort begins a manual kerning drag instead.
     pub(crate) fn text_tool_click(&mut self, pos: Point<gpui::Pixels>, shift: bool) {
         if self.font().is_none() {
@@ -166,8 +164,9 @@ impl Workspace {
             .place_cursor_at(bx, by, line_height, top, bottom);
     }
 
-    /// Double-click editing, in the web's priority order: toggle the
-    /// point type under the cursor, else select its whole contour.
+    /// Double-click editing: toggle the point type under the
+    /// cursor, else select its whole contour. The priority order
+    /// matches the web editor.
     pub(crate) fn double_click_edit(&mut self, pos: Point<gpui::Pixels>) -> bool {
         let Mode::Editor(index) = self.mode else {
             return false;
@@ -296,8 +295,8 @@ impl Workspace {
         true
     }
 
-    /// Write the buffer's kerning (updated by a manual kern drag)
-    /// back into the font, wholesale like the web editor does.
+    /// Write the buffer's kerning, updated by a manual kern drag,
+    /// back into the font wholesale, as the web editor does.
     pub(crate) fn sync_kerning_from_buffer(&mut self) {
         let pairs = self.edit_buffer.kerning_model().pairs().clone();
         if let Some(font) = self.font_mut() {
@@ -321,10 +320,11 @@ impl Workspace {
         self.rebuild_text_models();
     }
 
-    /// Seed the editor's text buffer for an opened glyph    /// Seed the editor's text buffer for an opened glyph: keep the
-    /// buffer when the glyph is already a sort in it (the text tool
-    /// walking between sorts), otherwise start fresh with this glyph
-    /// as the single active sort.
+    /// Seed the editor's text buffer for an opened glyph. If the
+    /// glyph is already a sort in the buffer, the buffer is kept:
+    /// that is the text tool walking between sorts. Otherwise the
+    /// buffer starts fresh with this glyph as the single active
+    /// sort.
     pub(crate) fn seed_edit_buffer(&mut self, index: usize) {
         let Some((name, codepoint, advance)) = self.font().map(|font| {
             let entry = &font.glyphs[index];

@@ -21,10 +21,10 @@ use runebender_core::outline::effects::offset_glyph_contours;
 use runebender_core::outline::effects::roughen_glyph_contours;
 use std::collections::HashSet;
 impl Workspace {
-    /// Glyph menu: convert the open glyph's curves between cubic
-    /// and quadratic, in every master (structure must stay shared).
-    /// Quads to cubics is exact; the other way approximates within
-    /// upm/1000 units, the tolerance the TrueType compilers use.
+    /// Convert the open glyph's curves between cubic and quadratic,
+    /// in every master; structure must stay shared. Quads to cubics
+    /// is exact. The other way approximates within upm/1000 units,
+    /// the tolerance the TrueType compilers use.
     pub(crate) fn command_convert_curves(&mut self, to_cubic: bool) {
         let Some(index) = self.current_glyph_index() else {
             return;
@@ -223,9 +223,9 @@ impl Workspace {
         }
     }
 
-    /// Duplicate the selection: contours holding selected points, or
-    /// the selected component or anchor, offset (20, 20), clones
-    /// selected (web duplicateSelection).
+    /// Duplicate the selection: contours holding selected points,
+    /// or the selected component or anchor, offset (20, 20), clones
+    /// selected. This is `duplicateSelection` in the web editor.
     pub(crate) fn command_duplicate(&mut self) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -280,8 +280,9 @@ impl Workspace {
         }
     }
 
-    /// Duplicate, then re-apply the last flip/rotate — the web's
-    /// duplicate-repeat, for rotated repeats around a center.
+    /// Duplicate, then re-apply the last flip/rotate, for rotated
+    /// repeats around a center. This is duplicate-repeat in the web
+    /// editor.
     pub(crate) fn command_duplicate_repeat(&mut self) {
         let before = self.editor.undo.len();
         self.command_duplicate();
@@ -342,9 +343,9 @@ impl Workspace {
         }
     }
 
-    /// Cmd+V, routed the web way: copied contours paste whenever the
-    /// outline clipboard holds something and the Text tool isn't the
-    /// one in hand; otherwise the system clipboard's text types into
+    /// Route Cmd+V the way the web editor does. If the outline
+    /// clipboard holds contours and the Text tool is not in hand,
+    /// they paste. Otherwise the system clipboard's text types into
     /// the editor's buffer.
     pub(crate) fn command_paste_routed(&mut self, cx: &mut Context<Self>) {
         let text_target = matches!(self.mode, Mode::Editor(_));
@@ -370,14 +371,13 @@ impl Workspace {
         }
     }
 
-    /// Boolean path op over the glyph's contours (web boolean tiles):
-    /// union merges everything; the others apply first contour vs the
-    /// rest combined.
-    /// Expand contours into stroked outlines (the Make Stroke half
-    /// of Glyphs' Offset Curve): each selected contour — all when
-    /// nothing is selected — becomes the outline of a stroke of the
-    /// typed width, round joins and caps. The monoline workflow: draw
-    /// open skeleton paths, type a weight, get letterforms.
+    /// Expand contours into stroked outlines. Each selected contour
+    /// becomes the outline of a stroke of the typed width, with
+    /// round joins and caps; when nothing is selected, every contour
+    /// does. This is the Make Stroke half of Offset Curve in Glyphs.
+    ///
+    /// This is the monoline workflow: draw open skeleton paths, type
+    /// a weight, get letterforms.
     pub(crate) fn command_expand_stroke(&mut self, width: f64) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -530,7 +530,11 @@ impl Workspace {
         }
     }
 
-    /// Combine the glyph's contours with a boolean operation, under one undo step. A no-op pops the snapshot.
+    /// Combine the glyph's contours with a boolean operation, under
+    /// one undo step. Union merges everything; the other operations
+    /// apply the first contour against the rest combined. A no-op
+    /// pops the snapshot. The operations are the web editor's
+    /// boolean tiles.
     pub(crate) fn command_boolean(&mut self, op: linesweeper::BinaryOp) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -582,9 +586,10 @@ impl Workspace {
         }
     }
 
-    /// Tab / shift-Tab: step the point selection through the glyph's
-    /// points in contour order (web cycle_selected_point). Bound as an
-    /// action so gpui's default tab-stop traversal never runs.
+    /// Tab / shift-Tab: step the point selection through the
+    /// glyph's points in contour order. Bound as an action so gpui's
+    /// default tab-stop traversal never runs. This is
+    /// `cycle_selected_point` in the web editor.
     pub(crate) fn command_cycle_point(&mut self, back: bool) -> bool {
         let Mode::Editor(index) = self.mode else {
             return false;

@@ -9,8 +9,8 @@ use runebender_core::formats::lib_keys::read_annotations;
 use runebender_core::formats::lib_keys::write_annotations;
 impl Workspace {
     /// Drop an annotation at a design-space point on the open
-    /// glyph (active master; annotations are working notes, never
-    /// exported).
+    /// glyph, in the active master. Annotations are working notes,
+    /// never exported.
     pub(crate) fn command_add_annotation(&mut self, at: (f64, f64), kind: &str, text: &str) {
         let Some(index) = self.current_glyph_index() else {
             return;

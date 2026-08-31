@@ -366,11 +366,11 @@ impl Workspace {
         set(&production_input, production, window, cx);
     }
 
-    /// Auto-generated feature blocks from glyph names, the Glyphs
-    /// conventions: `.init`/`.medi`/`.fina` suffixes feed the
-    /// positional features, and underscore names (f_i, beh-ar_lam-ar)
-    /// whose parts all exist feed liga. Returns (tag, body) pairs;
-    /// tags with nothing to say are omitted.
+    /// Auto-generated feature blocks from glyph names, following
+    /// the Glyphs conventions. `.init`/`.medi`/`.fina` suffixes feed
+    /// the positional features, and underscore names (`f_i`,
+    /// `beh-ar_lam-ar`) whose parts all exist feed `liga`. Returns
+    /// `(tag, body)` pairs; tags with nothing to say are omitted.
     pub(crate) fn generated_feature_blocks(font: &norad::Font) -> Vec<(String, String)> {
         let names: std::collections::BTreeSet<&str> = font
             .default_layer()
@@ -988,8 +988,9 @@ impl Workspace {
 
     /// Measured stem and bar of a glyph: the narrowest horizontal
     /// and vertical black spans between facing straight edges.
-    /// (Counters are white spans; the midpoint containment test
-    /// keeps only ink.)
+    ///
+    /// Counters are white spans; the midpoint containment test
+    /// keeps only ink.
     pub(crate) fn measured_dimensions(&self, name: &str) -> (Option<i64>, Option<i64>) {
         use kurbo::Shape as _;
         use runebender_core::analysis::measure::{self, MeasureKind};
@@ -1075,9 +1076,8 @@ impl Workspace {
         set(&self.inputs.metric.rsb, rsb, window, cx);
     }
 
-    /// Set one coordinate of the single selected point (Selection
-    /// section X/Y inputs), with an undo snapshot.
-    /// Rename the selected anchor (Enter in the Selection panel).
+    /// Rename the selected anchor. Runs on Enter in the Selection
+    /// panel.
     pub(crate) fn apply_anchor_name(&mut self, text: &str) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -1104,7 +1104,8 @@ impl Workspace {
     }
 
     /// Move whatever is selected so the quadrant reference lands on
-    /// `value` along one axis (web move_selection_reference).
+    /// `value` along one axis. This is `move_selection_reference` in
+    /// the web editor.
     pub(crate) fn apply_coord(&mut self, is_x: bool, value: f64) {
         let Mode::Editor(index) = self.mode else {
             return;
@@ -1131,9 +1132,9 @@ impl Workspace {
         }
     }
 
-    /// Scale whatever is selected about the quadrant reference so its
-    /// bounds reach `value` along one axis (web
-    /// resize_selection_reference).
+    /// Scale whatever is selected about the quadrant reference so
+    /// its bounds reach `value` along one axis. This is
+    /// `resize_selection_reference` in the web editor.
     pub(crate) fn apply_size(&mut self, is_width: bool, value: f64) {
         let Mode::Editor(index) = self.mode else {
             return;

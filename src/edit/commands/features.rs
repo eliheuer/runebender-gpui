@@ -7,10 +7,11 @@ use crate::Workspace;
 use gpui::Context;
 use gpui::Window;
 impl Workspace {
-    /// The Features section's Generate button: rewrite the automatic
-    /// blocks (init/medi/fina from name suffixes, liga from
-    /// underscore names) into the editor text for review; Apply
-    /// commits. Hand-written blocks with other tags are untouched.
+    /// Rewrite the automatic feature blocks (init/medi/fina from
+    /// name suffixes, liga from underscore names) into the editor
+    /// text for review; Apply commits. Hand-written blocks with
+    /// other tags are untouched. This is the Features section's
+    /// Generate button.
     pub(crate) fn command_generate_features(
         &mut self,
         window: &mut Window,
@@ -38,9 +39,9 @@ impl Workspace {
 
     /// Apply the features editor to the active master: write
     /// features.fea, recompile the shaping models, and report the
-    /// compile verdict. A file that does not compile is still saved
-    /// (the old joining rules carry on), the way Glyphs lets you keep
-    /// a broken feature file open while you fix it.
+    /// compile verdict. A file that does not compile is still saved;
+    /// the old joining rules carry on. This is how Glyphs lets you
+    /// keep a broken feature file open while you fix it.
     pub(crate) fn command_apply_features(&mut self, cx: &mut Context<Self>) {
         let fea = self.inputs.features.read(cx).value().to_string();
         let verdict = self.font().map(|f| Self::check_features_compile(f, &fea));

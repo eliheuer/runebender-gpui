@@ -9,12 +9,13 @@
 //!
 //! It is deliberately not a replay format. Recording a drag as a
 //! command you could retype means inventing a command language for
-//! every gesture, and a log that claims to replay but cannot is worse
+//! every gesture. A log that claims to replay but cannot is worse
 //! than one that never claimed to. What this gives you is an honest
 //! account: the glyph, the operation, and the shape of the change.
 //!
-//! Off unless `RUNEBENDER_JOURNAL` names a file, so no session writes
-//! anywhere the user did not ask for.
+//! The journal is off unless `RUNEBENDER_JOURNAL` or the config file
+//! names a path, so no session writes anywhere the user did not ask
+//! for.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -31,9 +32,10 @@ pub struct Entry<'a> {
 
 /// Where the log is written, if anywhere.
 ///
-/// `$RUNEBENDER_JOURNAL`, then the config file. Unset in both means no
-/// journal: a tool that logs where it was not asked to is a tool
-/// people turn off entirely.
+/// `$RUNEBENDER_JOURNAL` wins over the config file. If neither is
+/// set, there is no journal: a tool that logs where it was not asked
+/// to is a tool people turn off entirely. Returns `None` in that
+/// case.
 pub fn path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("RUNEBENDER_JOURNAL") {
         return Some(PathBuf::from(p));
@@ -61,8 +63,10 @@ fn escape(s: &str) -> String {
     out
 }
 
-/// The line an entry writes. Separate from the writing so it can be
-/// tested without touching a filesystem.
+/// Format one entry as its JSON line.
+///
+/// Separate from the writing so it can be tested without touching a
+/// filesystem.
 pub fn line(entry: &Entry) -> String {
     let mut s = format!("{{\"op\":\"{}\"", escape(entry.op));
     if let Some(g) = entry.glyph {

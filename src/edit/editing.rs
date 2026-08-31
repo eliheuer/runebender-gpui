@@ -88,8 +88,9 @@ impl Workspace {
 
     /// Rebake the HOI brace layers for the open glyph: stops at
     /// t = 0.25 / 0.5 / 0.75 of the first axis, curved nodes on
-    /// their quadratic, the rest linear — standard sparse sources
-    /// out, so fontc and fontmake follow the curves exactly enough.
+    /// their quadratic, the rest linear. Standard sparse sources
+    /// come out, so fontc and fontmake follow the curves exactly
+    /// enough.
     pub(crate) fn bake_hoi(&mut self) {
         let Some(index) = self.current_glyph_index() else {
             return;
@@ -658,8 +659,8 @@ impl Workspace {
     }
 
     /// Idle mouse move over the canvas: track the pointer for pen
-    /// previews, and alt-hover highlights the nearest segment
-    /// (select tool), like the web editor.
+    /// previews. With the select tool, alt-hover highlights the
+    /// nearest segment, as in the web editor.
     pub(crate) fn editor_hover(&mut self, pos: Point<gpui::Pixels>, alt: bool) -> bool {
         let Mode::Editor(index) = self.mode else {
             return false;
@@ -727,8 +728,8 @@ impl Workspace {
 
     /// Selection for a marquee: whatever it started from, plus every
     /// point and anchor the box encloses. Recomputed on every drag
-    /// step, so pulling the box back in gives entities up again (web
-    /// `select_in_screen_rect`).
+    /// step, so pulling the box back in gives entities up again.
+    /// This is `select_in_screen_rect` in the web editor.
     pub(crate) fn select_in_rect(
         &mut self,
         index: usize,
@@ -803,15 +804,15 @@ impl Workspace {
             .copied()
     }
 
-    /// Bounds of whatever is selected: points, else the component,
-    /// else the anchor.
-    /// The true bounding box of the selected segments: the curve's own
-    /// extrema, not the box around its control points. A cubic's
-    /// handles usually sit outside the ink, so the point box overstates
-    /// how tall or wide a curve actually is — this is the number you
-    /// want when matching one curve's size against another.
+    /// The true bounding box of the selected segments: the curve's
+    /// own extrema, not the box around its control points.
     ///
-    /// `None` unless the selection covers whole segments.
+    /// A cubic's handles usually sit outside the ink, so the point
+    /// box overstates how tall or wide a curve actually is. This is
+    /// the number you want when matching one curve's size against
+    /// another.
+    ///
+    /// Returns `None` unless the selection covers whole segments.
     pub(crate) fn selected_segment_bounds(&self) -> Option<(usize, kurbo::Rect)> {
         use kurbo::Shape as _;
         let Mode::Editor(index) = self.mode else {
@@ -842,8 +843,9 @@ impl Workspace {
         bounds.map(|b| (count, b))
     }
 
-    /// The bounding box of the selection: the selected points, else the
-    /// selected component or anchor. `None` when nothing is selected.
+    /// The bounding box of the selection: the selected points, else
+    /// the selected component or anchor. Returns `None` when nothing
+    /// is selected.
     pub(crate) fn selection_bounds(&self) -> Option<kurbo::Rect> {
         let Mode::Editor(index) = self.mode else {
             return None;
@@ -1189,10 +1191,8 @@ impl Workspace {
         }
     }
 
-    /// Push the open glyph's contours onto the undo stack and clear
-    /// the redo tail. Called at the start of every mutating gesture.
-    /// Apply a change to the measure options, mirror it for the menu,
-    /// and rebuild the menus so the ticks follow.
+    /// Apply a change to the measure options, mirror it for the
+    /// menu, and rebuild the menus so the ticks follow.
     pub(crate) fn toggle_measure(
         &mut self,
         change: impl FnOnce(&mut MeasureOpts),
@@ -1204,12 +1204,13 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Nudge the selected points by (dx, dy) design units.
-    /// Arrow-key nudge, with the web's routing: a selected component
-    /// moves alone; with no points selected an anchor moves; otherwise
-    /// points move, carrying any selected anchors with them. Alt makes
-    /// the move independent — selected points travel without their
-    /// handles.
+    /// Nudge the selection by `(dx, dy)` design units.
+    ///
+    /// The routing matches the web editor: a selected component
+    /// moves alone; with no points selected an anchor moves;
+    /// otherwise points move, carrying any selected anchors with
+    /// them. Alt makes the move independent: selected points travel
+    /// without their handles.
     pub(crate) fn nudge_selection(&mut self, dx: f64, dy: f64, independent: bool) -> bool {
         let Mode::Editor(index) = self.mode else {
             return false;

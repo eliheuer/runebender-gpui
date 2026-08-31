@@ -15,8 +15,8 @@ use runebender_core::formats::color_font::read_color_palette;
 use runebender_core::formats::color_font::write_color_mapping;
 use runebender_core::formats::color_font::write_color_palette;
 impl Workspace {
-    /// Append a hex color to the palette, on every master (CPAL
-    /// palettes must agree across sources). Returns true on success.
+    /// Append a hex color to the palette, on every master; CPAL
+    /// palettes must agree across sources. Returns true on success.
     pub(crate) fn command_add_palette_color(&mut self, hex: &str) -> bool {
         let Some(color) = parse_hex_color(hex) else {
             self.status_note = Some("Color: use #RRGGBB or #RRGGBBAA".into());
@@ -145,11 +145,11 @@ impl Workspace {
         }
     }
 
-    /// Color section's "To v1" button: explode every color glyph's
-    /// layers into real suffixed glyphs and write the explicit
-    /// colorLayers structures (solid paints), the COLRv1 baseline.
-    /// From here ufo2ft's own exploding is off; gradients upgrade
-    /// individual paints.
+    /// Explode every color glyph's layers into real suffixed glyphs
+    /// and write the explicit colorLayers structures (solid paints),
+    /// the COLRv1 baseline. From here ufo2ft's own exploding is off;
+    /// gradients upgrade individual paints. This is the Color
+    /// section's "To v1" button.
     pub(crate) fn command_convert_to_colrv1(&mut self) {
         let Some(project) = self.project.as_mut() else {
             return;

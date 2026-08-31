@@ -34,9 +34,11 @@ use kurbo::Affine;
 mod editor;
 
 impl Workspace {
-    /// Builds one grid cell for the glyph at `index`, `cell` by `cell_h`
-    /// pixels. `jump_on_click` (the editor sidebar) opens the glyph on a
-    /// single click instead of selecting it.
+    /// Builds one grid cell for the glyph at `index`, `cell` by
+    /// `cell_h` pixels.
+    ///
+    /// With `jump_on_click`, a single click opens the glyph instead
+    /// of selecting it. The editor sidebar's mini grid sets it.
     pub(crate) fn glyph_cell_sized(
         &self,
         index: usize,
@@ -187,11 +189,12 @@ impl Workspace {
             })
     }
 
-    /// The List view: one row per glyph, one column per property —
-    /// the Glyphs table. Click selects (cmd toggles, shift extends),
-    /// double-click opens the editor; values are the active
-    /// master's, edited through the Glyph panel, which already
-    /// batch-edits a multi-selection.
+    /// The List view: one row per glyph, one column per property.
+    ///
+    /// Click selects, cmd toggles, shift extends, and double-click
+    /// opens the editor. Values are the active master's, edited
+    /// through the Glyph panel, which already batch-edits a
+    /// multi-selection. This is the list view in Glyphs.
     pub(crate) fn glyph_list_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(font) = self.font() else {
             return div().into_any_element();
@@ -356,11 +359,12 @@ impl Workspace {
         list.child(rows).into_any_element()
     }
 
-    /// The positional-forms matrix (Counterpunch's Matrix Mode, the
-    /// Arabic review surface): one row per base letter that carries
-    /// positional variants, isol/init/medi/fina as columns, each a
-    /// live thumbnail. Click a form to open it; a dash marks a
-    /// missing form.
+    /// The positional-forms matrix, the Arabic review surface.
+    ///
+    /// One row per base letter that carries positional variants, with
+    /// isol/init/medi/fina as columns, each a live thumbnail. Click a
+    /// form to open it. A dash marks a missing form. This is Matrix
+    /// Mode in Counterpunch.
     pub(crate) fn glyph_matrix_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(font) = self.font() else {
             return div().into_any_element();

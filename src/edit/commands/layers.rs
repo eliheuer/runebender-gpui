@@ -97,7 +97,8 @@ impl Workspace {
     }
 
     /// Copy the current drawing into a fresh backup layer
-    /// (backup-1, backup-2, …): the Glyphs copy-layer gesture.
+    /// (backup-1, backup-2, …). This is the copy-layer gesture in
+    /// Glyphs.
     pub(crate) fn command_backup_layer(&mut self) {
         let Some(index) = self.current_glyph_index() else {
             return;
@@ -147,9 +148,11 @@ impl Workspace {
         }
     }
 
-    /// "+ Intermediate" in the layers block: freeze the current
-    /// interpolation of the open glyph into a brace layer at the
-    /// preview location — a named UFO layer plus a sparse designspace
+    /// Freeze the current interpolation of the open glyph into a
+    /// brace layer at the preview location. This is "+ Intermediate"
+    /// in the layers block.
+    ///
+    /// A brace layer is a named UFO layer plus a sparse designspace
     /// source, Glyphs' intermediate layer. Edit it via the swap
     /// arrows; the interpolation ghost and strip pick it up live.
     pub(crate) fn command_brace_layer(&mut self) {

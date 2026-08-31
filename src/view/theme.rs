@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The Runebender theme, resolved from the shared OKLCH token file in
-//! runebender-core (`themes/runebender.theme.json`) — the same source
-//! runebender-web generates its CSS variables from, so the editors
-//! match byte-for-byte.
+//! runebender-core (`themes/runebender.theme.json`).
+//!
+//! runebender-web generates its CSS variables from the same file, so
+//! the editors match byte-for-byte.
 
 use std::sync::RwLock;
 
@@ -20,10 +21,12 @@ pub const THEMES: [(&str, &str); 4] = [
     ("light", "Light"),
 ];
 
-/// The live theme. Resolving one is cheap but not free, and every
-/// colour below reads it, so the resolved theme is kept behind a lock
-/// and leaked: switching is rare, and a leaked theme gives every
-/// accessor a `'static` reference with no per-call clone.
+/// The live theme.
+///
+/// Resolving one is cheap but not free, and every colour below reads
+/// it. So the resolved theme is kept behind a lock and leaked.
+/// Switching is rare, and a leaked theme gives every accessor a
+/// `'static` reference with no per-call clone.
 static CURRENT: RwLock<Option<(&'static str, &'static Theme)>> = RwLock::new(None);
 
 /// The theme a fresh install starts in.
@@ -45,8 +48,10 @@ fn theme() -> &'static Theme {
         .1
 }
 
-/// Switch the palette. Returns false for a name the token file does
-/// not define, leaving the current theme alone.
+/// Switch the palette.
+///
+/// A name the token file does not define leaves the current theme
+/// alone. Returns `false` for such a name.
 pub fn set_theme(id: &str) -> bool {
     let Some((name, _)) = THEMES.iter().find(|(name, _)| *name == id) else {
         return false;
@@ -81,9 +86,11 @@ fn c(color: ColorRgba) -> Rgba {
 
 // ---- marks ----
 
-/// How a mark is drawn on a cell. Themes disagree: tinting a rule
-/// works on a near-black or near-white ground and fails on a mid grey,
-/// where a hue saturated enough to read sits at mid lightness too.
+/// How a mark is drawn on a cell.
+///
+/// Themes disagree. Tinting a rule works on a near-black or
+/// near-white ground and fails on a mid grey. There, a hue saturated
+/// enough to read sits at mid lightness too.
 pub struct MarkPaint {
     /// Cell fill, when the theme fills its marks.
     pub bg: Option<Rgba>,
@@ -243,8 +250,9 @@ pub fn component_selected_fill() -> Rgba {
 pub fn ghost() -> Rgba {
     c(theme().role("component"))
 }
-/// Zoom-dependent design grid, faded by the level's ramp-in alpha
-/// (the web's DESIGN_GRID_FINE/COARSE, shared constants in core).
+/// The zoom-dependent design grid line, faded by the level's ramp-in
+/// alpha. The alphas are the web's `DESIGN_GRID_FINE`/`COARSE`,
+/// shared constants in core.
 pub fn design_grid_fine(alpha: f32) -> Rgba {
     let mut rgba = c(runebender_core::ui::theme::design_grid::FINE);
     rgba.a *= alpha;
@@ -347,21 +355,21 @@ pub fn guide_local() -> Rgba {
     color.a = 0.75;
     color
 }
-/// Alignment-zone bands: the accent at a whisper, Glyphs' beige
-/// zones in this palette's terms.
+/// Alignment-zone bands: the accent at a whisper. These are the
+/// beige zones in Glyphs, in this palette's terms.
 pub fn zone_band() -> Rgba {
     let mut color = accent();
     color.a = 0.10;
     color
 }
 /// Annotation marks: arrows, circles, and notes in the kern-drag
-/// red, full strength — working marks should shout a little.
+/// red, full strength. Working marks should shout a little.
 pub fn annotation() -> Rgba {
     c(theme().role("kernActive"))
 }
 /// The HOI velocity ribbon's speed ramp: slow steps in a deep
-/// ember, fast ones in gold — Glyphs' Show velocity, in this
-/// palette's warm terms. `t` is the normalized speed.
+/// ember, fast ones in gold. `t` is the normalized speed. This is
+/// Show velocity in Glyphs, in this palette's warm terms.
 pub fn velocity_ramp(t: f64) -> Rgba {
     let t = t.clamp(0.0, 1.0) as f32;
     let slow = (0.52, 0.16, 0.10);
@@ -373,11 +381,11 @@ pub fn velocity_ramp(t: f64) -> Rgba {
         a: 0.55,
     }
 }
-/// HOI node trajectories: the across-the-axis connector line…
+/// The HOI node trajectory connector line, across the axis.
 pub fn trajectory_line() -> Rgba {
     with_alpha(theme().role("kernActive"), 0.55)
 }
-/// …and its velocity dots.
+/// The velocity dots on an HOI node trajectory.
 pub fn trajectory_dot() -> Rgba {
     c(theme().role("kernActive"))
 }
@@ -389,8 +397,8 @@ pub fn kern_active() -> Rgba {
 pub fn kern_previous() -> Rgba {
     c(theme().role("kernPrevious"))
 }
-/// Reference-layer underlay stroke (other masters shown via the
-/// Layers eyes).
+/// Reference-layer underlay stroke. A reference layer is another
+/// master shown via the Layers eyes.
 pub fn reference_layer() -> Rgba {
     c(theme().role("reference"))
 }
@@ -489,22 +497,24 @@ pub fn popcount_tier(pc: u32) -> Rgba {
     }
 }
 
-/// The dark casing drawn under points and labels so they keep an edge
-/// over an outline or the curvature comb (web HALO).
+/// The dark casing drawn under points and labels, so they keep an
+/// edge over an outline or the curvature comb. This is `HALO` in the
+/// web editor.
 pub fn halo() -> Rgba {
     c(theme().role("halo"))
 }
 
-/// The ring around a selected point (web `pointSelectedOuter`, which
-/// the app feeds from the selection colour).
+/// The ring around a selected point. This is `pointSelectedOuter` in
+/// the web editor, which feeds it from the selection colour.
 pub fn point_selected_ring() -> Rgba {
     c(theme().role("selection"))
 }
 
 // ---- anchors ----
 
-/// Anchors are pink, so they read as their own kind of thing beside
-/// on-curve and off-curve points (web ANCHOR_MARK_PINK).
+/// The anchor mark's pink. Anchors read as their own kind of thing
+/// beside on-curve and off-curve points. This is `ANCHOR_MARK_PINK`
+/// in the web editor.
 pub fn anchor() -> Rgba {
     theme()
         .mark("pink")

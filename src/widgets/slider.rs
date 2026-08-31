@@ -5,10 +5,9 @@
 //! here asks for. This one holds a value between a minimum and a
 //! maximum, snaps it to a step, and says so when it changes.
 //!
-//! Dropping the dependency is the point: gpui-component pulls `gpui`
-//! from a bare git URL, which is what forces `cargo install --locked`
-//! and what turns gpui's `profiler` feature on, and the profiler
-//! panics on wasm.
+//! Dropping the dependency is the point. gpui-component pulls `gpui`
+//! from a bare git URL. That forces `cargo install --locked`, and it
+//! turns on gpui's `profiler` feature, which panics on wasm.
 
 use gpui::{
     AppContext as _, Bounds, Context, Entity, EventEmitter, InteractiveElement as _, IntoElement,

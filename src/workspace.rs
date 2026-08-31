@@ -29,23 +29,24 @@ use runebender_core::outline::glyph_ops::GlyphSnapshot;
 use runebender_core::ui::editing::ViewPort;
 use std::collections::{HashMap, HashSet};
 
-/// Font View's three modes (Glyphs 4): grid, detail, list.
 /// How the font overview presents the glyph set.
+///
+/// Grid, detail, and list are Font View's three modes in Glyphs 4.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum FontViewMode {
     /// The classic grid of glyph cells.
     Grid,
-    /// The detail grid: info columns beside every cell (Glyphs 4).
+    /// The detail grid: info columns beside every cell.
     Detail,
     /// The property table: one row per glyph.
     List,
-    /// The positional-forms matrix: Arabic review, isol/init/
-    /// medi/fina as columns per base letter.
+    /// The positional-forms matrix for Arabic review: isol, init,
+    /// medi, and fina as columns per base letter.
     Matrix,
 }
 
-/// Built-in sample strings (View > Next Sample String): spacing
-/// control strings and kern words, cycled around the open glyph.
+/// Built-in sample strings: spacing control strings and kern words.
+/// View > Next Sample String cycles them around the open glyph.
 pub(crate) const SAMPLE_STRINGS: &[&str] = &[
     "HHOHOHOO",
     "nnonoonoo",
@@ -113,13 +114,14 @@ pub(crate) enum Drag {
         /// Every point's position when the gesture began, keyed by
         /// `(contour, point)`.
         originals: HashMap<(usize, usize), (f64, f64)>,
-        /// Selected anchors travel with the points (web moves points
-        /// and anchors on one delta): index and start position each.
+        /// Index and start position of each selected anchor.
+        /// Anchors travel with the points on the same delta.
         anchor: Vec<(usize, (f64, f64))>,
     },
     /// Manual kerning drag in the text buffer (engine session).
     TextKern,
-    /// Alt-drag pans the viewport (select tool). Window-space anchor.
+    /// Panning the viewport by alt-drag with the select tool.
+    /// The anchor is in window space.
     Pan {
         /// The last pointer position, in window space.
         last: (f64, f64),
@@ -138,8 +140,8 @@ pub(crate) enum Drag {
     },
     /// Free transform from the selection bounding box: a handle
     /// scales about the opposite handle, the ring outside a corner
-    /// rotates about the box centre. Shift constrains (proportional
-    /// scale, 15-degree rotation steps).
+    /// rotates about the box centre. Shift constrains: proportional
+    /// scale, 15-degree rotation steps.
     FreeTransform {
         /// The fixed point of the gesture, in design space.
         anchor: (f64, f64),
@@ -219,10 +221,9 @@ pub(crate) enum Drag {
     },
 }
 
-/// Editor viewport and interaction state, on the shared
-/// `runebender_core` viewport (design Y-up ↔ screen Y-down).
-/// A right-click context menu over the editor canvas (web
-/// contourContextMenu).
+/// A right-click context menu over the editor canvas.
+///
+/// This is `contourContextMenu` in the web editor.
 pub(crate) struct ContextMenu {
     /// Position inside the canvas, in canvas-local pixels.
     pub(crate) at: Point<gpui::Pixels>,
@@ -274,8 +275,8 @@ pub(crate) struct EditorState {
     pub(crate) sidebearing_hover: Option<bool>,
     /// Guide under the cursor: (local, index).
     pub(crate) guide_hover: Option<(bool, usize)>,
-    /// Locked nodes (session-scoped): unselectable and undraggable
-    /// until unlocked — Glyphs' node locking.
+    /// Locked nodes, session-scoped: unselectable and undraggable
+    /// until unlocked. This is node locking in Glyphs.
     pub(crate) locked_points: HashSet<(usize, usize)>,
     /// Mouse position in window coords, for pen previews.
     pub(crate) pointer: Option<Point<gpui::Pixels>>,
@@ -294,8 +295,8 @@ pub(crate) struct EditorState {
     /// The selected points, as `(contour, point)` indices.
     pub(crate) selected: HashSet<(usize, usize)>,
     /// Selected anchors, in the order they were picked. A selection
-    /// may hold points and anchors at once (web keeps both in one
-    /// selection); the last one is the "primary" the panels read.
+    /// may hold points and anchors at once; the last anchor picked
+    /// is the primary the panels read.
     pub(crate) selected_anchors: Vec<usize>,
     /// Last cursor position in design space (for A = add anchor).
     pub(crate) cursor: (f64, f64),
@@ -345,11 +346,11 @@ impl EditorState {
         }
     }
 
-    /// design → local pixels, in the active sort's glyph space.
-    /// When the text tool has other sorts in the buffer, the open
-    /// glyph sits at its layout position; the offset keeps every
-    /// tool (points, pen, shapes, marquee) working in glyph-local
-    /// coordinates.
+    /// The design-to-local-pixels transform, in the active sort's
+    /// glyph space. When the text tool has other sorts in the
+    /// buffer, the open glyph sits at its layout position; the
+    /// offset keeps every tool (points, pen, shapes, marquee)
+    /// working in glyph-local coordinates.
     pub(crate) fn transform(&self) -> Affine {
         self.viewport.affine() * Affine::translate(self.sort_offset)
     }
@@ -359,7 +360,7 @@ impl EditorState {
         self.viewport.zoom
     }
 
-    /// window position → local canvas pixels
+    /// Converts a window position to local canvas pixels.
     pub(crate) fn window_to_local(&self, pos: Point<gpui::Pixels>) -> kurbo::Point {
         let origin = self.bounds.lock().unwrap().origin;
         let lx: f32 = (pos.x - origin.x).into();
@@ -367,7 +368,7 @@ impl EditorState {
         kurbo::Point::new(lx as f64, ly as f64)
     }
 
-    /// window position → design coordinates
+    /// Converts a window position to design coordinates.
     pub(crate) fn window_to_design(&self, pos: Point<gpui::Pixels>) -> (f64, f64) {
         let p = self.viewport.screen_to_design(self.window_to_local(pos));
         (p.x - self.sort_offset.0, p.y - self.sort_offset.1)
@@ -398,7 +399,7 @@ pub(crate) enum Mode {
 }
 
 /// The category rows, in web order. Labels double as the keys for
-/// core's category_subfilters.
+/// core's `category_subfilters`.
 pub(crate) const SIDEBAR_CATEGORIES: [(runebender_core::analysis::category::GlyphCategory, &str);
     8] = {
     use runebender_core::analysis::category::GlyphCategory as GC;
@@ -414,7 +415,8 @@ pub(crate) const SIDEBAR_CATEGORIES: [(runebender_core::analysis::category::Glyp
     ]
 };
 
-/// What the sidebar has selected (web GlyphSidebarFilter).
+/// What the sidebar has selected. This is `GlyphSidebarFilter` in
+/// the web editor.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum SidebarFilter {
     /// No filter: every glyph.
@@ -458,11 +460,13 @@ pub(crate) struct SidebarCounts {
     pub(crate) saved: Vec<usize>,
 }
 
-/// One edit tab: the open glyph (by name, so it survives renames
-/// and master switches), plus the parked editor state and text
-/// buffer. The ACTIVE tab's live state lives in `Workspace::editor`
-/// and `edit_buffer`; its slot here is stale until the next switch
-/// parks it back.
+/// One edit tab: the open glyph, plus the parked editor state and
+/// text buffer.
+///
+/// The glyph is stored by name, so the tab survives renames and
+/// master switches. The active tab's live state lives in
+/// `Workspace::editor` and `edit_buffer`; its slot here is stale
+/// until the next switch parks it back.
 pub(crate) struct EditSession {
     /// The open glyph, by name.
     pub(crate) glyph_name: String,
@@ -510,22 +514,21 @@ pub(crate) struct Workspace {
     pub(crate) mode: Mode,
     /// The active session's live editor state.
     pub(crate) editor: EditorState,
-    /// The editor's text buffer (the text tool): the open glyph is
-    /// the active sort; other sorts render as filled context around
-    /// it, exactly the web and xilem model.
+    /// The editor's text buffer, owned by the text tool. The open
+    /// glyph is the active sort; other sorts render as filled
+    /// context around it, the model the web and xilem editors share.
     pub(crate) edit_buffer: runebender_core::text::buffer::TextBuffer,
-    /// Keys route to the preview buffer (click the strip to focus,
-    /// Escape to leave).
-    /// Folded sidebar sections (by title).
+    /// Folded sidebar sections, keyed by title.
     pub(crate) collapsed_sections: HashSet<&'static str>,
     /// Masters drawn as dim reference underlays in the editor
     /// (the layer rows' eye toggles).
     pub(crate) reference_layers: HashSet<usize>,
     /// Edit > Show All Masters: every master overlaid in the edit
-    /// view, any master's node clickable (the click switches to that
-    /// master with the node selected).
+    /// view. Clicking any master's node switches to that master
+    /// with the node selected.
     pub(crate) show_all_masters: bool,
-    /// Left sidebar hidden (header toggle, like the Glyphs one).
+    /// The left sidebar is hidden. The header button toggles it,
+    /// as in Glyphs.
     pub(crate) left_collapsed: bool,
     /// In-window menu bar for platforms without a native one
     /// (Windows, Linux, the browser).
@@ -549,8 +552,8 @@ pub(crate) struct Workspace {
     pub(crate) hoi_live: Option<((usize, usize), (f64, f64))>,
     /// The shaping inspector's focused cluster (carrier sort index).
     pub(crate) shaping_focus: Option<usize>,
-    /// Ghost every attachable mark on the open glyph's anchors
-    /// (Glyphs' mark cloud).
+    /// Ghost every attachable mark on the open glyph's anchors.
+    /// This is the mark cloud in Glyphs.
     pub(crate) show_mark_cloud: bool,
     /// Preview feature overrides: tag → forced on/off. Absent tags
     /// keep the shaper's defaults.
@@ -568,14 +571,16 @@ pub(crate) struct Workspace {
     pub(crate) features_status: Option<SharedString>,
     /// The open right-click menu over the canvas, if any.
     pub(crate) context_menu: Option<ContextMenu>,
-    /// The Selection panel's 9-point reference for numeric move and
-    /// scale (web coordinate quadrant).
+    /// The Selection panel's 9-point reference for numeric move
+    /// and scale. This is the coordinate quadrant in the web
+    /// editor.
     pub(crate) coord_quadrant: runebender_core::outline::path::Quadrant,
-    /// Curve overlays (web CurvePanel).
+    /// Curve overlays. This is `CurvePanel` in the web editor.
     pub(crate) curve_comb: bool,
     /// Mark curvature continuity where curve segments join.
     pub(crate) curve_continuity: bool,
-    /// Measure-tool HUD layers (web SelectPanel / MeasureOptions).
+    /// Measure-tool HUD layers. These are `SelectPanel`'s
+    /// `MeasureOptions` in the web editor.
     pub(crate) measure_opts: MeasureOpts,
     /// Show the UFO background layer as a quiet outline.
     pub(crate) show_background: bool,
@@ -614,7 +619,8 @@ pub(crate) struct Workspace {
 
 /// The glyph grid's view state: cell size, scroll, order, selection.
 pub(crate) struct GridState {
-    /// Grid sort: false = by name, true = by unicode (web default).
+    /// Grid sort: false = by name, true = by unicode. Unicode is
+    /// the web editor's default.
     pub(crate) sort_unicode: bool,
     /// Grid cell size in px, driven by the bottom bar's zoom slider.
     /// This is the *target*: cells stretch from it to fill the row.
@@ -637,8 +643,7 @@ pub(crate) struct GridState {
     /// Multi-selected glyph names (grid cmd/shift-click); `selected`
     /// stays the primary.
     pub(crate) multi_selected: HashSet<String>,
-    /// Font view mode: the classic grid, the Glyphs 4 detail grid
-    /// (info beside every glyph), or the property-table list.
+    /// The font view mode: grid, detail, list, or matrix.
     pub(crate) view_mode: FontViewMode,
 }
 
@@ -683,9 +688,7 @@ pub(crate) struct SidebarState {
 
 /// The preview strip's state.
 pub(crate) struct PreviewState {
-    /// Text preview strip under the editor: whether it is showing, its
-    /// type size in pixels, how far it is blurred (a spacing check),
-    /// whether the colors are flipped, and how the line is aligned.
+    /// The text preview strip under the editor is showing.
     pub(crate) visible: bool,
     /// How far the strip is blurred, in pixels; 0 draws it sharp.
     pub(crate) blur: f32,
@@ -773,10 +776,9 @@ pub(crate) struct InputFields {
     pub(crate) anchor_name: gpui::Entity<widgets::input::InputState>,
 }
 
-/// The editor's Width / LSB / RSB / X / Y fields.
-/// Which measurement-HUD layers the Measure tool draws (web
-/// MeasureOptions). Every layer off returns the plain editor; the
-/// panel is purely additive.
+/// Which measurement-HUD layers the Measure tool draws. Every
+/// layer off returns the plain editor; the panel is purely
+/// additive. This is `MeasureOptions` in the web editor.
 #[derive(Clone, Copy)]
 pub(crate) struct MeasureOpts {
     /// Tint outline segments, curves, and handles by popcount.
@@ -857,11 +859,13 @@ pub(crate) struct GlyphInputs {
     pub(crate) group_l: gpui::Entity<widgets::input::InputState>,
     /// The right kerning group (kern2).
     pub(crate) group_r: gpui::Entity<widgets::input::InputState>,
-    /// Free-text glyph note (UFO glif note element), like Glyphs'
-    /// note field; shows as a tooltip in its font view.
+    /// Free-text glyph note, the UFO glif `note` element. This is
+    /// the note field in Glyphs, which shows it as a tooltip in its
+    /// font view.
     pub(crate) note: gpui::Entity<widgets::input::InputState>,
-    /// Shape-switch point: Enter creates the .bold alternate and the
-    /// designspace rule at this axis value (bracket layer).
+    /// Shape-switch point: Enter creates the `.bold` alternate and
+    /// the designspace rule at this axis value. This is a bracket
+    /// layer in Glyphs.
     pub(crate) switch_at: gpui::Entity<widgets::input::InputState>,
     /// Metrics keys ("=n", "=|o", "=n+10"): linked sidebearings,
     /// synced across every master.
@@ -1066,9 +1070,10 @@ pub(crate) const GRID_PAD_SM: f32 = 6.0;
 /// metric edges, and components.
 pub(crate) const HIT_RADIUS_PX: f64 = 10.0;
 
-/// Points are easier to grab than segments: the web select tool gives
-/// them a wider radius (SELECT_POINT_HIT_DISTANCE) than the 10px it
-/// uses for segments, metric edges and components.
+/// Hit-test radius in screen pixels for points. Points are easier
+/// to grab than segments, so they get a wider radius than
+/// `HIT_RADIUS_PX`. This is `SELECT_POINT_HIT_DISTANCE` in the web
+/// editor.
 pub(crate) const POINT_HIT_RADIUS_PX: f64 = 16.0;
 
 /// The config file's contents, read once before the window opens.

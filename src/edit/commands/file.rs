@@ -42,7 +42,7 @@ impl Workspace {
         self.open_editor(glyph);
     }
 
-    /// File → New Font: an Untitled GF-template UFO, in memory until
+    /// File > New Font: an Untitled GF-template UFO, in memory until
     /// Save As picks a destination.
     pub(crate) fn command_new_font(&mut self) {
         // No std::env::temp_dir here: it panics on wasm. The path is
@@ -188,13 +188,13 @@ impl Workspace {
         }
     }
 
-    /// File > Export. Dirty masters are saved first because the
-    /// build reads from disk. With a Google Fonts build script above
-    /// the source, that script is the export — the repo pipeline is
-    /// the compatibility authority. Otherwise fontc compiles the
-    /// source directly, with a gftools-fix-font pass when the tool
-    /// can be found. Runs in the background; reports through the
-    /// status note.
+    /// Export the font (File > Export). Dirty masters are saved
+    /// first because the build reads from disk. With a Google Fonts
+    /// build script above the source, that script is the export: the
+    /// repo pipeline is the compatibility authority. Otherwise fontc
+    /// compiles the source directly, with a gftools-fix-font pass
+    /// when the tool can be found. Runs in the background; reports
+    /// through the status note.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn command_export(&mut self, cx: &mut Context<Self>) {
         if self

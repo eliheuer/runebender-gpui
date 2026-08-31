@@ -132,8 +132,8 @@ impl Workspace {
         )
     }
 
-    /// Right tile: details of the selected glyph, like
-    /// runebender-web's GlyphInfoSidebar.
+    /// Right tile: details of the selected glyph. This is
+    /// `GlyphInfoSidebar` in runebender-web.
     pub(crate) fn glyph_info_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
         // Read-only facts read as one line each, label left and value
         // right. A stack of big accent-green headings for one-word
@@ -345,11 +345,11 @@ impl Workspace {
         self.section(cx, "Glyph", panel)
     }
 
-    /// Colors panel: mark-color swatches for the selected glyph, like
-    /// the web grid's bottom-right panel.
     /// Right-panel live preview of the selected glyph: outline plus
-    /// control points, the way runebender-web fills the space between
-    /// the info sections and the colors.
+    /// control points.
+    ///
+    /// It fills the space between the info sections and the colors,
+    /// the way runebender-web does.
     pub(crate) fn glyph_preview_panel(&self) -> gpui::Div {
         let data = self.selected.and_then(|index| {
             let font = self.font()?;

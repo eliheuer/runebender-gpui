@@ -23,10 +23,12 @@ use runebender_core::document::project::Master;
 use runebender_core::formats::color_font::read_color_mapping;
 use runebender_core::formats::color_font::read_color_palette;
 impl Workspace {
-    /// The floating info panel Glyphs puts at the bottom of the edit
-    /// view: the glyph's name and codepoint, its sidebearings and
-    /// width, its kerning groups, and — while something is selected —
-    /// the selection's position and size.
+    /// The floating info panel at the bottom of the edit view.
+    ///
+    /// It shows the glyph's name and codepoint, its sidebearings and
+    /// width, and its kerning groups. While something is selected, it
+    /// also shows the selection's position and size. Glyphs puts the
+    /// same panel at the bottom of its edit view.
     pub(crate) fn editor_info_panel(
         &self,
         index: usize,
@@ -202,9 +204,12 @@ impl Workspace {
     }
 
     /// The Features section (grid mode): the active master's
-    /// features.fea in a plain editor, Apply and Revert below, and
-    /// the compile verdict. Glyphs' Features tab, one file at a time
-    /// (UFO keeps prefixes, classes, and features in features.fea).
+    /// `features.fea` in a plain editor, Apply and Revert below, and
+    /// the compile verdict.
+    ///
+    /// The editor holds one file at a time: UFO keeps prefixes,
+    /// classes, and features together in `features.fea`. This is the
+    /// Features tab in Glyphs.
     pub(crate) fn features_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         if self.project.is_none() {
             return self.section(cx, "Features", div());
@@ -275,11 +280,12 @@ impl Workspace {
         self.section(cx, "Features", body)
     }
 
-    /// Groups section (grid mode): the kerning groups as shelves —
-    /// members as chips with removal, and '+ sel' adds the grid
-    /// selection (the Glyphs 4 visual groups shelf, click-to-assign
-    /// instead of drag for now). The field creates a group from the
-    /// selection: 'o' for kern1, '|o' for kern2.
+    /// Groups section (grid mode): the kerning groups as shelves.
+    ///
+    /// Members show as chips with removal, and '+ sel' adds the grid
+    /// selection. The field creates a group from the selection: 'o'
+    /// for kern1, '|o' for kern2. This is the Glyphs 4 visual groups
+    /// shelf, click-to-assign instead of drag for now.
     pub(crate) fn groups_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let Some(font) = self.font() else {
             return self.section(cx, "Groups", div());
@@ -387,8 +393,10 @@ impl Workspace {
 
     /// Kerning section (grid mode): every pair on the active master,
     /// filtered by the search field, with an editor row that commits
-    /// on Enter. Glyphs keeps this in its kerning window; the drag
-    /// workflow in text mode stays the fast path.
+    /// on Enter.
+    ///
+    /// The drag workflow in text mode stays the fast path. Glyphs
+    /// keeps this list in its kerning window.
     pub(crate) fn kerning_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let Some(font) = self.font() else {
             return self.section(cx, "Kerning", div());
@@ -529,7 +537,9 @@ impl Workspace {
     }
 
     /// Color section: the CPAL palette, the layer mapping, and the
-    /// stacked-preview toggle (COLRv0 through the ufo2ft lib keys).
+    /// stacked-preview toggle.
+    ///
+    /// The color data is COLRv0, stored through the ufo2ft lib keys.
     pub(crate) fn color_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let Some(font) = self.font() else {
             return self.section(cx, "Color", div());
@@ -708,10 +718,12 @@ impl Workspace {
     }
 
     /// Compare section (grid mode): every master against the active
-    /// one — glyph count, structural incompatibilities, differing
+    /// one.
+    ///
+    /// It lists glyph count, structural incompatibilities, differing
     /// advances, kerning pair count, and the vertical metrics that
-    /// disagree. The Glyphs Compare Fonts window's job, inside one
-    /// project.
+    /// disagree. This is the Compare Fonts window's job in Glyphs,
+    /// inside one project.
     pub(crate) fn compare_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let Some(project) = self.project.as_ref() else {
             return self.section(cx, "Compare", div());
@@ -1195,10 +1207,11 @@ impl Workspace {
         self.section(cx, "Coordinates", body)
     }
 
-    /// Axis slider row (designspaces only).
     /// Axes section for a sidebar: one labeled slider per designspace
-    /// axis (the web/Glyphs place these in a pane, not a full-width
-    /// strip).
+    /// axis.
+    ///
+    /// The web editor and Glyphs place these in a pane rather than a
+    /// full-width strip.
     pub(crate) fn axes_section(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
         let project = self.project.as_ref()?;
         if self.axis_sliders.is_empty() {

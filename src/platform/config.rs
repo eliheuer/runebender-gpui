@@ -4,9 +4,9 @@
 //! The config file, read once at startup.
 //!
 //! `$XDG_CONFIG_HOME/runebender/config.toml`, or
-//! `~/.config/runebender/config.toml`. Everything in it is optional,
-//! and a file that is missing, unreadable or malformed is the same as
-//! no file: a broken config should not stop you opening a font.
+//! `~/.config/runebender/config.toml`. Everything in it is optional.
+//! A file that is missing, unreadable or malformed is the same as no
+//! file: a broken config should not stop you opening a font.
 //!
 //! Precedence is environment, then file, then the built-in default.
 //! A variable set for one run has to win over a setting meant for
@@ -16,7 +16,7 @@
 //!
 //! Omarchy keeps the active theme at
 //! `~/.config/omarchy/current/theme/`, a symlink its theme switcher
-//! repoints, and lets you template unsupported applications from
+//! repoints. It templates unsupported applications from
 //! `~/.config/omarchy/themed/`. That is the seam: a template there
 //! writes this file, and Runebender needs to know nothing about
 //! Omarchy. The same trick works for any system that can write a

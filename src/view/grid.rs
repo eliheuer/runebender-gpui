@@ -17,11 +17,12 @@ use crate::workspace::GridFit;
 use crate::workspace::SidebarFilter;
 use kurbo::Affine;
 impl Workspace {
-    /// Solve the grid's cell size against the measured viewport, the
-    /// way the web editor does: the zoom slider sets a *target* size,
-    /// then columns are chosen to fill the width exactly and the row
-    /// height divides the visible height evenly, so no row is left
-    /// sliced in half at the bottom edge.
+    /// Solve the grid's cell size against the measured viewport.
+    ///
+    /// The zoom slider sets a *target* size. Columns are then chosen
+    /// to fill the width exactly, and the row height divides the
+    /// visible height evenly, so no row is left sliced in half at the
+    /// bottom edge. This is how the web editor sizes its grid.
     pub(crate) fn grid_cell_metrics(&self) -> GridFit {
         // Detail mode needs room for the info lines: the cell floor
         // rises, whatever the zoom slider says.
@@ -39,10 +40,11 @@ impl Workspace {
         Self::solve_grid(self.sidebar.viewport, self.sidebar.cell_size, GRID_PAD_SM)
     }
 
-    /// Scroll a row-quantized grid by a wheel delta. The offset is
-    /// kept in whole rows, so a row is never left sliced at the top or
-    /// bottom edge — the web got this from `scroll-snap-type`, which
-    /// gpui has no equivalent for.
+    /// Scroll a row-quantized grid by a wheel delta.
+    ///
+    /// The offset is kept in whole rows, so a row is never left
+    /// sliced at the top or bottom edge. The web editor got this from
+    /// `scroll-snap-type`, which gpui has no equivalent for.
     pub(crate) fn scroll_grid_rows(
         offset: &mut usize,
         delta_y: f32,
@@ -256,10 +258,10 @@ pub(crate) struct PlacedCell {
 /// and rows stack by the cell height.
 ///
 /// `viewport` has to be the box the cells are actually being laid out
-/// in, measured this frame — not the probe's stored size. The probe
-/// lags the layout by a frame (longer, if the browser coalesces the
-/// redraw), and a viewport a column narrower than the real one puts
-/// every outline a column away from its cell.
+/// in, measured this frame, not the probe's stored size. The probe
+/// lags the layout by a frame, longer if the browser coalesces the
+/// redraw. A viewport a column narrower than the real one puts every
+/// outline a column away from its cell.
 pub(crate) fn place_cells(
     packed: &[Vec<(usize, usize)>],
     fit: GridFit,
@@ -296,11 +298,12 @@ pub(crate) fn place_cells(
 }
 
 /// Where a glyph's outline sits inside a cell, as an affine from
-/// design space to the cell's local pixels. Ported from the web's
-/// grid thumbnail box (`glyph_svg.rs`): one vertical scale for every
-/// glyph so a period stays a dot and an M stays tall, each centred on
-/// its own ink, and the em window grows rather than cropping ink that
-/// runs past it.
+/// design space to the cell's local pixels.
+///
+/// One vertical scale serves every glyph, so a period stays a dot and
+/// an M stays tall. Each glyph is centred on its own ink. The em
+/// window grows rather than cropping ink that runs past it. This is a
+/// port of the web editor's grid thumbnail box in `glyph_svg.rs`.
 pub(crate) fn cell_glyph_transform(
     ink: kurbo::Rect,
     empty: bool,
@@ -331,8 +334,10 @@ pub(crate) fn cell_glyph_transform(
 }
 
 /// A cell's label block: whether it shows at all, its type size, and
-/// the height it takes. Mirrors the web's cell-labels box — 8px sides
-/// and bottom, a 2px gap, both lines the same size.
+/// the height it takes.
+///
+/// Mirrors the web editor's cell-labels box: 8px sides and bottom, a
+/// 2px gap, both lines the same size.
 pub(crate) fn cell_label_metrics(cell_w: f32) -> CellLabels {
     // gpui's default line box is much taller than the type size, which
     // clipped the first line and pushed the two apart. The line height
@@ -405,9 +410,10 @@ pub(crate) struct CellLabels {
     pub(crate) height: f32,
 }
 
-/// How many columns a glyph should take, ported from the web's
-/// `computeGlyphColumnSpan`: a long name or a wide advance gets more
-/// room instead of being cut off.
+/// How many columns a glyph should take.
+///
+/// A long name or a wide advance gets more room instead of being cut
+/// off. This is a port of the web editor's `computeGlyphColumnSpan`.
 pub(crate) fn glyph_column_span(name: &str, advance: f64, upm: f64) -> usize {
     let name_span = match name.chars().count() {
         0..=14 => 1,
@@ -427,10 +433,11 @@ pub(crate) fn glyph_column_span(name: &str, advance: f64, upm: f64) -> usize {
     name_span.max(width_span)
 }
 
-/// Pack spanned cells into rows that each fill the width exactly: when
-/// the next cell will not fit, the last one on the row grows into the
-/// gap (the web's `gridGlyphItems`). Returns one vector per row of
-/// (item index, span).
+/// Pack spanned cells into rows that each fill the width exactly.
+///
+/// When the next cell will not fit, the last one on the row grows
+/// into the gap. This is the web editor's `gridGlyphItems`. Returns
+/// one vector per row of (item index, span).
 pub(crate) fn pack_spans(spans: &[(usize, usize)], cols: usize) -> Vec<Vec<(usize, usize)>> {
     let cols = cols.max(1);
     let mut rows: Vec<Vec<(usize, usize)>> = Vec::new();

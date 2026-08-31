@@ -21,10 +21,12 @@ use runebender_core::document::project::Project;
 #[cfg(target_family = "wasm")]
 use std::collections::HashMap;
 impl Workspace {
-    /// The repo's own Google Fonts build script above the source
-    /// (build-fontc.sh preferred, then build.sh), with the directory
-    /// to run it from. A repo pipeline carries the gftools fixes,
-    /// STAT, and statics that a raw compile does not.
+    /// The repo's own Google Fonts build script above the source,
+    /// with the directory to run it from.
+    ///
+    /// `build-fontc.sh` is preferred, then `build.sh`. A repo
+    /// pipeline carries the gftools fixes, STAT, and statics that a
+    /// raw compile does not.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn gf_build_script(source: &std::path::Path) -> Option<(PathBuf, PathBuf)> {
         let mut dir = source.parent()?;
@@ -65,10 +67,12 @@ impl Workspace {
             .unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
     }
 
-    /// Watch every master's UFO directory; external changes reload
-    /// the affected masters (in-memory edits are never clobbered:
-    /// dirty masters skip the reload with a status note). Our own
-    /// saves are suppressed via the last_save timestamp.
+    /// Watch every master's UFO directory.
+    ///
+    /// External changes reload the affected masters. In-memory edits
+    /// are never clobbered: dirty masters skip the reload with a
+    /// status note. Our own saves are suppressed via the `last_save`
+    /// timestamp.
     #[cfg(target_family = "wasm")]
     pub(crate) fn start_watching(&mut self, _cx: &mut Context<Self>) {
         // No filesystem on the web: live reload will ride the host
@@ -170,7 +174,7 @@ impl Workspace {
         });
     }
 
-    /// Connect to the workspace server named by ?server= and load
+    /// Connect to the workspace server named by `?server=` and load
     /// its fonts (web builds).
     #[cfg(target_family = "wasm")]
     pub(crate) fn connect_web_host(&mut self, base: String, cx: &mut Context<Self>) {
@@ -215,7 +219,8 @@ impl Workspace {
     }
 
     /// Save dirty masters to the workspace server (web builds):
-    /// modified glifs and kerning, each PUT with its If-Match ETag.
+    /// modified glifs and kerning, each PUT with its `If-Match`
+    /// ETag.
     #[cfg(target_family = "wasm")]
     pub(crate) fn save_to_web_host(&mut self, cx: &mut Context<Self>) {
         let Some(host) = self.web_host.as_ref() else {

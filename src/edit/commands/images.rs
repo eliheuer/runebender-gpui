@@ -8,8 +8,8 @@ use crate::Workspace;
 use gpui::Context;
 use runebender_core::formats::svg::svg_to_contours;
 impl Workspace {
-    /// Glyph → Trace Image…: pick an image, autotrace it through
-    /// img2bez (the web editor's tracer), and replace the current
+    /// Glyph > Trace Image…: pick an image, autotrace it through
+    /// img2bez, the web editor's tracer, and replace the current
     /// glyph's contours with the result. Undoable.
     pub(crate) fn command_trace_image(&mut self, cx: &mut Context<Self>) {
         let Mode::Editor(index) = self.mode else {

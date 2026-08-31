@@ -3,26 +3,28 @@
 
 //! A real blur for the text preview.
 //!
-//! Blurring type is how you check spacing: out-of-focus text turns the
-//! rhythm of the line into light and dark bands, and a loose or tight
+//! Blurring type is how you check spacing. Out-of-focus text turns
+//! the rhythm of the line into light and dark bands. A loose or tight
 //! join shows up as a gap or a clot. That only works with an actual
 //! blur. gpui blurs box shadows and nothing else, so the line is
 //! rasterized here, blurred, and handed back as an image.
 //!
-//! The blur is three box passes, which is the standard cheap stand-in
-//! for a gaussian: by the third pass the kernel is a piecewise-cubic
-//! close enough to one that the difference is invisible at these radii.
+//! The blur is three box passes, the standard cheap stand-in for a
+//! gaussian. By the third pass the kernel is a piecewise cubic close
+//! enough to a gaussian that the difference is invisible at these
+//! radii.
 
 use std::sync::Arc;
 
 use gpui::{RenderImage, Rgba};
 use kurbo::{BezPath, PathEl};
 
-/// Rasterize `path` (already in the pane's own pixel coordinates) over
-/// `ground`, blur it by `radius` logical pixels, and return an image
-/// ready for `paint_image`. `scale` is device pixels per logical pixel.
+/// Rasterize `path` over `ground`, blur it, and return an image ready
+/// for `paint_image`.
 ///
-/// Returns None for a degenerate size or a path with nothing in it.
+/// `path` is already in the pane's own pixel coordinates. `radius` is
+/// in logical pixels. `scale` is device pixels per logical pixel.
+/// Returns `None` for a degenerate size or a path with nothing in it.
 pub fn blurred_line(
     path: &BezPath,
     width: f32,

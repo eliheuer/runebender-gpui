@@ -89,15 +89,11 @@ use crate::ZoomToFit;
 use crate::view::theme as t;
 use crate::workspace::MEASURE_MENU;
 
-/// The application menu, used three ways: the native macOS menu bar,
-/// the stored menu Windows/Linux expose to `get_menus`, and the
-/// in-window menu bar drawn on every platform that has no native bar,
-/// the browser included.
-/// The action that switches to a theme. `None` means the token file
-/// gained a theme that nothing here can reach: a fallback arm would
-/// silently hand it Dark's action and the menu item would do the wrong
-/// thing, so callers are made to notice instead.
-/// The action that switches to the theme named `id`. `None` for a name no arm handles, so a new theme cannot silently land on the wrong action.
+/// The action that switches to the theme named `id`.
+///
+/// Returns `None` when the token file gained a theme that no arm
+/// here handles. A fallback arm would silently hand a new theme
+/// Dark's action, so callers are made to notice instead.
 pub(crate) fn theme_action(id: &str) -> Option<Box<dyn gpui::Action>> {
     Some(match id {
         "dark" => Box::new(SetThemeDark),

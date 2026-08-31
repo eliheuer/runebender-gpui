@@ -12,16 +12,15 @@ use crate::PathBuf;
 use crate::Workspace;
 use runebender_core::outline::effects::bolden_contours;
 impl Workspace {
-    /// Read a model directory and cache the weights.
     /// Where a model is looked for when nobody points at one.
     ///
-    /// `$RUNEBENDER_MODELS`, then the config file, then
-    /// `~/.runebender/models`. The variable wins because a setting for
-    /// one run has to beat a setting meant for every run.
+    /// `$RUNEBENDER_MODELS` wins, then the config file, then
+    /// `~/.runebender/models`. The variable wins because a setting
+    /// for one run has to beat a setting meant for every run.
     ///
-    /// `$RUNEBENDER_MODELS`, else `~/.runebender/models`. A model is a
-    /// directory holding `config.json`, so dropping one in is the whole
-    /// installation step: no rebuild, no account, no file picker.
+    /// A model is a directory holding `config.json`, so dropping one
+    /// in is the whole installation step: no rebuild, no account, no
+    /// file picker.
     pub(crate) fn models_dir() -> Option<PathBuf> {
         if let Some(dir) = std::env::var_os("RUNEBENDER_MODELS") {
             return Some(PathBuf::from(dir));
@@ -78,7 +77,6 @@ impl Workspace {
         }
     }
 
-    /// Run the model over the open glyph and install what it predicts.
     /// How much weight the other master adds, learned from glyphs
     /// drawn in both, and the height it was measured at.
     ///
@@ -89,8 +87,8 @@ impl Workspace {
     /// caps and lowercase are drawn to different weights and a single
     /// target would flatten the difference.
     ///
-    /// `None` with one master, or when none of the reference glyphs is
-    /// drawn in both yet.
+    /// Returns `None` with one master, or when none of the reference
+    /// glyphs is drawn in both yet.
     pub(crate) fn model_weight_delta(&self) -> Option<(f64, f64)> {
         let project = self.project.as_ref()?;
         if project.masters.len() < 2 {

@@ -26,9 +26,9 @@ use kurbo::Affine;
 use runebender_core::formats::lib_keys::read_hoi_intermediates;
 use std::collections::HashMap;
 
-/// The nearest master-pair point to the pointer: distance, point id,
-/// and its position in each master.
-/// A trajectory-knob hit: distance to the cursor, the point's (contour, index), and the point's position in each end master.
+/// The nearest master-pair point to the pointer: the distance, the
+/// point id as `(contour, index)`, and the point's position in each
+/// end master.
 type NearestPair = (f64, (usize, usize), (f64, f64), (f64, f64));
 
 impl Workspace {
@@ -1108,10 +1108,9 @@ impl Workspace {
         true
     }
 
-    /// Finish an open pen contour without closing it.
-    /// Hyper pen click: extend the open hyperbezier contour
-    /// (shift-click adds a corner point), close it by clicking its
-    /// first point, or start a new one.
+    /// Hyper pen click: extend the open hyperbezier contour, close
+    /// it by clicking its first point, or start a new one.
+    /// Shift-click adds a corner point.
     pub(crate) fn hyper_pen_mouse_down(
         &mut self,
         index: usize,

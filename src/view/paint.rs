@@ -21,10 +21,11 @@ use kurbo::Affine;
 use kurbo::BezPath;
 use kurbo::PathEl;
 
-/// Convert a kurbo path (font units, Y-up) into a gpui path mapped
-/// into `bounds` (pixels, Y-down) with the given design→local affine.
-/// Builds a gpui path from `outline` through `transform`, offset by
-/// `origin`. Returns `None` for an empty outline or a failed build.
+/// Build a gpui path from `outline` through `transform`, offset by
+/// `origin`.
+///
+/// The affine maps design space (font units, Y-up) into local pixels
+/// (Y-down). Returns `None` for an empty outline or a failed build.
 pub(crate) fn build_path(
     outline: &BezPath,
     transform: Affine,
@@ -50,8 +51,10 @@ pub(crate) fn build_path(
 }
 
 /// A shared toolbar icon painted to fit its element, centered with
-/// padding. Icon geometry comes from runebender-core (the same icon
-/// UFO the web toolbar uses).
+/// padding.
+///
+/// Icon geometry comes from runebender-core, from the same icon UFO
+/// the web toolbar uses.
 pub(crate) fn icon_svg(name: &'static str, color: gpui::Rgba) -> impl IntoElement {
     canvas(
         move |bounds, _, _| bounds,
@@ -81,7 +84,7 @@ pub(crate) fn icon_svg(name: &'static str, color: gpui::Rgba) -> impl IntoElemen
     .size_full()
 }
 
-/// Comparable key for a segment (PathSeg has no Eq).
+/// Comparable key for a segment. `PathSeg` has no `Eq`.
 pub(crate) fn seg_key(seg: kurbo::PathSeg) -> [u64; 8] {
     let p = |pt: kurbo::Point| [pt.x.to_bits(), pt.y.to_bits()];
     match seg {
@@ -109,10 +112,12 @@ pub(crate) fn build_fill_path(
     build_path(outline, transform, origin, PathBuilder::fill())
 }
 
-/// A flat slider: a thin, evenly colored track (the library's own
-/// styling tints the unfilled side with the bar color, which reads as
-/// a dark stripe on one side) and a ring thumb that fills solid while
-/// it is grabbed, instead of growing a translucent halo.
+/// A flat slider: a thin, evenly colored track and a ring thumb.
+///
+/// The library's own styling tints the unfilled side of the track
+/// with the bar color, which reads as a dark stripe on one side; this
+/// track is one color. The thumb fills solid while it is grabbed
+/// instead of growing a translucent halo.
 pub(crate) fn flat_slider(
     state: &gpui::Entity<widgets::slider::SliderState>,
     cx: &gpui::App,
@@ -233,9 +238,11 @@ pub(crate) fn eye_icon(color: gpui::Rgba, open: bool) -> impl IntoElement {
     .h(px(16.0))
 }
 
-/// A drawn plus, minus or cross. Set as text these sit visibly
-/// off-centre — a "×" carries its own side bearings and a "−" rides
-/// above the middle — so they are stroked instead.
+/// A drawn plus, minus or cross.
+///
+/// Set as text these sit visibly off-centre: a "×" carries its own
+/// side bearings and a "−" rides above the middle. So they are
+/// stroked instead.
 pub(crate) fn glyph_free_icon(color: gpui::Rgba, kind: IconMark) -> impl IntoElement {
     canvas(
         move |bounds, _, _| bounds,
@@ -318,9 +325,11 @@ pub(crate) fn invert_icon(color: gpui::Rgba) -> impl IntoElement {
 }
 
 /// Paint many subpaths as few draws without overflowing gpui's
-/// tessellator, which indexes vertices with a `u16`: merging a whole
+/// tessellator.
+///
+/// The tessellator indexes vertices with a `u16`. Merging a whole
 /// screen of glyph outlines into one path exceeds 65,535 vertices,
-/// `build` fails, and nothing is drawn at all. Batches are flushed
+/// `build` fails, and nothing is drawn at all. So batches are flushed
 /// every `CHUNK` subpaths, and a batch that still fails is halved
 /// until it builds.
 pub(crate) fn paint_batched(

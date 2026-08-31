@@ -33,10 +33,8 @@ use runebender_core::formats::lib_keys::read_saved_filters;
 use runebender_core::formats::lib_keys::write_saved_filters;
 use std::collections::{HashMap, HashSet};
 impl Workspace {
-    /// Left sidebar tile: search plus the category filter list,
-    /// like runebender-web's CategorySidebar.
-    /// All codepoints of a glyph in the active master (norad keeps
-    /// the full list; GlyphEntry only caches the first).
+    /// All codepoints of a glyph in the active master. norad keeps
+    /// the full list; `GlyphEntry` only caches the first.
     pub(crate) fn glyph_codepoints(font: &Master, name: &str) -> Vec<u32> {
         font.font
             .get_glyph(name)
@@ -267,10 +265,8 @@ impl Workspace {
         self.sidebar.matches = Some(matches);
     }
 
-    /// Does a glyph match the sidebar search, honoring scope, regex,
-    /// and case options (web glyphMatchesSidebarSearch)?
-    /// Evaluate a parsed predicate list against one glyph. Shared by
-    /// the search field and saved sidebar filters.
+    /// Evaluate a parsed predicate list against one glyph. Shared
+    /// by the search field and saved sidebar filters.
     pub(crate) fn glyph_matches_preds(
         font: &Master,
         name: &str,
@@ -321,7 +317,11 @@ impl Workspace {
         })
     }
 
-    /// Whether a glyph passes the sidebar search: predicate terms when the query parses as them, text search otherwise. An empty query matches everything.
+    /// Whether a glyph passes the sidebar search: predicate terms
+    /// when the query parses as them, text search otherwise.
+    /// The scope, regex, and case options apply. An empty query
+    /// matches everything. This is `glyphMatchesSidebarSearch` in
+    /// the web editor.
     pub(crate) fn search_matches(&self, name: &str, codepoint: Option<char>) -> bool {
         let query = self.sidebar.search_query.trim();
         if query.is_empty() {
@@ -437,8 +437,8 @@ impl Workspace {
         self.rebuild_sidebar_matches();
     }
 
-    /// A small disclosure triangle for expandable sidebar rows
-    /// (painted: IBM Plex has no triangle codepoints).
+    /// A small disclosure triangle for expandable sidebar rows.
+    /// Painted, because IBM Plex has no triangle codepoints.
     pub(crate) fn row_chevron(expanded: bool) -> impl IntoElement {
         canvas(
             move |bounds, _, _| bounds,
@@ -685,11 +685,10 @@ impl Workspace {
         list
     }
 
-    /// The glyph editor: metrics lines, stroked outline over a dim
-    /// fill, draggable control points, wheel pan, Cmd+wheel zoom.
     /// A flat docked sidebar section: small muted header with a
-    /// disclosure triangle, hairline divider below (Glyphs-style, no
-    /// floating container). Clicking the header folds the body.
+    /// disclosure triangle, hairline divider below, and no floating
+    /// container, in the Glyphs style. Clicking the header folds the
+    /// body.
     pub(crate) fn section(
         &self,
         cx: &mut Context<Self>,
@@ -865,8 +864,8 @@ impl Workspace {
             )
     }
 
-    /// Text direction control (text tool): LTR / RTL / Auto, like
-    /// the web editor's TextDirectionToolbar.
+    /// Text direction control for the text tool: LTR / RTL / Auto.
+    /// This is `TextDirectionToolbar` in the web editor.
     pub(crate) fn direction_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         use runebender_core::text::buffer::TextDirection;
         let auto = self.edit_buffer.direction_is_auto();

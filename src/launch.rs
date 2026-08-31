@@ -167,9 +167,10 @@ pub(crate) fn open_from_args() -> (Option<Project>, Option<SharedString>) {
     }
 }
 
-/// `runebender-gpui --fonts`: list the families gpui can resolve and
-/// which of them fall back. A family that shapes to nothing leaves
-/// the interface wordless, so this is the first check when it does.
+/// List the families gpui can resolve and which of them fall
+/// back, for `runebender-gpui --fonts`. A family that shapes to
+/// nothing leaves the interface wordless, so this is the first
+/// check when it does.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn print_font_families(cx: &mut App) {
     let names = cx.text_system().all_font_names();
@@ -204,9 +205,9 @@ pub(crate) fn print_font_families(cx: &mut App) {
 }
 
 /// The interface font, resolved once against what the platform
-/// actually has. A name gpui cannot resolve shapes to nothing and no
-/// text draws at all, so the preferences are tried in order and the
-/// first family the text system reports wins.
+/// actually has. A name gpui cannot resolve shapes to nothing, and
+/// no text draws at all. So the preferences are tried in order,
+/// and the first family the text system reports wins.
 pub(crate) fn ui_font_family(cx: &gpui::App) -> gpui::SharedString {
     // Cached: asking the platform for its font list takes about 140ms,
     // and this is read once per frame. Uncached it capped the whole

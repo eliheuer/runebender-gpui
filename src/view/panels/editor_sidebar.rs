@@ -315,9 +315,11 @@ impl Workspace {
             .child(self.mark_colors_panel(cx))
     }
 
-    /// Related Glyphs section (Fontra's panel): the glyph's base,
-    /// its suffix siblings (name.*), its components, and every
-    /// composite using it — one click away.
+    /// Related Glyphs section: the glyph's base, its suffix siblings
+    /// (name.*), its components, and every composite using it, each
+    /// one click away.
+    ///
+    /// This is the Related Glyphs panel in Fontra.
     pub(crate) fn related_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let Some(index) = self.current_glyph_index() else {
             return self.section(cx, "Related", div());
@@ -410,10 +412,12 @@ impl Workspace {
     }
 
     /// Shaping section (editor mode): the buffer's characters in
-    /// logical order against the shaped glyphs, cluster-linked —
-    /// Fontra's inspector, on the shared text engine. Click a chip
-    /// to cross-highlight its cluster; double-click a glyph chip to
-    /// open that glyph for editing inside the shaped run.
+    /// logical order against the shaped glyphs, cluster-linked.
+    ///
+    /// Click a chip to cross-highlight its cluster. Double-click a
+    /// glyph chip to open that glyph for editing inside the shaped
+    /// run. This is Fontra's shaping inspector, on the shared text
+    /// engine.
     pub(crate) fn shaping_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         use runebender_core::text::buffer::{TextDirection, TextSortKind};
         let count = self.edit_buffer.len();
@@ -947,7 +951,8 @@ impl Workspace {
         )
     }
 
-    /// Curves section: comb + continuity toggles (web CurvePanel).
+    /// Curves section: the comb and continuity toggles. This is the
+    /// web editor's `CurvePanel`.
     pub(crate) fn curves_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let toggle = |id: &'static str,
                       label: &'static str,
@@ -1015,7 +1020,7 @@ impl Workspace {
     }
 
     /// Background section: show/send/swap/clear plus the reference
-    /// glyph (web's Background block).
+    /// glyph. This is the web editor's Background block.
     pub(crate) fn background_section(&self, cx: &mut Context<Self>) -> gpui::Div {
         let button = |id: &'static str,
                       label: &'static str,

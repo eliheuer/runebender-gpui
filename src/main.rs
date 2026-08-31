@@ -1,8 +1,9 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Runebender GPUI: a font editor built on [GPUI](https://gpui.rs/),
-//! started as a point of comparison against
+//! Runebender GPUI: a font editor built on [GPUI](https://gpui.rs/).
+//!
+//! It began as a point of comparison against
 //! [runebender-xilem](https://github.com/eliheuer/runebender-xilem).
 
 mod actions;
@@ -166,9 +167,10 @@ gpui::actions!(
 
 #[cfg(target_family = "wasm")]
 thread_local! {
-    /// Keeps the gpui application alive: on the web the event loop
-    /// belongs to the browser, so run_embedded returns a handle that
-    /// must not drop.
+    /// Keeps the gpui application alive.
+    ///
+    /// On the web, the event loop belongs to the browser, so
+    /// `run_embedded` returns a handle that must not drop.
     static APPLICATION: std::cell::RefCell<Option<gpui::ApplicationHandle>> =
         const { std::cell::RefCell::new(None) };
 }

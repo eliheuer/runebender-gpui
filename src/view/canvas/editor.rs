@@ -46,8 +46,6 @@ use runebender_core::formats::lib_keys::read_masks;
 use runebender_core::ui::editing::ViewPort;
 use std::collections::HashSet;
 
-/// A contour start marker: the point, the direction, and whether the
-/// contour is closed.
 /// A contour start marker: its point, its direction, and whether the
 /// contour closes.
 type StartMarker = ((f64, f64), (f64, f64), bool);
@@ -72,10 +70,13 @@ type MeasureHud = (
 /// A path batch keyed by colour: the colour and the paths that share it.
 type ColorBatch = std::collections::BTreeMap<u32, (gpui::Rgba, Vec<BezPath>)>;
 
-/// One sort of the text buffer, web-style: its fill (the active one
-/// too while the text tool is up), its quiet metric box, corner marks
-/// (kern-colored during a kern drag). Coordinates are relative to the
-/// active sort.
+/// One sort of the text buffer: its fill, its quiet metric box, and
+/// its corner marks.
+///
+/// The active sort's fill paints too while the text tool is up. The
+/// corner marks turn kern-colored during a kern drag. Coordinates are
+/// relative to the active sort. The web editor draws sorts the same
+/// way.
 struct SortPaint {
     /// The sort's outline, if it names a glyph.
     path: Option<Arc<BezPath>>,
@@ -1009,8 +1010,10 @@ fn grid_alphas(zoom: f64) -> (f64, f64) {
     (mid, close)
 }
 
-/// The web's point_scale curve, simplified to its zoom ramps (device
-/// scale is 1 here).
+/// The point scale at this zoom.
+///
+/// Simplified from the web editor's `point_scale` curve. Device
+/// scale is 1 here.
 fn point_scale(zoom: f64) -> f64 {
     if zoom <= 0.8 {
         0.72 + (1.0 - 0.72) * smoothstep((zoom / 0.8).clamp(0.0, 1.0))
@@ -1035,8 +1038,8 @@ fn zero() -> Point<gpui::Pixels> {
     gpui::point(px(0.0), px(0.0))
 }
 
-/// Colours are the batch key: an Rgba is not hashable, so its bytes
-/// stand in.
+/// The batch key for a colour. An `Rgba` is not hashable, so its
+/// bytes stand in.
 fn color_key(c: gpui::Rgba) -> u32 {
     u32::from_be_bytes([
         (c.r * 255.0) as u8,
@@ -1077,11 +1080,13 @@ fn paint_line(
     }
 }
 
-/// Zoom-dependent design grid behind everything (web
-/// draw_design_grid): the 8-unit lattice fades in past 0.8x, and past
-/// 8x a 2-unit fine grid joins underneath, so the 8s stay one grid at
-/// every zoom. Anchored at the active sort's origin (our design space
-/// is sort-relative), so the baseline lands on a gridline.
+/// The zoom-dependent design grid, behind everything.
+///
+/// The 8-unit lattice fades in past 0.8x. Past 8x a 2-unit fine grid
+/// joins underneath, so the 8s stay one grid at every zoom. Design
+/// space here is sort-relative, so the grid is anchored at the active
+/// sort's origin and the baseline lands on a gridline. This is the
+/// web editor's `draw_design_grid`.
 fn paint_design_grid(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let (grid_mid_alpha, _) = grid_alphas(s.zoom);
     if !scene.preview_mode && grid_mid_alpha > 0.0 {
@@ -1182,9 +1187,11 @@ fn paint_color_preview(scene: &EditorScene, s: &Screen, window: &mut Window) {
     }
 }
 
-/// Every metric line the font defines, the way the web draws them:
-/// the baseline always, then the box edges, the upm, ascender,
-/// descender, x-height and cap-height, deduplicated.
+/// Every metric line the font defines.
+///
+/// The baseline always, then the box edges, the upm, ascender,
+/// descender, x-height and cap-height, deduplicated. The web editor
+/// draws the same set.
 fn paint_metrics(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let hline = |y: f64, window: &mut Window| {
         let a = s.to_screen(0.0, y);
@@ -1346,10 +1353,11 @@ fn paint_hoi_knobs(scene: &EditorScene, s: &Screen, window: &mut Window) {
     }
 }
 
-/// Node trajectories (HOI): each point's path across the axis as a
-/// thin line, dots at equal axis stops (close dots mean slow, spread
-/// dots mean fast; brace layers bend the line), under a velocity
-/// ribbon.
+/// HOI node trajectories: each point's path across the axis as a
+/// thin line, under a velocity ribbon.
+///
+/// Dots sit at equal axis stops: close dots mean slow, spread dots
+/// mean fast. Brace layers bend the line.
 fn paint_trajectories(scene: &EditorScene, s: &Screen, window: &mut Window) {
     if let Some(tracks) = &scene.trajectories {
         use kurbo::Shape as _;
@@ -1534,11 +1542,13 @@ fn paint_sort_boxes(scene: &EditorScene, s: &Screen, window: &mut Window) {
     }
 }
 
-/// Sort fills: everyone but the active sort, and the active one too
-/// while the text tool is up (points return with select). Once the
-/// design grid is up (you are drawing, not reading) the neighbours
-/// thin to a 0.34 fill plus an outline with read-only grey points,
-/// the web's zoomed-in treatment.
+/// Sort fills.
+///
+/// Every sort but the active one fills. The active one fills too
+/// while the text tool is up; its points return with select. Once the
+/// design grid is up, you are drawing rather than reading, so the
+/// neighbours thin to a 0.34 fill plus an outline with read-only grey
+/// points. This is the web editor's zoomed-in treatment.
 fn paint_sort_fills(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let (transform, origin) = (s.transform, s.origin);
     let zoomed_in = !scene.preview_mode && s.zoom > 0.8;
@@ -1642,8 +1652,8 @@ fn paint_sort_fills(scene: &EditorScene, s: &Screen, window: &mut Window) {
     }
 }
 
-/// Caret: line plus inward triangles, sized off the sort's on-screen
-/// height like the web.
+/// Caret: a line plus inward triangles, sized off the sort's
+/// on-screen height. The web editor sizes its caret the same way.
 fn paint_text_caret(scene: &EditorScene, s: &Screen, window: &mut Window) {
     if let Some((cx_, cy)) = scene.text_caret {
         let sort_h_px = sort_height_px(scene, s.zoom);
@@ -1686,8 +1696,8 @@ fn paint_reference_layers(scene: &EditorScene, s: &Screen, window: &mut Window) 
     }
 }
 
-/// Components: dim distinct fill, not editable directly (Cmd+Shift+D
-/// decomposes).
+/// Components: a dim distinct fill, not editable directly.
+/// Cmd+Shift+D decomposes.
 fn paint_components(scene: &EditorScene, s: &Screen, window: &mut Window) {
     if !scene.component_path.elements().is_empty()
         && let Some(p) = build_fill_path(&scene.component_path, s.transform, s.origin)
@@ -1786,11 +1796,12 @@ fn paint_curvature_comb(scene: &EditorScene, s: &Screen, window: &mut Window) {
     }
 }
 
-/// The glyph being edited: a ghost fill under it (the same grey the
-/// inactive sorts use at a tenth strength, so counters read as
-/// counters without competing with the outline, web
-/// ACTIVE_GLYPH_FILL_ALPHA), then the stroked outline, no fill, like
-/// the other editors.
+/// The glyph being edited: a ghost fill under a stroked outline.
+///
+/// The ghost fill is the inactive sorts' grey at a tenth strength, so
+/// counters read as counters without competing with the outline. The
+/// outline itself is stroked with no fill, like the other editors.
+/// The fill alpha is the web editor's `ACTIVE_GLYPH_FILL_ALPHA`.
 fn paint_outline(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let (transform, origin) = (s.transform, s.origin);
     if !scene.preview_mode && !scene.text_mode {
@@ -1857,12 +1868,12 @@ fn paint_handles(scene: &EditorScene, s: &Screen, window: &mut Window) {
 /// Points: smooth = blue circle, corner = green square, off-curve =
 /// purple circle, selection in yellow/orange, the shared palette.
 ///
-/// A point is a dark window with a coloured ring, the web's recipe: a
-/// halo casing so it keeps an edge over the outline and the comb, an
-/// interior fill that masks what runs underneath, then a
-/// constant-width ring on top. Selected points fill yellow and ring in
-/// the selection colour. Three path draws for every point on the
-/// glyph, plus the gridlines, collapse into one per colour.
+/// A point is a dark window with a coloured ring, the web editor's
+/// recipe. A halo casing keeps an edge over the outline and the comb.
+/// An interior fill masks what runs underneath. A constant-width ring
+/// sits on top. Selected points fill yellow and ring in the selection
+/// colour. Three path draws for every point on the glyph, plus the
+/// gridlines, collapse into one per colour.
 fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let transform = s.transform;
     let (grid_mid_alpha, grid_close_alpha) = grid_alphas(s.zoom);
@@ -2023,7 +2034,8 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
 }
 
 /// Start-of-contour arrow: which point a closed contour begins at,
-/// and which way it runs (web draw_start_arrow).
+/// and which way it runs. This is the web editor's
+/// `draw_start_arrow`.
 fn paint_start_markers(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let (ps, _, _) = point_widths(s.zoom);
     if !scene.preview_mode && !scene.text_mode {
@@ -2065,9 +2077,11 @@ fn paint_start_markers(scene: &EditorScene, s: &Screen, window: &mut Window) {
 }
 
 /// Anchors are diamonds built like points: a dark window with a
-/// coloured ring, sized off the smooth-point radius and widened a
-/// little so a rotated square reads as the same size (web
-/// ANCHOR_DIAMOND_SCALE).
+/// coloured ring.
+///
+/// The diamond is sized off the smooth-point radius and widened a
+/// little, so a rotated square reads as the same size. The widening
+/// is the web editor's `ANCHOR_DIAMOND_SCALE`.
 fn paint_anchors(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let (ps, ring_w, halo_w) = point_widths(s.zoom);
     let zero = zero();
@@ -2195,9 +2209,10 @@ fn paint_tool_preview(scene: &EditorScene, s: &Screen, window: &mut Window) {
     }
 }
 
-/// Measure-tool HUD (web draw_measurements): popcount-colored
-/// outline, dimension lines with outward arrowheads, and labels that
-/// dodge each other. Fades in with zoom.
+/// The measure-tool HUD: popcount-colored outline, dimension lines
+/// with outward arrowheads, and labels that dodge each other.
+///
+/// Fades in with zoom. This is the web editor's `draw_measurements`.
 fn paint_measure_hud(scene: &EditorScene, s: &Screen, window: &mut Window, cx: &mut App) {
     let (transform, origin, zoom) = (s.transform, s.origin, s.zoom);
     let measure_opts = scene.measure_opts;
@@ -2484,8 +2499,8 @@ fn paint_continuity_rings(scene: &EditorScene, s: &Screen, window: &mut Window) 
     }
 }
 
-/// Annotations: red working marks over everything (arrows point at
-/// the spot, circles ring it, notes label it).
+/// Annotations: red working marks over everything. Arrows point at
+/// the spot, circles ring it, notes label it.
 fn paint_annotations(scene: &EditorScene, s: &Screen, window: &mut Window, cx: &mut App) {
     if !scene.annotations.is_empty() {
         use kurbo::Shape as _;
@@ -2553,9 +2568,9 @@ fn paint_annotations(scene: &EditorScene, s: &Screen, window: &mut Window, cx: &
     }
 }
 
-/// Free-transform box: the selection's bounds, corner and edge
-/// handles, all constant screen size (Glyphs 4's on-canvas rotate and
-/// scale).
+/// Free-transform box: the selection's bounds with corner and edge
+/// handles, all constant screen size. This is the on-canvas rotate
+/// and scale in Glyphs 4.
 fn paint_transform_box(scene: &EditorScene, s: &Screen, window: &mut Window) {
     if let Some(bbox) = scene.transform_box {
         let pa = s.to_screen(bbox.x0, bbox.y0);

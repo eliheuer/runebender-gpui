@@ -24,8 +24,9 @@ use serde::Deserialize;
 use runebender_core::document::project::{Master, Project};
 use runebender_core::document::var_model::Location;
 
-/// Connection state kept on the workspace: server base URL and the
-/// ETag of every file we have read (If-Match tokens for saves).
+/// Connection state kept on the workspace: the server base URL and
+/// the ETag of every file we have read. The ETags are the `If-Match`
+/// tokens for saves.
 pub struct WebHost {
     pub base: String,
     pub etags: HashMap<String, String>,
@@ -117,8 +118,8 @@ pub struct FetchedWorkspace {
     pub etags: HashMap<String, String>,
 }
 
-/// Fetch the workspace: entry file plus every UFO file the entry
-/// references (or the whole tree for a bare UFO entry).
+/// Fetch the workspace: the entry file plus every UFO file the entry
+/// references. For a bare UFO entry, the whole tree is fetched.
 pub async fn fetch_workspace(
     client: Arc<dyn HttpClient>,
     base: String,
@@ -172,7 +173,7 @@ pub struct SaveFile {
     pub bytes: Vec<u8>,
 }
 
-/// PUT one file with its known ETag (or create). Returns the new
+/// PUT one file with its known ETag, or create it. Returns the new
 /// ETag on success.
 pub async fn put_file(
     client: &Arc<dyn HttpClient>,
@@ -219,9 +220,10 @@ pub async fn put_file(
         .ok_or_else(|| format!("save {}: no etag in response", file.path))
 }
 
-/// Assemble a project from a fetched workspace (web host).
-/// Returns the project plus per-master UFO path prefixes
-/// (workspace-root relative), aligned with `masters`.
+/// Assemble a project from a fetched workspace.
+///
+/// Returns the project plus per-master UFO path prefixes, relative
+/// to the workspace root, aligned with `masters`.
 pub fn project_from_fetched(fetched: &FetchedWorkspace) -> Result<(Project, Vec<String>), String> {
     use std::cell::RefCell;
     let prefixes: RefCell<Vec<String>> = RefCell::new(Vec::new());
