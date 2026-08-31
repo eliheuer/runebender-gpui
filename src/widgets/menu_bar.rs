@@ -14,15 +14,22 @@ use crate::view::theme as t;
 
 /// One menu's title and its flattened items.
 struct MenuEntry {
+    /// The title shown in the bar.
     title: SharedString,
+    /// The menu's items, submenus flattened to headings.
     items: Vec<Entry>,
 }
 
+/// One row of an open dropdown.
 enum Entry {
+    /// A clickable item that dispatches its action on the window.
     Action {
+        /// The item's title.
         name: SharedString,
+        /// The action the click dispatches.
         action: Box<dyn Action>,
     },
+    /// A thin rule between groups of items.
     Separator,
     /// A submenu is shown inline under a heading: this bar is a
     /// fallback, and a nested popup is more machinery than the case
@@ -30,13 +37,18 @@ enum Entry {
     Heading(SharedString),
 }
 
+/// The in-window menu bar: one row of titles, one open dropdown at
+/// a time.
 pub struct MenuBar {
+    /// The menus, in bar order.
     menus: Vec<MenuEntry>,
     /// Which title is open, if any.
     open: Option<usize>,
 }
 
 impl MenuBar {
+    /// Build the bar from the same `gpui::Menu` list the native bar
+    /// uses.
     pub fn new(menus: Vec<Menu>, cx: &mut Context<Self>) -> Self {
         let _ = cx;
         Self {
@@ -46,6 +58,7 @@ impl MenuBar {
     }
 }
 
+/// Convert one `gpui::Menu` into a bar entry.
 fn convert(menu: Menu) -> MenuEntry {
     let mut items = Vec::new();
     flatten(menu.items, &mut items);
@@ -55,6 +68,8 @@ fn convert(menu: Menu) -> MenuEntry {
     }
 }
 
+/// Flatten menu items into rows, turning a submenu into a heading
+/// followed by its items.
 fn flatten(source: Vec<MenuItem>, out: &mut Vec<Entry>) {
     for item in source {
         match item {
@@ -118,6 +133,8 @@ impl Render for MenuBar {
 use gpui::prelude::FluentBuilder as _;
 
 impl MenuBar {
+    /// The open menu's dropdown: its rows, and the click handlers
+    /// that dispatch an action and close the menu.
     fn dropdown(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let mut list = div()
             .absolute()
