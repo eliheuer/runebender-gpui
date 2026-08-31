@@ -1,10 +1,16 @@
 # runebender-gpui
 
-A font editor built on [GPUI](https://gpui.rs/) and
-[Linebender](https://linebender.org/) crates. This is a sibling of
-[runebender-xilem](https://github.com/eliheuer/runebender-xilem). The
-two ports exist to compare Xilem and GPUI on the same application and
-to measure the trade-offs between them.
+The main [Runebender](https://runebender.org) font editor, built on
+[GPUI](https://gpui.rs/) and [Linebender](https://linebender.org/)
+crates. The window, the input, and the drawing live here; every
+operation that changes a font lives in
+[runebender-core](https://github.com/eliheuer/runebender-core).
+
+A sibling front-end,
+[runebender-xilem](https://github.com/eliheuer/runebender-xilem),
+builds the same editor on Xilem. The two exist to compare the
+frameworks on one real application, and their layouts mirror each
+other so a change in one is easy to carry to the other.
 
 An experimental in-browser build runs at
 <https://runebender.org/gpui/>.
@@ -83,8 +89,8 @@ whichever nightly you use.
 
 To deploy, copy `dist/` into runebender-dot-org's `public/gpui/`,
 keeping `coi-serviceworker.min.js` and adding its script tag to the
-top of `<head>` — GitHub Pages cannot send the COOP/COEP headers
-that shared memory requires, so the worker sets them client-side.
+top of `<head>`. GitHub Pages cannot send the COOP/COEP headers that
+shared memory requires, so the worker sets them client-side.
 
 ## Unix-shaped
 
@@ -169,10 +175,20 @@ end.
 The full guide is at
 [runebender.org/docs/agents.html](https://runebender.org/docs/agents.html).
 
+## Layout
+
+The source is organized so a newcomer can navigate it: a `Workspace`
+struct in `workspace.rs`, its methods split across `view/`, `edit/`,
+and `platform/` by concern, one file per panel and one per menu.
+`AGENTS.md` has the table, and
+[runebender.org/docs/code-layout.html](https://runebender.org/docs/code-layout.html)
+the long version. Every item carries a doc comment, and CI enforces
+that.
+
 ## Status
 
-Close to feature parity with the previous web editor.
-[PARITY.md](PARITY.md) tracks what remains.
+At feature parity with the retired web editor, and a little past it.
+[PARITY.md](PARITY.md) is the record of what that meant.
 
 ## License
 
