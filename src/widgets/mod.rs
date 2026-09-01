@@ -8,6 +8,6 @@
 
 pub(crate) mod input;
 #[cfg(not(target_os = "macos"))]
-pub mod menu_bar;
+pub(crate) mod menu_bar;
 pub(crate) mod resizable;
 pub(crate) mod slider;

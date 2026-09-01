@@ -42,7 +42,7 @@ enum Entry {
 
 /// The in-window menu bar: one row of titles, one open dropdown at
 /// a time.
-pub struct MenuBar {
+pub(crate) struct MenuBar {
     /// The menus, in bar order.
     menus: Vec<MenuEntry>,
     /// Which title is open, if any.
@@ -52,7 +52,7 @@ pub struct MenuBar {
 impl MenuBar {
     /// Build the bar from the same `gpui::Menu` list the native bar
     /// uses.
-    pub fn new(menus: Vec<Menu>, cx: &mut Context<'_, Self>) -> Self {
+    pub(crate) fn new(menus: Vec<Menu>, cx: &mut Context<'_, Self>) -> Self {
         let _ = cx;
         Self {
             menus: menus.into_iter().map(convert).collect(),
