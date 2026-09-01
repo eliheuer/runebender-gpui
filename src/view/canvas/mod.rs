@@ -47,7 +47,9 @@ impl Workspace {
         jump_on_click: bool,
         cx: &mut Context<'_, Self>,
     ) -> impl IntoElement + use<> {
-        let font = self.font().unwrap();
+        let font = self
+            .font()
+            .expect("a cell is only built while a font is open");
         let entry = &font.glyphs[index];
         let name = entry.name.clone();
         let unicode_label: Option<SharedString> = entry

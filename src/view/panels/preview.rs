@@ -147,7 +147,7 @@ impl Workspace {
                         // reads as ghosting rather than defocus.
                         let key = blur_key(&line, w, h, blur, ink, ground);
                         let cached = {
-                            let slot = blur_cache.lock().unwrap();
+                            let slot = blur_cache.lock().expect("the blur cache lock");
                             slot.as_ref()
                                 .filter(|(k, _)| *k == key)
                                 .map(|(_, image)| image.clone())
@@ -162,7 +162,8 @@ impl Workspace {
                                 ground,
                                 blur,
                             )?;
-                            *blur_cache.lock().unwrap() = Some((key, image.clone()));
+                            *blur_cache.lock().expect("the blur cache lock") =
+                                Some((key, image.clone()));
                             Some(image)
                         });
                         if let Some(image) = image {

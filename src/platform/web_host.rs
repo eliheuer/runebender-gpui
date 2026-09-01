@@ -27,7 +27,7 @@ use runebender_core::document::var_model::Location;
 /// Connection state kept on the workspace: the server base URL and
 /// the ETag of every file we have read. The ETags are the `If-Match`
 /// tokens for saves.
-pub struct WebHost {
+pub(crate) struct WebHost {
     pub base: String,
     pub etags: HashMap<String, String>,
     /// Per-master path prefix from the workspace root to the UFO
@@ -57,7 +57,7 @@ struct PutResponse {
 }
 
 /// The `?server=` query parameter of the current page, if any.
-pub fn server_from_location() -> Option<String> {
+pub(crate) fn server_from_location() -> Option<String> {
     let search = web_sys::window()?.location().search().ok()?;
     let search = search.strip_prefix('?')?;
     for pair in search.split('&') {
@@ -110,7 +110,7 @@ fn file_url(base: &str, rel: &str) -> String {
 }
 
 /// Everything fetched from the server needed to assemble a project.
-pub struct FetchedWorkspace {
+pub(crate) struct FetchedWorkspace {
     pub entry: String,
     pub designspace_text: Option<String>,
     /// All fetched files by root-relative path.
@@ -120,7 +120,7 @@ pub struct FetchedWorkspace {
 
 /// Fetch the workspace: the entry file plus every UFO file the entry
 /// references. For a bare UFO entry, the whole tree is fetched.
-pub async fn fetch_workspace(
+pub(crate) async fn fetch_workspace(
     client: Arc<dyn HttpClient>,
     base: String,
 ) -> Result<FetchedWorkspace, String> {
@@ -168,14 +168,14 @@ pub async fn fetch_workspace(
 }
 
 /// One file to save: root-relative path and its bytes.
-pub struct SaveFile {
+pub(crate) struct SaveFile {
     pub path: String,
     pub bytes: Vec<u8>,
 }
 
 /// PUT one file with its known ETag, or create it. Returns the new
 /// ETag on success.
-pub async fn put_file(
+pub(crate) async fn put_file(
     client: &Arc<dyn HttpClient>,
     base: &str,
     file: &SaveFile,
@@ -224,7 +224,9 @@ pub async fn put_file(
 ///
 /// Returns the project plus per-master UFO path prefixes, relative
 /// to the workspace root, aligned with `masters`.
-pub fn project_from_fetched(fetched: &FetchedWorkspace) -> Result<(Project, Vec<String>), String> {
+pub(crate) fn project_from_fetched(
+    fetched: &FetchedWorkspace,
+) -> Result<(Project, Vec<String>), String> {
     use std::cell::RefCell;
     let prefixes: RefCell<Vec<String>> = RefCell::new(Vec::new());
     let build_master = |prefix: String| -> Result<Master, String> {
@@ -289,7 +291,7 @@ pub fn project_from_fetched(fetched: &FetchedWorkspace) -> Result<(Project, Vec<
 /// The embedded demo project for hosts without a filesystem
 /// (web builds): the Virtua Grotesk designspace and both master
 /// UFOs compiled into the binary.
-pub fn demo_project() -> Result<Project, String> {
+pub(crate) fn demo_project() -> Result<Project, String> {
     static DEMO: include_dir::Dir<'_> =
         include_dir::include_dir!("$CARGO_MANIFEST_DIR/../virtua-grotesk/sources");
     let ds_text = DEMO
@@ -308,11 +310,17 @@ pub fn demo_project() -> Result<Project, String> {
             out: &mut Vec<(String, &'a [u8])>,
         ) {
             for file in dir.files() {
-                let name = file.path().file_name().unwrap().to_string_lossy();
+                let Some(name) = file.path().file_name() else {
+                    continue;
+                };
+                let name = name.to_string_lossy();
                 out.push((format!("{prefix}{name}"), file.contents()));
             }
             for sub in dir.dirs() {
-                let name = sub.path().file_name().unwrap().to_string_lossy();
+                let Some(name) = sub.path().file_name() else {
+                    continue;
+                };
+                let name = name.to_string_lossy();
                 walk(sub, &format!("{prefix}{name}/"), out);
             }
         }

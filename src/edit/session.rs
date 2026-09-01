@@ -8,6 +8,7 @@
 
 use crate::Mode;
 use crate::Workspace;
+#[cfg(not(target_family = "wasm"))]
 use crate::platform::journal;
 use crate::workspace::EditSession;
 use crate::workspace::EditorState;
@@ -237,6 +238,7 @@ impl Workspace {
     /// Resolving the glyph name here rather than at each call site
     /// keeps the callers to one line, which is the only way a log like
     /// this stays in step with the code.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn journal(&self, op: &str, index: Option<usize>, detail: Option<String>) {
         let name = index.and_then(|i| self.font().map(|f| f.glyphs[i].name.to_string()));
         journal::record(journal::Entry {
@@ -245,6 +247,10 @@ impl Workspace {
             detail,
         });
     }
+
+    /// There is no file to append to in the browser.
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn journal(&self, _op: &str, _index: Option<usize>, _detail: Option<String>) {}
 
     /// Snapshot the glyph's contours onto the undo stack and clear redo.
     pub(crate) fn push_undo_snapshot(&mut self, index: usize) {

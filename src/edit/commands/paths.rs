@@ -569,7 +569,9 @@ impl Workspace {
         if self.editor.selected.len() != 1 {
             return;
         }
-        let (contour, point) = *self.editor.selected.iter().next().unwrap();
+        let Some(&(contour, point)) = self.editor.selected.iter().next() else {
+            return;
+        };
         self.push_undo_snapshot(index);
         let changed = self
             .font_mut()

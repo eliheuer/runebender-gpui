@@ -1045,7 +1045,10 @@ impl Workspace {
                     ((sx - dx).powi(2) + (sy - dy).powi(2)).sqrt() <= tolerance
                 });
                 let controls = pen.prev_out_handle.map(|out| {
-                    let target = if closing { start.unwrap() } else { (x, y) };
+                    let target = match start.filter(|_| closing) {
+                        Some(first) => first,
+                        None => (x, y),
+                    };
                     // Incoming control defaults onto the target until
                     // the user drags this point into a curve.
                     (out, target)
@@ -1376,13 +1379,15 @@ impl Workspace {
                 let Mode::Editor(index) = self.mode else {
                     return false;
                 };
-                let contour = self
+                let Some(contour) = self
                     .editor
                     .pen
                     .as_ref()
                     .map(|p| p.contour)
                     .or(self.editor.hyper_contour)
-                    .unwrap();
+                else {
+                    return false;
+                };
                 let remaining = self
                     .font_mut()
                     .and_then(|f| {
@@ -1406,7 +1411,9 @@ impl Workspace {
                 let Mode::Editor(index) = self.mode else {
                     return false;
                 };
-                let ci = self.editor.selected_component.take().unwrap();
+                let Some(ci) = self.editor.selected_component.take() else {
+                    return false;
+                };
                 self.push_undo_snapshot(index);
                 let changed = self
                     .font_mut()

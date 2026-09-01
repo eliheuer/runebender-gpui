@@ -7,6 +7,7 @@
 //! weight delta from the font's own reference pairs, and applying the
 //! bolden model to a glyph.
 
+#[cfg(not(target_family = "wasm"))]
 use crate::CONFIG;
 use crate::PathBuf;
 use crate::Workspace;
@@ -25,6 +26,7 @@ impl Workspace {
         if let Some(dir) = std::env::var_os("RUNEBENDER_MODELS") {
             return Some(PathBuf::from(dir));
         }
+        #[cfg(not(target_family = "wasm"))]
         if let Some(dir) = CONFIG.get().and_then(|c| c.models.clone()) {
             return Some(dir);
         }

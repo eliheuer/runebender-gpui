@@ -7,15 +7,13 @@
 //! Watching those files for other writers is `platform::watch`.
 
 use crate::Mode;
+#[cfg(not(target_family = "wasm"))]
 use crate::PathBuf;
 use crate::Workspace;
 #[cfg(target_family = "wasm")]
-#[cfg(target_family = "wasm")]
-#[cfg(target_family = "wasm")]
-#[cfg(target_family = "wasm")]
-#[cfg(target_family = "wasm")]
 use crate::platform::web_host;
 use gpui::Context;
+#[cfg(not(target_family = "wasm"))]
 use runebender_core::document::project::Master;
 use runebender_core::document::project::Project;
 #[cfg(target_family = "wasm")]
@@ -68,6 +66,7 @@ impl Workspace {
     }
 
     /// Re-read every clean master from disk, keeping the open glyph.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn reload_from_disk(&mut self) {
         self.sidebar.counts = None;
         let Some(project) = self.project.as_mut() else {
@@ -327,6 +326,7 @@ pub(crate) fn fontc_binary() -> Option<PathBuf> {
 }
 
 /// The designspace a bare `cargo run` opens: Virtua Grotesk from a checkout beside this repository.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn default_font_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../virtua-grotesk/sources/VirtuaGrotesk.designspace")

@@ -273,7 +273,7 @@ impl Workspace {
             self.editor.selected_component = Some(ci);
             self.editor.selected.clear();
         }
-        let bounds = *self.editor.bounds.lock().unwrap();
+        let bounds = *self.editor.bounds.lock().expect("the canvas bounds lock");
         self.context_menu = Some(ContextMenu {
             at: gpui::point(pos.x - bounds.origin.x, pos.y - bounds.origin.y),
             design: (dx, dy),
@@ -1066,7 +1066,10 @@ impl Workspace {
             font.modified_glyphs.insert(name);
         }
         // The cache entry is rebuilt from the store on next paint.
-        self.glyph_image_cache.lock().unwrap().remove(&file_name);
+        self.glyph_image_cache
+            .lock()
+            .expect("the glyph image cache lock")
+            .remove(&file_name);
         self.show_background = true;
         self.status_note = Some(format!("Placed {file_name} · {img_w:.0}×{img_h:.0}px").into());
     }
@@ -1079,7 +1082,12 @@ impl Workspace {
     /// The decoded background image for a file in the UFO images
     /// store, cached. gpui's `RenderImage` wants premultiplied BGRA.
     pub(crate) fn glyph_image(&self, file_name: &str) -> Option<Arc<gpui::RenderImage>> {
-        if let Some(cached) = self.glyph_image_cache.lock().unwrap().get(file_name) {
+        if let Some(cached) = self
+            .glyph_image_cache
+            .lock()
+            .expect("the glyph image cache lock")
+            .get(file_name)
+        {
             return cached.clone();
         }
         let decoded = self
@@ -1108,7 +1116,7 @@ impl Workspace {
             });
         self.glyph_image_cache
             .lock()
-            .unwrap()
+            .expect("the glyph image cache lock")
             .insert(file_name.to_string(), decoded.clone());
         decoded
     }

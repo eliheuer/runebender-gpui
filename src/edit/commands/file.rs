@@ -175,7 +175,10 @@ impl Workspace {
                         Err(e) => failed.push(format!("{e}")),
                     }
                 }
-                *self.last_save.lock().unwrap() = web_time::Instant::now();
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    *self.last_save.lock().expect("the last-save lock") = web_time::Instant::now();
+                }
                 self.last_save_label =
                     Some(chrono::Local::now().format("%-I:%M %p").to_string().into());
                 self.status_note = Some(if !failed.is_empty() {

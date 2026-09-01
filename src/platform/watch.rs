@@ -63,7 +63,9 @@ impl Workspace {
                     .timer(std::time::Duration::from_millis(500))
                     .await;
                 while rx.try_recv().is_ok() {}
-                if last_save.lock().unwrap().elapsed() < std::time::Duration::from_secs(2) {
+                if last_save.lock().expect("the last-save lock").elapsed()
+                    < std::time::Duration::from_secs(2)
+                {
                     continue;
                 }
                 if this

@@ -642,6 +642,7 @@ impl Workspace {
             #[cfg(target_family = "wasm")]
             web_host: None,
             _watcher: None,
+            #[cfg(not(target_family = "wasm"))]
             last_save: Arc::new(Mutex::new(web_time::Instant::now())),
             _subscriptions: vec![
                 subscription,

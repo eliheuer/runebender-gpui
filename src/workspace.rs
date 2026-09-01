@@ -10,6 +10,7 @@
 use crate::Arc;
 use crate::Mutex;
 use crate::PathBuf;
+#[cfg(not(target_family = "wasm"))]
 use crate::platform::config;
 #[cfg(target_family = "wasm")]
 #[cfg(target_family = "wasm")]
@@ -362,7 +363,7 @@ impl EditorState {
 
     /// Converts a window position to local canvas pixels.
     pub(crate) fn window_to_local(&self, pos: Point<gpui::Pixels>) -> kurbo::Point {
-        let origin = self.bounds.lock().unwrap().origin;
+        let origin = self.bounds.lock().expect("the canvas bounds lock").origin;
         let lx: f32 = (pos.x - origin.x).into();
         let ly: f32 = (pos.y - origin.y).into();
         kurbo::Point::new(lx as f64, ly as f64)
@@ -377,7 +378,7 @@ impl EditorState {
     /// Fits the viewport to the canvas around the glyph's metrics
     /// and marks the state initialized.
     pub(crate) fn fit(&mut self, advance: f64, ascender: f64, descender: f64) {
-        let bounds = *self.bounds.lock().unwrap();
+        let bounds = *self.bounds.lock().expect("the canvas bounds lock");
         let w: f32 = bounds.size.width.into();
         let h: f32 = bounds.size.height.into();
         if w <= 0.0 || h <= 0.0 {
@@ -598,6 +599,7 @@ pub(crate) struct Workspace {
     /// Filesystem watcher over the open masters' UFO directories.
     pub(crate) _watcher: Option<notify::RecommendedWatcher>,
     /// Set at save time so the watcher ignores our own writes.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) last_save: Arc<Mutex<web_time::Instant>>,
     /// A selected kern pair in the preview strip: indices into the
     /// resolved preview line (glyph indices of the pair).
@@ -1077,4 +1079,5 @@ pub(crate) const POINT_HIT_RADIUS_PX: f64 = 16.0;
 /// A `OnceLock` rather than a re-read per call: the file is read at
 /// startup and changing it means restarting, which is the same promise
 /// the theme menu makes.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) static CONFIG: std::sync::OnceLock<config::Config> = std::sync::OnceLock::new();

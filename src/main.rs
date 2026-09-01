@@ -27,6 +27,7 @@ use crate::actions::app_menus;
 use crate::platform::config;
 #[cfg(target_family = "wasm")]
 use crate::platform::web_host;
+#[cfg(not(target_family = "wasm"))]
 use crate::workspace::CONFIG;
 use crate::workspace::Mode;
 use crate::workspace::Workspace;
@@ -280,7 +281,7 @@ fn main() {
                 workspace
             },
         )
-        .unwrap();
+        .expect("the main window opens");
         cx.activate(true);
     };
     #[cfg(target_family = "wasm")]

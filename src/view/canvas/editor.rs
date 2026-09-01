@@ -294,7 +294,9 @@ impl Workspace {
                 Some((image, rect))
             })
             .flatten();
-        let font = self.font().unwrap();
+        let font = self
+            .font()
+            .expect("the editor is only built while a font is open");
         let entry = &font.glyphs[index];
         let outline = entry.contour_path.clone();
         let component_path = entry.component_path.clone();
@@ -940,7 +942,7 @@ impl Workspace {
                 canvas(
                     move |bounds, _, _| bounds,
                     move |_, bounds: Bounds<gpui::Pixels>, window, cx| {
-                        *scene.bounds_slot.lock().unwrap() = bounds;
+                        *scene.bounds_slot.lock().expect("the canvas bounds lock") = bounds;
                         // Everything the editor draws is clipped to
                         // the canvas: without a mask the outline and
                         // the neighbouring sorts paint straight over
@@ -1327,8 +1329,8 @@ fn paint_hoi_knobs(scene: &EditorScene, s: &Screen, window: &mut Window) {
         }
         for (id, q) in &scene.hoi_knobs {
             let dragging = scene.hoi_live.is_some_and(|(live, _)| live == *id);
-            let q = if dragging {
-                scene.hoi_live.unwrap().1
+            let q = if let Some((_, live)) = scene.hoi_live.filter(|(live, _)| live == id) {
+                live
             } else {
                 *q
             };
