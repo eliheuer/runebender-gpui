@@ -572,7 +572,7 @@ impl Workspace {
         for name in names {
             if let Some(&index) = font.name_map.get(&name) {
                 font.edit_glyph(index, |glyph| {
-                    runebender_core::ui::theme_oklch::set_glyph_mark(glyph, label.as_deref());
+                    runebender_core::ui::theme::set_glyph_mark(glyph, label.as_deref());
                 });
             }
         }

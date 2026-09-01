@@ -330,7 +330,7 @@ impl Workspace {
             copy.anchors = source.anchors.clone();
             // Unencoded, and red: a placeholder awaiting its design
             // (the repo's lane-2 convention).
-            runebender_core::ui::theme_oklch::set_glyph_mark(&mut copy, Some("red"));
+            runebender_core::ui::theme::set_glyph_mark(&mut copy, Some("red"));
             master.font.default_layer_mut().insert_glyph(copy);
             master.dirty = true;
             master.modified_glyphs.insert(alt.clone());

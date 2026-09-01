@@ -60,7 +60,7 @@ pub(crate) fn icon_svg(name: &'static str, color: gpui::Rgba) -> impl IntoElemen
     canvas(
         move |bounds, _, _| bounds,
         move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-            let Some(icon) = runebender_core::ui::theme_oklch::toolbar_icons().get(name) else {
+            let Some(icon) = runebender_core::ui::theme::toolbar_icons().get(name) else {
                 return;
             };
             let w: f32 = bounds.size.width.into();

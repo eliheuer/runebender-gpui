@@ -12,8 +12,8 @@ use std::sync::RwLock;
 use crate::view::render::px32;
 use crate::view::render::to_count;
 use gpui::Rgba;
-use runebender_core::ui::theme::ColorRgba;
-use runebender_core::ui::theme_oklch::{self, Theme};
+use runebender_core::ui::color::ColorRgba;
+use runebender_core::ui::theme::{self, Theme};
 
 /// The themes in the shared token file, in menu order.
 pub(crate) const THEMES: [(&str, &str); 4] = [
@@ -58,7 +58,7 @@ pub(crate) fn set_theme(id: &str) -> bool {
     let Some((name, _)) = THEMES.iter().find(|(name, _)| *name == id) else {
         return false;
     };
-    let Some(resolved) = theme_oklch::load_theme(id) else {
+    let Some(resolved) = theme::load_theme(id) else {
         return false;
     };
     *CURRENT.write().expect("theme lock") = Some((name, Box::leak(Box::new(resolved))));
@@ -109,12 +109,12 @@ pub(crate) fn mark_paint(label: Option<&str>) -> Option<MarkPaint> {
     let color = mark_color(label?)?;
     let theme = theme();
     Some(match theme.mark_style {
-        theme_oklch::MarkStyle::Fill => MarkPaint {
+        theme::MarkStyle::Fill => MarkPaint {
             bg: Some(color),
             border: theme.mark_outline.map(c).unwrap_or_else(cell_border),
             ink: theme.mark_ink.map(c).unwrap_or_else(text),
         },
-        theme_oklch::MarkStyle::Border => MarkPaint {
+        theme::MarkStyle::Border => MarkPaint {
             bg: None,
             border: color,
             ink: color,
@@ -253,16 +253,16 @@ pub(crate) fn ghost() -> Rgba {
     c(theme().role("component"))
 }
 /// The zoom-dependent design grid line, faded by the level's ramp-in
-/// alpha. The alphas are the web's `DESIGN_GRID_FINE`/`COARSE`,
-/// shared constants in core.
+/// alpha. The colour is a theme role, so the grid sits under the
+/// outline on a light theme as well as a dark one.
 pub(crate) fn design_grid_fine(alpha: f32) -> Rgba {
-    let mut rgba = c(runebender_core::ui::theme::design_grid::FINE);
+    let mut rgba = c(theme().role("designGridFine"));
     rgba.a *= alpha;
     rgba
 }
 /// The coarse design grid line, faded by `alpha` like the fine one.
 pub(crate) fn design_grid_coarse(alpha: f32) -> Rgba {
-    let mut rgba = c(runebender_core::ui::theme::design_grid::COARSE);
+    let mut rgba = c(theme().role("designGridCoarse"));
     rgba.a *= alpha;
     rgba
 }
