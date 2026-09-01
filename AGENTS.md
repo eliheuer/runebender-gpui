@@ -56,6 +56,27 @@ Two tests compile feature code against Virtua Grotesk from
 Do not launch the GUI to check your work while the user is at the
 machine. Verify through tests.
 
+The browser build needs its own toolchain:
+
+```sh
+RUSTUP_TOOLCHAIN=nightly-2026-08-01 \
+CARGO_UNSTABLE_BUILD_STD="std,panic_abort" \
+trunk build --release --public-url /gpui/
+```
+
+`gpui_web` needs wasm atomics and shared memory (see
+`.cargo/config.toml`), and the prebuilt `wasm32-unknown-unknown` std
+has neither, so std is rebuilt: that is `-Z build-std`, nightly only.
+The nightly must be newer than the pinned stable. Install `rust-src`
+and the wasm target for it. To deploy, copy `dist/` into
+runebender-dot-org's `public/gpui/`, keeping
+`coi-serviceworker.min.js` and its script tag at the top of `<head>`:
+GitHub Pages cannot send the COOP/COEP headers shared memory needs.
+
+`gpui_platform` needs its `font-kit` feature. Without it text shapes
+and paints without reaching the screen and the interface comes up
+wordless. `runebender-gpui --fonts` prints what gpui can see.
+
 ## The gate
 
 CI runs on every push, on Linux and macOS: `cargo fmt --check`,
