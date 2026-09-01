@@ -119,12 +119,8 @@ Three consequences follow, and they are the whole argument:
 - **The shell reaches what the window reaches**, because both call
   the same crate. A check in a build and a check in a window cannot
   disagree.
-- **Exit codes mean something.** 0 ok, 1 findings, 2 usage, 4 failed,
-  so a pipeline can branch without parsing prose.
-
-```sh
-runebender-core info --json Font.ufo | jq .glyphs
-```
+- **Exit codes mean something.** 0 ok, 2 usage, 4 failed, so a
+  pipeline can branch without parsing prose.
 
 Being exact about the claim: `runebender-core` takes paths rather than
 stdin. You cannot pipe one invocation into the next. A font source is
