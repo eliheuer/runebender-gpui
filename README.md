@@ -123,8 +123,7 @@ Three consequences follow, and they are the whole argument:
   so a pipeline can branch without parsing prose.
 
 ```sh
-runebender-core clean --dry-run sources/*.ufo || echo "sources need a pass"
-runebender-core clean --json Family.designspace | jq '.sources[].changed[]'
+runebender-core info --json Font.ufo | jq .glyphs
 ```
 
 Being exact about the claim: `runebender-core` takes paths rather than
