@@ -123,13 +123,13 @@ Three consequences follow, and they are the whole argument:
   so a pipeline can branch without parsing prose.
 
 ```sh
-runebender-core check --a Light.ufo --b Bold.ufo || echo "masters drifted"
-runebender --json color Font.ufo | jq '.findings[] | select(.reads=="darker")'
+runebender-core clean --dry-run sources/*.ufo || echo "sources need a pass"
+runebender-core color --json Font.ufo | jq '.findings[] | select(.reads=="darker")'
 ```
 
 Being exact about the claim: `runebender-core` takes paths rather than
-stdin, and writes reports rather than fonts. You cannot pipe one
-invocation into the next. A font source is a directory, not a stream.
+stdin. You cannot pipe one invocation into the next. A font source is
+a directory, not a stream.
 And a window is not a filter. What holds is that the parts are
 separable, the interface is a file, and nothing is trapped inside the
 application.
