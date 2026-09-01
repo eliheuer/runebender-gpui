@@ -78,6 +78,12 @@ path in the repository that has the feature, and write the same
 decomposition here. If it needs a new file, give it the name the
 other one uses, so the next port in the other direction is a diff.
 
+## What is not built yet
+
+`docs/ROADMAP.md` lists the gaps: the browser build's, the one
+remaining Arabic item, and the long list against Glyphs 4. It is a
+list, not a schedule.
+
 ## Build and test
 
 ```sh
