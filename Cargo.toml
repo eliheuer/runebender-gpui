@@ -139,7 +139,7 @@ features = ["accelerate"]
 # its command line, which is the only thing that needs clap.
 [dependencies.runebender-core]
 git = "https://github.com/eliheuer/runebender-core"
-rev = "403d51b4b4ab5e335843d11d7fd4d669be68cee0"
+rev = "4289e264ab62713a0dc89a080c0e64783e553ee6"
 default-features = false
 
 [dependencies.serde]
