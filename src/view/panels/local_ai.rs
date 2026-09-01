@@ -22,7 +22,7 @@ impl Workspace {
     /// Both halves matter. Running a model is easy to offer and easy
     /// to trust too far; scoring it against work done by hand is what
     /// says whether the proposal was worth having.
-    pub(crate) fn local_ai_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn local_ai_panel(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let body = div().flex().flex_col().gap_1p5();
 
         // Which model, and a way to change it.

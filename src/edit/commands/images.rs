@@ -11,7 +11,7 @@ impl Workspace {
     /// Glyph > Trace Image…: pick an image, autotrace it through
     /// img2bez, the web editor's tracer, and replace the current
     /// glyph's contours with the result. Undoable.
-    pub(crate) fn command_trace_image(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_trace_image(&mut self, cx: &mut Context<'_, Self>) {
         let Mode::Editor(index) = self.mode else {
             return;
         };
@@ -47,7 +47,7 @@ impl Workspace {
     /// store and set it as this glyph's background image, scaled to
     /// the em and sitting on the descender. The tracing-template
     /// workflow; norad round-trips the images directory.
-    pub(crate) fn command_place_image(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_place_image(&mut self, cx: &mut Context<'_, Self>) {
         let Mode::Editor(index) = self.mode else {
             return;
         };
@@ -82,7 +82,7 @@ impl Workspace {
     /// Glyph > Import SVG…: parse the file's path outlines and add
     /// them to the open glyph, fitted between descender and
     /// ascender, appended so existing drawing survives (undoable).
-    pub(crate) fn command_import_svg(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_import_svg(&mut self, cx: &mut Context<'_, Self>) {
         let Mode::Editor(index) = self.mode else {
             return;
         };

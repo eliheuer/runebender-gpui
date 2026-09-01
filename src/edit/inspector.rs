@@ -9,6 +9,7 @@
 
 use crate::Mode;
 use crate::Workspace;
+use crate::view::render::to_index;
 use crate::widgets;
 use crate::workspace::AnchorFamily;
 use crate::workspace::FontInfoField;
@@ -64,7 +65,7 @@ impl Workspace {
     }
 
     /// The background layer we read: public.background first, then
-    /// RoboFont's conventional plain "background".
+    /// `RoboFont`'s conventional plain "background".
     pub(crate) fn background_layer_name(font: &norad::Font) -> Option<String> {
         for candidate in ["public.background", "background"] {
             if font.layers.get(candidate).is_some() {
@@ -301,7 +302,7 @@ impl Workspace {
         &mut self,
         force: bool,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         if !force && window.focused(cx).is_some_and(|f| f != self.focus_handle) {
             return;
@@ -325,7 +326,7 @@ impl Workspace {
         let set = |entity: &gpui::Entity<widgets::input::InputState>,
                    value: String,
                    window: &mut Window,
-                   cx: &mut Context<Self>| {
+                   cx: &mut Context<'_, Self>| {
             entity.update(cx, |st, cx| {
                 if st.value() != value.as_str() {
                     st.set_value(value, window, cx);
@@ -631,7 +632,7 @@ impl Workspace {
         // in just above the marker, so call order is kept and the
         // marker stays for the next Generate.
         for (offset, line) in fea.lines().map({
-            let mut pos = 0usize;
+            let mut pos = 0_usize;
             move |line| {
                 let at = pos;
                 pos += line.len() + 1;
@@ -689,7 +690,7 @@ impl Workspace {
         &mut self,
         force: bool,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         if !force
             && (self.features_edited || window.focused(cx).is_some_and(|f| f != self.focus_handle))
@@ -822,24 +823,40 @@ impl Workspace {
                         master.cap_height = Some(v);
                     }
                     FontInfoField::TypoAscender => {
-                        info.open_type_os2_typo_ascender = Some(v as i32)
+                        info.open_type_os2_typo_ascender =
+                            Some(i32::try_from(to_index(v)).unwrap_or(0));
                     }
                     FontInfoField::TypoDescender => {
-                        info.open_type_os2_typo_descender = Some(v as i32)
+                        info.open_type_os2_typo_descender =
+                            Some(i32::try_from(to_index(v)).unwrap_or(0));
                     }
-                    FontInfoField::TypoLineGap => info.open_type_os2_typo_line_gap = Some(v as i32),
-                    FontInfoField::HheaAscender => info.open_type_hhea_ascender = Some(v as i32),
-                    FontInfoField::HheaDescender => info.open_type_hhea_descender = Some(v as i32),
-                    FontInfoField::HheaLineGap => info.open_type_hhea_line_gap = Some(v as i32),
+                    FontInfoField::TypoLineGap => {
+                        info.open_type_os2_typo_line_gap =
+                            Some(i32::try_from(to_index(v)).unwrap_or(0));
+                    }
+                    FontInfoField::HheaAscender => {
+                        info.open_type_hhea_ascender =
+                            Some(i32::try_from(to_index(v)).unwrap_or(0));
+                    }
+                    FontInfoField::HheaDescender => {
+                        info.open_type_hhea_descender =
+                            Some(i32::try_from(to_index(v)).unwrap_or(0));
+                    }
+                    FontInfoField::HheaLineGap => {
+                        info.open_type_hhea_line_gap =
+                            Some(i32::try_from(to_index(v)).unwrap_or(0));
+                    }
                     FontInfoField::WinAscent => {
                         if v >= 0.0 {
-                            info.open_type_os2_win_ascent = Some(v as u32)
+                            info.open_type_os2_win_ascent =
+                                Some(u32::try_from(to_index(v)).unwrap_or(0));
                         }
                     }
                     FontInfoField::WinDescent => {
                         // winDescent is stored positive.
                         if v >= 0.0 {
-                            info.open_type_os2_win_descent = Some(v as u32)
+                            info.open_type_os2_win_descent =
+                                Some(u32::try_from(to_index(v)).unwrap_or(0));
                         }
                     }
                     FontInfoField::Family
@@ -861,7 +878,7 @@ impl Workspace {
         &mut self,
         force: bool,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         if !force && window.focused(cx).is_some_and(|f| f != self.focus_handle) {
             return;
@@ -1034,7 +1051,7 @@ impl Workspace {
         &mut self,
         force: bool,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         // The metric fields live in the Glyph panel, which is up in
         // both modes: in the grid they follow the selected cell.
@@ -1064,7 +1081,7 @@ impl Workspace {
         let set = |entity: &gpui::Entity<widgets::input::InputState>,
                    value: String,
                    window: &mut Window,
-                   cx: &mut Context<Self>| {
+                   cx: &mut Context<'_, Self>| {
             entity.update(cx, |st, cx| {
                 if st.value() != value.as_str() {
                     st.set_value(value, window, cx);
@@ -1175,7 +1192,7 @@ impl Workspace {
         &mut self,
         force: bool,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         if !force && window.focused(cx).is_some_and(|f| f != self.focus_handle) {
             return;

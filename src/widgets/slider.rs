@@ -19,13 +19,13 @@ use gpui::{
 };
 
 /// Emitted while the value is being changed by the user.
-pub enum SliderEvent {
+pub(crate) enum SliderEvent {
     /// The new value, already snapped and clamped.
     Change(f32),
 }
 
 /// A value between `min` and `max`, snapped to `step`.
-pub struct SliderState {
+pub(crate) struct SliderState {
     /// The low end of the range.
     min: f32,
     /// The high end of the range.
@@ -41,7 +41,7 @@ pub struct SliderState {
 
 impl SliderState {
     /// A state spanning 0 to 100, stepping by 1, starting at 0.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             min: 0.0,
             max: 100.0,
@@ -52,34 +52,34 @@ impl SliderState {
     }
 
     /// Set the low end of the range and clamp the value into it.
-    pub fn min(mut self, min: f32) -> Self {
+    pub(crate) fn min(mut self, min: f32) -> Self {
         self.min = min;
         self.clamp_value();
         self
     }
 
     /// Set the high end of the range and clamp the value into it.
-    pub fn max(mut self, max: f32) -> Self {
+    pub(crate) fn max(mut self, max: f32) -> Self {
         self.max = max;
         self.clamp_value();
         self
     }
 
     /// Set the snap increment. Zero or less falls back to 1.
-    pub fn step(mut self, step: f32) -> Self {
+    pub(crate) fn step(mut self, step: f32) -> Self {
         self.step = if step > 0.0 { step } else { 1.0 };
         self
     }
 
     /// Set the starting value, clamped into the range.
-    pub fn default_value(mut self, value: f32) -> Self {
+    pub(crate) fn default_value(mut self, value: f32) -> Self {
         self.value = value;
         self.clamp_value();
         self
     }
 
     /// Where the thumb sits, 0.0 at the minimum and 1.0 at the maximum.
-    pub fn percentage(&self) -> f32 {
+    pub(crate) fn percentage(&self) -> f32 {
         let span = self.max - self.min;
         if span.abs() < f32::EPSILON {
             return 0.0;
@@ -89,7 +89,12 @@ impl SliderState {
 
     /// Set the value from code. Silent: only a drag reports a change,
     /// so a slider following the state it displays cannot feed itself.
-    pub fn set_value(&mut self, value: f32, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn set_value(
+        &mut self,
+        value: f32,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         self.value = value;
         self.clamp_value();
         cx.notify();
@@ -111,7 +116,7 @@ impl SliderState {
     }
 
     /// Turn a window position into a value, snap it, and report it.
-    fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+    fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<'_, Self>) {
         let width = self.bounds.size.width;
         if width <= px(0.0) {
             return;
@@ -130,7 +135,7 @@ impl SliderState {
     }
 
     #[cfg(test)]
-    pub fn value(&self) -> f32 {
+    pub(crate) fn value(&self) -> f32 {
         self.value
     }
 }
@@ -149,7 +154,7 @@ impl EventEmitter<SliderEvent> for SliderState {}
 struct DragSlider(gpui::EntityId);
 
 impl gpui::Render for DragSlider {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
         gpui::Empty
     }
 }
@@ -160,7 +165,7 @@ impl gpui::Render for DragSlider {
 /// Handlers update the state entity directly rather than through
 /// `window.listener_for`, so this can be called from a render path
 /// that only has an `App`.
-pub fn track(
+pub(crate) fn track(
     state: &Entity<SliderState>,
     height: Pixels,
     fill: impl IntoElement,

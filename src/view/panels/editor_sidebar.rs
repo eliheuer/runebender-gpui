@@ -36,11 +36,11 @@ use runebender_core::outline::glyph_ops::CurveOp;
 impl Workspace {
     /// Editor sidebar: search + scrollable mini glyph grid, so glyph
     /// switching doesn't require leaving the editor.
-    pub(crate) fn editor_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn editor_sidebar(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         let _query = self.sidebar.search_query.clone();
         let fit = self.sidebar_cell_metrics();
-        let mut rows_total = 0usize;
-        let mut shown = 0usize;
+        let mut rows_total = 0_usize;
+        let mut shown = 0_usize;
         let matched = self.glyph_order();
         let mut visible_rows: Vec<Vec<(usize, usize)>> = Vec::new();
         let cells: Vec<_> = match self.font() {
@@ -87,7 +87,7 @@ impl Workspace {
                    label: &'static str,
                    icon: &'static str,
                    which: u8,
-                   cx: &mut Context<Self>| {
+                   cx: &mut Context<'_, Self>| {
             let active = self.sidebar.tab == which;
             // Same treatment as the edit-mode toolbar: a filled tile
             // when active, no outline either way.
@@ -320,7 +320,7 @@ impl Workspace {
     /// one click away.
     ///
     /// This is the Related Glyphs panel in Fontra.
-    pub(crate) fn related_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn related_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let Some(index) = self.current_glyph_index() else {
             return self.section(cx, "Related", div());
         };
@@ -387,7 +387,7 @@ impl Workspace {
                 let target = font.name_map.get(related.as_str()).copied();
                 chips = chips.child(
                     div()
-                        .id(gpui::SharedString::from(format!("rel-{label}-{related}")))
+                        .id(SharedString::from(format!("rel-{label}-{related}")))
                         .px_1()
                         .rounded(t::radius())
                         .border(t::stroke())
@@ -418,7 +418,7 @@ impl Workspace {
     /// glyph chip to open that glyph for editing inside the shaped
     /// run. This is Fontra's shaping inspector, on the shared text
     /// engine.
-    pub(crate) fn shaping_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn shaping_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         use runebender_core::text::buffer::{TextDirection, TextSortKind};
         let count = self.edit_buffer.len();
         if count < 2 {
@@ -434,7 +434,7 @@ impl Workspace {
         // Carrier per sort: an absorbed sort (eaten by a ligature)
         // belongs to the last unabsorbed sort before it.
         let mut carrier_of: Vec<usize> = Vec::with_capacity(count);
-        let mut last_carrier = 0usize;
+        let mut last_carrier = 0_usize;
         for i in 0..count {
             let absorbed = self.edit_buffer.sort(i).is_some_and(|s| s.is_absorbed());
             if !absorbed {
@@ -448,7 +448,7 @@ impl Workspace {
                     sub: SharedString,
                     lit: bool,
                     dim: bool,
-                    cx: &mut Context<Self>,
+                    cx: &mut Context<'_, Self>,
                     carrier: usize,
                     open_on_double: bool| {
             div()
@@ -591,7 +591,7 @@ impl Workspace {
             let tag_owned = tag.clone();
             toggles = toggles.child(
                 div()
-                    .id(gpui::SharedString::from(format!("fea-{tag}")))
+                    .id(SharedString::from(format!("fea-{tag}")))
                     .px_1p5()
                     .py_0p5()
                     .rounded(t::radius())
@@ -726,7 +726,7 @@ impl Workspace {
     }
 
     /// Transformations section for the right sidebar (editor mode).
-    pub(crate) fn transform_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn transform_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let text_op = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
@@ -953,11 +953,11 @@ impl Workspace {
 
     /// Curves section: the comb and continuity toggles. This is the
     /// web editor's `CurvePanel`.
-    pub(crate) fn curves_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn curves_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let toggle = |id: &'static str,
                       label: &'static str,
                       active: bool,
-                      cx: &mut Context<Self>,
+                      cx: &mut Context<'_, Self>,
                       on: fn(&mut Self)| {
             div()
                 .id(id)
@@ -1021,11 +1021,11 @@ impl Workspace {
 
     /// Background section: show/send/swap/clear plus the reference
     /// glyph. This is the web editor's Background block.
-    pub(crate) fn background_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn background_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let button = |id: &'static str,
                       label: &'static str,
                       active: bool,
-                      cx: &mut Context<Self>,
+                      cx: &mut Context<'_, Self>,
                       on: fn(&mut Self)| {
             div()
                 .id(id)
@@ -1071,13 +1071,13 @@ impl Workspace {
                         |this| this.show_mark_cloud = !this.show_mark_cloud,
                     ))
                     .child(button("bg-send", "Send to background", false, cx, |this| {
-                        this.command_send_to_background()
+                        this.command_send_to_background();
                     }))
                     .child(button("bg-swap", "Swap", false, cx, |this| {
-                        this.command_swap_background()
+                        this.command_swap_background();
                     }))
                     .child(button("bg-clear", "Clear", false, cx, |this| {
-                        this.command_clear_background()
+                        this.command_clear_background();
                     })),
             )
             .child(
@@ -1101,7 +1101,7 @@ impl Workspace {
     }
 
     /// Layers section: one row per master, the active one highlighted.
-    pub(crate) fn layers_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn layers_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let (names, active): (Vec<SharedString>, usize) = match &self.project {
             Some(p) => (
                 p.master_names
@@ -1344,13 +1344,13 @@ impl Workspace {
     /// editor container.
     pub(crate) fn context_menu_overlay(
         &self,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) -> Option<gpui::Stateful<gpui::Div>> {
         let menu = self.context_menu.as_ref()?;
         let item = |id: (&'static str, usize),
                     label: SharedString,
                     action: &'static str,
-                    cx: &mut Context<Self>| {
+                    cx: &mut Context<'_, Self>| {
             div()
                 .id(id)
                 .px_3()

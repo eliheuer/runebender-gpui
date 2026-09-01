@@ -5,6 +5,7 @@
 
 use crate::Mode;
 use crate::Workspace;
+use crate::edit::commands::ds_f32;
 use runebender_core::analysis::measure::joining_band;
 use runebender_core::document::project::Master;
 use runebender_core::formats::metrics_keys::MetricsFormula;
@@ -129,7 +130,7 @@ impl Workspace {
         let Some(project) = self.project.as_mut() else {
             return;
         };
-        let mut adjusted = 0usize;
+        let mut adjusted = 0_usize;
         for _pass in 0..5 {
             let mut moved = false;
             for master in project.masters.iter_mut() {
@@ -348,8 +349,8 @@ impl Workspace {
                 condition_sets: vec![norad::designspace::ConditionSet {
                     conditions: vec![norad::designspace::Condition {
                         name: axis.name.clone(),
-                        minimum: Some(at as f32),
-                        maximum: Some(axis.max as f32),
+                        minimum: Some(ds_f32(at)),
+                        maximum: Some(ds_f32(axis.max)),
                     }],
                 }],
                 substitutions: vec![norad::designspace::Substitution {
@@ -445,7 +446,7 @@ impl Workspace {
                 copy.width = source.width;
                 copy.contours = source.contours.clone();
                 let mut pole = plist::Dictionary::new();
-                pole.insert(name.to_string(), plist::Value::Integer(2u64.into()));
+                pole.insert(name.to_string(), plist::Value::Integer(2_u64.into()));
                 copy.lib.insert(
                     "com.runebender.partSelection".into(),
                     plist::Value::Dictionary(pole),
@@ -662,7 +663,7 @@ impl Workspace {
                         .iter()
                         .map(|(axis, value)| norad::designspace::Dimension {
                             name: axis.clone(),
-                            xvalue: Some(*value as f32),
+                            xvalue: Some(ds_f32(*value)),
                             ..Default::default()
                         })
                         .collect(),

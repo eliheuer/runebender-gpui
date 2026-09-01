@@ -74,14 +74,14 @@ impl Workspace {
     /// status note. Our own saves are suppressed via the `last_save`
     /// timestamp.
     #[cfg(target_family = "wasm")]
-    pub(crate) fn start_watching(&mut self, _cx: &mut Context<Self>) {
+    pub(crate) fn start_watching(&mut self, _cx: &mut Context<'_, Self>) {
         // No filesystem on the web: live reload will ride the host
         // data layer instead.
     }
 
     #[cfg(not(target_family = "wasm"))]
     /// The native arm: watch each master's source directory with `notify` and reload masters that change on disk.
-    pub(crate) fn start_watching(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn start_watching(&mut self, cx: &mut Context<'_, Self>) {
         use futures::StreamExt;
         self._watcher = None;
         let Some(project) = self.project.as_ref() else {
@@ -177,7 +177,7 @@ impl Workspace {
     /// Connect to the workspace server named by `?server=` and load
     /// its fonts (web builds).
     #[cfg(target_family = "wasm")]
-    pub(crate) fn connect_web_host(&mut self, base: String, cx: &mut Context<Self>) {
+    pub(crate) fn connect_web_host(&mut self, base: String, cx: &mut Context<'_, Self>) {
         self.status_note = Some(format!("Connecting to {base}…").into());
         let client = cx.http_client();
         cx.spawn(async move |this, cx| {
@@ -222,7 +222,7 @@ impl Workspace {
     /// modified glifs and kerning, each PUT with its `If-Match`
     /// ETag.
     #[cfg(target_family = "wasm")]
-    pub(crate) fn save_to_web_host(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn save_to_web_host(&mut self, cx: &mut Context<'_, Self>) {
         let Some(host) = self.web_host.as_ref() else {
             self.status_note = Some("No server connected: open with ?server=http://…".into());
             return;
@@ -331,7 +331,7 @@ impl Workspace {
     /// Cmd+O: native open dialog. Directories are selectable, so a
     /// .ufo and a .glyphspackage come through the same way a
     /// .designspace does.
-    pub(crate) fn open_dialog(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn open_dialog(&mut self, cx: &mut Context<'_, Self>) {
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: true,

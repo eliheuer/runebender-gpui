@@ -21,7 +21,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 /// What one edit did.
-pub struct Entry<'a> {
+pub(crate) struct Entry<'a> {
     /// The operation's name, as the user would say it: "remove overlap".
     pub op: &'a str,
     /// The glyph it applied to, when it applied to one.
@@ -36,7 +36,7 @@ pub struct Entry<'a> {
 /// set, there is no journal: a tool that logs where it was not asked
 /// to is a tool people turn off entirely. Returns `None` in that
 /// case.
-pub fn path() -> Option<PathBuf> {
+pub(crate) fn path() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("RUNEBENDER_JOURNAL") {
         return Some(PathBuf::from(p));
     }
@@ -67,7 +67,7 @@ fn escape(s: &str) -> String {
 ///
 /// Separate from the writing so it can be tested without touching a
 /// filesystem.
-pub fn line(entry: &Entry) -> String {
+pub(crate) fn line(entry: &Entry<'_>) -> String {
     let mut s = format!("{{\"op\":\"{}\"", escape(entry.op));
     if let Some(g) = entry.glyph {
         s.push_str(&format!(",\"glyph\":\"{}\"", escape(g)));
@@ -83,7 +83,7 @@ pub fn line(entry: &Entry) -> String {
 ///
 /// Failures are silent on purpose: a log that cannot be written is not
 /// a reason to interrupt someone's drawing.
-pub fn record(entry: Entry) {
+pub(crate) fn record(entry: Entry<'_>) {
     let Some(path) = path() else { return };
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)

@@ -7,6 +7,7 @@ use crate::Mode;
 use crate::PathBuf;
 use crate::Workspace;
 use crate::app_menus;
+use crate::edit::commands::rotate;
 #[cfg(not(target_family = "wasm"))]
 use crate::platform::host::fontc_binary;
 use crate::view::theme as t;
@@ -69,7 +70,7 @@ impl Workspace {
 
     /// Save As: pick a directory; the active master saves there under
     /// its family-style name and keeps saving there from now on.
-    pub(crate) fn command_save_as(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_save_as(&mut self, cx: &mut Context<'_, Self>) {
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: false,
             directories: true,
@@ -118,7 +119,7 @@ impl Workspace {
         &mut self,
         id: &str,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         if !t::set_theme(id) {
             return;
@@ -140,7 +141,7 @@ impl Workspace {
 
     /// Save every dirty master (native), or PUT modified files to the
     /// workspace server (web).
-    pub(crate) fn command_save(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_save(&mut self, cx: &mut Context<'_, Self>) {
         #[cfg(target_family = "wasm")]
         {
             self.save_to_web_host(cx);
@@ -196,7 +197,7 @@ impl Workspace {
     /// when the tool can be found. Runs in the background; reports
     /// through the status note.
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn command_export(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_export(&mut self, cx: &mut Context<'_, Self>) {
         if self
             .project
             .as_ref()
@@ -227,7 +228,7 @@ impl Workspace {
                     .spawn({
                         let label = label.clone();
                         async move {
-                            let path_env = Workspace::export_path_env(Some(&workdir));
+                            let path_env = Self::export_path_env(Some(&workdir));
                             let output = std::process::Command::new("/bin/bash")
                                 .arg(&script)
                                 .current_dir(&workdir)
@@ -298,7 +299,7 @@ impl Workspace {
                         // Google Fonts spec fixes when gftools is
                         // around (PATH after export_path_env, which
                         // includes any repo venv above the source).
-                        let path_env = Workspace::export_path_env(source.parent());
+                        let path_env = Self::export_path_env(source.parent());
                         let fixed = std::process::Command::new("gftools-fix-font")
                             .arg("-o")
                             .arg(&out_file)
@@ -340,7 +341,7 @@ impl Workspace {
 
     /// The browser build has no fontc to run; exporting is native.
     #[cfg(target_family = "wasm")]
-    pub(crate) fn command_export(&mut self, _cx: &mut Context<Self>) {
+    pub(crate) fn command_export(&mut self, _cx: &mut Context<'_, Self>) {
         self.status_note = Some("Export runs in the native app only".into());
     }
 
@@ -353,9 +354,8 @@ impl Workspace {
         let Some(font) = self.font() else { return };
         let entry = &font.glyphs[index];
         let (name, codepoint, advance) = (entry.name.to_string(), entry.codepoint, entry.advance);
-        let count = SAMPLE_STRINGS.len() as isize;
-        self.preview.sample_index =
-            (self.preview.sample_index as isize + step).rem_euclid(count) as usize;
+        let count = SAMPLE_STRINGS.len();
+        self.preview.sample_index = rotate(self.preview.sample_index, count, step);
         let sample = SAMPLE_STRINGS[self.preview.sample_index];
         self.edit_buffer.clear();
         // The open glyph leads; the sample text follows it.
@@ -374,11 +374,11 @@ impl Workspace {
         let Some(project) = self.project.as_ref() else {
             return;
         };
-        let n = project.masters.len() as isize;
+        let n = project.masters.len();
         if n < 2 {
             return;
         }
-        let next = (project.active as isize + delta).rem_euclid(n) as usize;
+        let next = rotate(project.active, n, delta);
         self.switch_master(next);
     }
 }

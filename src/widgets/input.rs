@@ -16,13 +16,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::view::render::px32;
 use gpui::{App, Context, EventEmitter, FocusHandle, Focusable, SharedString, Window};
 use parley::{FontContext, LayoutContext, PlainEditor};
 
 /// What a field reports. `Change` on every edit, `PressEnter` when the
 /// value is committed.
 #[derive(Clone, Debug, PartialEq)]
-pub enum InputEvent {
+pub(crate) enum InputEvent {
     /// The text changed under user editing.
     Change,
     /// Enter was pressed in a single-line field.
@@ -31,7 +32,7 @@ pub enum InputEvent {
 
 /// Shared parley contexts. Building a `FontContext` scans the system
 /// font list, so every field borrows one rather than owning it.
-pub struct TextContexts {
+pub(crate) struct TextContexts {
     /// The system font list parley shapes against.
     pub font: FontContext,
     /// Parley's reusable layout scratch space.
@@ -63,7 +64,7 @@ fn register_field(cx: &mut App, handle: &FocusHandle) {
 }
 
 /// Whether a text field currently has the keyboard.
-pub fn any_field_focused(window: &Window, cx: &App) -> bool {
+pub(crate) fn any_field_focused(window: &Window, cx: &App) -> bool {
     let Some(focused) = window.focused(cx) else {
         return false;
     };
@@ -72,10 +73,10 @@ pub fn any_field_focused(window: &Window, cx: &App) -> bool {
 }
 
 /// The contexts, in a global so the whole window shares one font list.
-pub struct GlobalTextContexts(pub Arc<std::sync::Mutex<TextContexts>>);
+pub(crate) struct GlobalTextContexts(pub Arc<std::sync::Mutex<TextContexts>>);
 
 /// The window's shared contexts, created on first use.
-pub fn text_contexts(cx: &mut App) -> Arc<std::sync::Mutex<TextContexts>> {
+pub(crate) fn text_contexts(cx: &mut App) -> Arc<std::sync::Mutex<TextContexts>> {
     if !cx.has_global::<GlobalTextContexts>() {
         let contexts = Arc::new(std::sync::Mutex::new(TextContexts::default()));
         cx.set_global(GlobalTextContexts(contexts));
@@ -84,7 +85,7 @@ pub fn text_contexts(cx: &mut App) -> Arc<std::sync::Mutex<TextContexts>> {
 }
 
 /// One text field.
-pub struct InputState {
+pub(crate) struct InputState {
     /// The parley editor: text, cursor, selection, IME.
     editor: PlainEditor<[u8; 4]>,
     /// The shared font and layout contexts.
@@ -99,7 +100,7 @@ pub struct InputState {
     /// hand out a `&str` without borrowing the editor mutably.
     text: String,
     /// Where the text last painted, for turning clicks into positions.
-    origin: gpui::Point<gpui::Pixels>,
+    origin: Point<Pixels>,
     /// The wrap width in force, so it is only set when it changes.
     layout_width: Option<f32>,
     /// Whether a selection drag is in progress.
@@ -107,11 +108,11 @@ pub struct InputState {
 }
 
 /// The font size fields are drawn at.
-pub const FONT_SIZE: f32 = 13.0;
+pub(crate) const FONT_SIZE: f32 = 13.0;
 
 impl InputState {
     /// An empty single-line field.
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(_window: &mut Window, cx: &mut Context<'_, Self>) -> Self {
         let contexts = text_contexts(cx);
         let focus_handle = cx.focus_handle();
         register_field(cx, &focus_handle);
@@ -124,36 +125,36 @@ impl InputState {
             placeholder: SharedString::default(),
             multi_line: false,
             text: String::new(),
-            origin: gpui::Point::default(),
+            origin: Point::default(),
             layout_width: None,
             dragging: false,
         }
     }
 
     /// Set the text shown while the field is empty.
-    pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
+    pub(crate) fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
         self
     }
 
     /// A field that keeps line breaks, for the feature file.
-    pub fn multi_line(mut self) -> Self {
+    pub(crate) fn multi_line(mut self) -> Self {
         self.multi_line = true;
         self
     }
 
     /// The current text.
-    pub fn value(&self) -> &str {
+    pub(crate) fn value(&self) -> &str {
         &self.text
     }
 
     /// Set the value from code. Silent, so a field showing state it
     /// does not own cannot feed itself.
-    pub fn set_value(
+    pub(crate) fn set_value(
         &mut self,
         value: impl AsRef<str>,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         let value = value.as_ref();
         if self.text == value {
@@ -170,9 +171,9 @@ impl InputState {
     }
 
     /// Run one editing action, then report the change.
-    pub fn edit(
+    pub(crate) fn edit(
         &mut self,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
         action: impl FnOnce(&mut parley::PlainEditorDriver<'_, [u8; 4]>),
     ) {
         {
@@ -188,7 +189,7 @@ impl InputState {
     }
 
     /// Insert text, dropping newlines in a single-line field.
-    pub fn insert(&mut self, text: &str, cx: &mut Context<Self>) {
+    pub(crate) fn insert(&mut self, text: &str, cx: &mut Context<'_, Self>) {
         let cleaned: String;
         let text = if self.multi_line {
             text
@@ -203,7 +204,7 @@ impl InputState {
     }
 
     /// Enter: a line break in a multi-line field, a commit otherwise.
-    pub fn press_enter(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn press_enter(&mut self, cx: &mut Context<'_, Self>) {
         if self.multi_line {
             self.edit(cx, |driver| driver.insert_or_replace_selection("\n"));
         } else {
@@ -213,7 +214,7 @@ impl InputState {
 
     /// Where the text starts on screen, recorded when it paints so a
     /// click can be turned into a text position.
-    fn record_origin(&mut self, origin: gpui::Point<gpui::Pixels>) {
+    fn record_origin(&mut self, origin: Point<Pixels>) {
         self.origin = origin;
     }
 
@@ -244,10 +245,10 @@ impl InputState {
                 .into_iter()
                 .map(|(rect, _)| {
                     (
-                        rect.x0 as f32,
-                        rect.y0 as f32,
-                        (rect.x1 - rect.x0) as f32,
-                        (rect.y1 - rect.y0) as f32,
+                        px32(rect.x0),
+                        px32(rect.y0),
+                        px32(rect.x1 - rect.x0),
+                        px32(rect.y1 - rect.y0),
                     )
                 })
                 .collect()
@@ -259,22 +260,17 @@ impl InputState {
         self.with_layout(|editor| {
             editor.cursor_geometry(1.5).map(|rect| {
                 (
-                    rect.x0 as f32,
-                    rect.y0 as f32,
-                    (rect.x1 - rect.x0) as f32,
-                    (rect.y1 - rect.y0) as f32,
+                    px32(rect.x0),
+                    px32(rect.y0),
+                    px32(rect.x1 - rect.x0),
+                    px32(rect.y1 - rect.y0),
                 )
             })
         })
     }
 
     /// Paint the text itself.
-    fn paint_glyphs(
-        &mut self,
-        origin: gpui::Point<gpui::Pixels>,
-        color: gpui::Rgba,
-        window: &mut Window,
-    ) {
+    fn paint_glyphs(&mut self, origin: Point<Pixels>, color: Rgba, window: &mut Window) {
         let contexts = self.contexts.clone();
         let mut contexts = contexts.lock().expect("text contexts");
         let TextContexts { font, layout } = &mut *contexts;
@@ -285,12 +281,7 @@ impl InputState {
 
     /// A click: one press moves the caret, two select a word, three
     /// select the line.
-    fn click_at(
-        &mut self,
-        position: gpui::Point<gpui::Pixels>,
-        clicks: usize,
-        cx: &mut Context<Self>,
-    ) {
+    fn click_at(&mut self, position: Point<Pixels>, clicks: usize, cx: &mut Context<'_, Self>) {
         let (x, y) = self.to_text_space(position);
         {
             let contexts = self.contexts.clone();
@@ -308,7 +299,7 @@ impl InputState {
     }
 
     /// Extend the selection while the mouse is down.
-    fn drag_to(&mut self, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+    fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<'_, Self>) {
         if !self.dragging {
             return;
         }
@@ -325,7 +316,7 @@ impl InputState {
     }
 
     /// A window position as coordinates relative to where the text painted.
-    fn to_text_space(&self, position: gpui::Point<gpui::Pixels>) -> (f32, f32) {
+    fn to_text_space(&self, position: Point<Pixels>) -> (f32, f32) {
         (
             f32::from(position.x - self.origin.x),
             f32::from(position.y - self.origin.y),
@@ -333,7 +324,7 @@ impl InputState {
     }
 
     /// One keystroke. Returns whether the field used it.
-    fn on_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
+    fn on_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<'_, Self>) -> bool {
         let m = &keystroke.modifiers;
         let word = m.alt || m.control;
         let shift = m.shift;
@@ -455,7 +446,7 @@ impl InputState {
     }
 
     /// Put the selection on the clipboard.
-    fn copy(&mut self, cx: &mut Context<Self>) {
+    fn copy(&mut self, cx: &mut Context<'_, Self>) {
         let Some(text) = self.editor.selected_text().map(str::to_string) else {
             return;
         };
@@ -466,7 +457,7 @@ impl InputState {
     }
 
     /// Copy, then take it out.
-    fn cut(&mut self, cx: &mut Context<Self>) {
+    fn cut(&mut self, cx: &mut Context<'_, Self>) {
         self.copy(cx);
         if self.editor.selected_text().is_some() {
             self.edit(cx, |d| d.delete_selection());
@@ -474,7 +465,7 @@ impl InputState {
     }
 
     /// Replace the selection with the clipboard's text.
-    fn paste(&mut self, cx: &mut Context<Self>) {
+    fn paste(&mut self, cx: &mut Context<'_, Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
@@ -484,7 +475,7 @@ impl InputState {
     /// Move the caret without reporting a text change.
     fn motion(
         &mut self,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
         action: impl FnOnce(&mut parley::PlainEditorDriver<'_, [u8; 4]>),
     ) {
         let contexts = self.contexts.clone();
@@ -497,7 +488,7 @@ impl InputState {
     }
 
     /// The shared contexts, for callers that shape text themselves.
-    pub fn contexts(&self) -> Arc<std::sync::Mutex<TextContexts>> {
+    pub(crate) fn contexts(&self) -> Arc<std::sync::Mutex<TextContexts>> {
         self.contexts.clone()
     }
 }
@@ -665,7 +656,7 @@ use crate::view::theme as t;
 
 /// A text field.
 #[derive(gpui::IntoElement)]
-pub struct Input {
+pub(crate) struct Input {
     /// The field this element draws.
     state: gpui::Entity<InputState>,
     /// Whether the field fills the height it is given.
@@ -676,7 +667,7 @@ pub struct Input {
 
 impl Input {
     /// An element drawing `state` at the standard height.
-    pub fn new(state: &gpui::Entity<InputState>) -> Self {
+    pub(crate) fn new(state: &gpui::Entity<InputState>) -> Self {
         Self {
             state: state.clone(),
             full_height: false,
@@ -685,13 +676,13 @@ impl Input {
     }
 
     /// Fill the space given, for the feature editor.
-    pub fn h_full(mut self) -> Self {
+    pub(crate) fn h_full(mut self) -> Self {
         self.full_height = true;
         self
     }
 
     /// A shorter field, for rows that pack several together.
-    pub fn small(mut self) -> Self {
+    pub(crate) fn small(mut self) -> Self {
         self.small = true;
         self
     }

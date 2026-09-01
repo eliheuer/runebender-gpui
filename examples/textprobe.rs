@@ -9,7 +9,7 @@ use gpui::{
 struct Probe;
 
 impl Render for Probe {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
         div()
             .size_full()
             .bg(rgb(0x101010))

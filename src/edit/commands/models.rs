@@ -8,7 +8,7 @@ use crate::Workspace;
 use gpui::Context;
 impl Workspace {
     /// Choose a model directory and remember it.
-    pub(crate) fn command_choose_model(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_choose_model(&mut self, cx: &mut Context<'_, Self>) {
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: false,
             directories: true,
@@ -124,7 +124,7 @@ impl Workspace {
     /// point-compatible with what it came from. It lands in the
     /// current glyph and is undoable, so the way to reject it is
     /// Cmd+Z.
-    pub(crate) fn command_bolden_with_model(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_bolden_with_model(&mut self, cx: &mut Context<'_, Self>) {
         let Mode::Editor(index) = self.mode else {
             self.status_note = Some("Open a glyph first".into());
             return;

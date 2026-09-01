@@ -11,6 +11,7 @@ use crate::Arc;
 use crate::Mode;
 use crate::Workspace;
 use crate::app_menus;
+use crate::edit::commands::ds_f32;
 use crate::view::paint::seg_key;
 use crate::widgets;
 use crate::workspace::ContextMenu;
@@ -165,7 +166,7 @@ impl Workspace {
                         layer: Some(layer_name.clone()),
                         location: vec![norad::designspace::Dimension {
                             name: axis.name.clone(),
-                            xvalue: Some(design as f32),
+                            xvalue: Some(ds_f32(design)),
                             ..Default::default()
                         }],
                         ..Default::default()
@@ -824,7 +825,7 @@ impl Workspace {
         let font = self.font()?;
         let glyph = font.font.get_glyph(font.glyphs[index].name.as_ref())?;
         let mut bounds: Option<kurbo::Rect> = None;
-        let mut count = 0usize;
+        let mut count = 0_usize;
         for hit in runebender_core::outline::segment_ops::segments(glyph) {
             if !hit
                 .point_ids()
@@ -1076,7 +1077,7 @@ impl Workspace {
     }
 
     /// The decoded background image for a file in the UFO images
-    /// store, cached. gpui's RenderImage wants premultiplied BGRA.
+    /// store, cached. gpui's `RenderImage` wants premultiplied BGRA.
     pub(crate) fn glyph_image(&self, file_name: &str) -> Option<Arc<gpui::RenderImage>> {
         if let Some(cached) = self.glyph_image_cache.lock().unwrap().get(file_name) {
             return cached.clone();
@@ -1098,9 +1099,9 @@ impl Workspace {
                     let a = px[3] as u32;
                     // Swap to BGRA and premultiply in one pass.
                     let (r, g, b) = (px[0] as u32, px[1] as u32, px[2] as u32);
-                    px[0] = ((b * a) / 255) as u8;
-                    px[1] = ((g * a) / 255) as u8;
-                    px[2] = ((r * a) / 255) as u8;
+                    px[0] = u8::try_from((b * a) / 255).unwrap_or(u8::MAX);
+                    px[1] = u8::try_from((g * a) / 255).unwrap_or(u8::MAX);
+                    px[2] = u8::try_from((r * a) / 255).unwrap_or(u8::MAX);
                 }
                 let buffer = image::RgbaImage::from_raw(w, h, bytes).expect("same-size buffer");
                 Arc::new(gpui::RenderImage::new(vec![image::Frame::new(buffer)]))
@@ -1196,7 +1197,7 @@ impl Workspace {
     pub(crate) fn toggle_measure(
         &mut self,
         change: impl FnOnce(&mut MeasureOpts),
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         change(&mut self.measure_opts);
         *MEASURE_MENU.lock().expect("measure menu") = self.measure_opts;

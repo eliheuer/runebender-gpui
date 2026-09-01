@@ -231,7 +231,6 @@ impl Workspace {
             })
             .unwrap_or_default();
         self.sidebar.counts = Some(SidebarCounts {
-            total: glyphs.len(),
             categories,
             subfilters,
             groups,
@@ -469,7 +468,10 @@ impl Workspace {
 
     /// One sidebar row: optional chevron, optional icon, label, and a
     /// right-aligned count ("n" or "n/m" coverage).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per filter the sidebar offers"
+    )]
     pub(crate) fn sidebar_row(
         &self,
         id: (&'static str, usize),
@@ -479,7 +481,7 @@ impl Workspace {
         label: SharedString,
         count: SharedString,
         filter: SidebarFilter,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let active = self.sidebar.filter == filter;
         div()
@@ -532,7 +534,7 @@ impl Workspace {
         label: &'static str,
         active: bool,
         on: fn(&mut Self),
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
@@ -578,7 +580,7 @@ impl Workspace {
 
     /// The Shapes tab: one row per contour and per component in the
     /// open glyph, like the web's sidebar. A row selects what it names.
-    pub(crate) fn sidebar_shapes(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn sidebar_shapes(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let mut list = div().flex().flex_col().gap_1().p_2();
         let (Mode::Editor(index), Some(font)) = (&self.mode, self.font()) else {
             return list.child(
@@ -691,7 +693,7 @@ impl Workspace {
     /// body.
     pub(crate) fn section(
         &self,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
         title: &'static str,
         body: impl IntoElement,
     ) -> gpui::Div {
@@ -706,7 +708,7 @@ impl Workspace {
             .border_color(t::panel_outline())
             .child(
                 div()
-                    .id(gpui::SharedString::from(format!("section-{title}")))
+                    .id(SharedString::from(format!("section-{title}")))
                     .flex()
                     .items_center()
                     .gap_1()
@@ -770,7 +772,7 @@ impl Workspace {
     }
 
     /// Tool icons for the header bar (editor mode only).
-    pub(crate) fn header_tools(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn header_tools(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         let tool = self.editor.tool;
         div()
             .flex()
@@ -866,7 +868,7 @@ impl Workspace {
 
     /// Text direction control for the text tool: LTR / RTL / Auto.
     /// This is `TextDirectionToolbar` in the web editor.
-    pub(crate) fn direction_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn direction_toolbar(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         use runebender_core::text::buffer::TextDirection;
         let auto = self.edit_buffer.direction_is_auto();
         let dir = self.edit_buffer.direction();
@@ -894,9 +896,7 @@ impl Workspace {
             .child(
                 button("dir-ltr", "LTR", !auto && dir == TextDirection::LeftToRight).on_click(
                     cx.listener(|this, _, _, cx| {
-                        this.edit_buffer.set_direction(
-                            runebender_core::text::buffer::TextDirection::LeftToRight,
-                        );
+                        this.edit_buffer.set_direction(TextDirection::LeftToRight);
                         this.edit_buffer.shape_arabic_if_rtl();
                         this.sync_sort_offset();
                         cx.notify();
@@ -906,9 +906,7 @@ impl Workspace {
             .child(
                 button("dir-rtl", "RTL", !auto && dir == TextDirection::RightToLeft).on_click(
                     cx.listener(|this, _, _, cx| {
-                        this.edit_buffer.set_direction(
-                            runebender_core::text::buffer::TextDirection::RightToLeft,
-                        );
+                        this.edit_buffer.set_direction(TextDirection::RightToLeft);
                         this.edit_buffer.shape_arabic_if_rtl();
                         this.sync_sort_offset();
                         cx.notify();

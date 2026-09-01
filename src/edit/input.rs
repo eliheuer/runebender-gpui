@@ -602,7 +602,7 @@ impl Workspace {
                     let a1 = (dy - ay).atan2(dx - ax);
                     let mut angle = a1 - a0;
                     if shift {
-                        let step = 15f64.to_radians();
+                        let step = 15_f64.to_radians();
                         angle = (angle / step).round() * step;
                     }
                     Affine::translate((ax, ay))
@@ -1084,7 +1084,10 @@ impl Workspace {
         let contour = pen.contour;
         // If the just-placed point ended a curve segment, move its
         // incoming control to the mirror and mark the point smooth.
-        #[allow(clippy::type_complexity)]
+        #[expect(
+            clippy::type_complexity,
+            reason = "the tuple is the drag state, named where it is used"
+        )]
         let updates: Option<Vec<((usize, usize), (f64, f64))>> = self.font().map(|f| {
             let pts: Vec<_> = f.glyphs[index]
                 .points
@@ -1248,7 +1251,7 @@ impl Workspace {
         &mut self,
         event: &gpui::KeyDownEvent,
         window: &mut Window,
-        _cx: &mut Context<Self>,
+        _cx: &mut Context<'_, Self>,
     ) -> bool {
         // Typing belongs to whichever field has the keyboard.
         if widgets::input::any_field_focused(window, _cx) {

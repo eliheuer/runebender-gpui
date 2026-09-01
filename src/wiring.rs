@@ -45,14 +45,14 @@ use gpui::Window;
 use gpui::px;
 use kurbo::Affine;
 use runebender_core::document::project::Project;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 impl Workspace {
     /// Create the workspace for `project`, with every input widget
     /// wired. `load_error` is shown in the status bar when the project
     /// failed to open, and `start_mode` picks the grid or an editor.
     pub(crate) fn new(
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
         project: Option<Project>,
         load_error: Option<SharedString>,
         start_mode: Mode,
@@ -61,7 +61,7 @@ impl Workspace {
         let app_menu_bar = cx.new(|cx| widgets::menu_bar::MenuBar::new(app_menus(), cx));
         let search =
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("Search glyphs"));
-        let metric = |cx: &mut Context<Workspace>, window: &mut Window| {
+        let metric = |cx: &mut Context<'_, Self>, window: &mut Window| {
             cx.new(|cx| widgets::input::InputState::new(window, cx))
         };
         let width_input = metric(cx, window);
@@ -79,14 +79,14 @@ impl Workspace {
         let fi_desc = metric(cx, window);
         let fi_xh = metric(cx, window);
         let fi_ch = metric(cx, window);
-        let font_info_sub = |cx: &mut Context<Workspace>,
+        let font_info_sub = |cx: &mut Context<'_, Self>,
                              window: &mut Window,
                              state: &gpui::Entity<widgets::input::InputState>,
                              which: FontInfoField| {
             let state = state.clone();
             cx.subscribe_in(&state, window, {
                 let state = state.clone();
-                move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+                move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                     if matches!(ev, widgets::input::InputEvent::PressEnter) {
                         let text = state.read(cx).value().to_string();
                         this.apply_font_info(which, &text);
@@ -142,19 +142,19 @@ impl Workspace {
         let sub_kern_filter = cx.subscribe_in(
             &kern_filter,
             window,
-            |_: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            |_: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::Change) {
                     cx.notify();
                 }
             },
         );
         let kern_commit =
-            |cx: &mut Context<Workspace>,
+            |cx: &mut Context<'_, Self>,
              window: &mut Window,
              state: &gpui::Entity<widgets::input::InputState>| {
                 let state = state.clone();
                 cx.subscribe_in(&state, window, {
-                    move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+                    move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                         if matches!(ev, widgets::input::InputEvent::PressEnter) {
                             let first = this.inputs.kern.first.read(cx).value().trim().to_string();
                             let second =
@@ -186,7 +186,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("Width"));
         let sub_stroke = cx.subscribe_in(&stroke_input, window, {
             let state = stroke_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter)
                     && let Ok(width) = state.read(cx).value().trim().parse::<f64>()
                 {
@@ -199,7 +199,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("±Units"));
         let sub_offset = cx.subscribe_in(&offset_input, window, {
             let state = offset_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter)
                     && let Ok(delta) = state.read(cx).value().trim().parse::<f64>()
                 {
@@ -211,7 +211,7 @@ impl Workspace {
         let fit_input = cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("%"));
         let sub_fit = cx.subscribe_in(&fit_input, window, {
             let state = fit_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter)
                     && let Ok(pct) = state
                         .read(cx)
@@ -229,7 +229,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("#RRGGBB"));
         let sub_color_hex = cx.subscribe_in(&color_hex_input, window, {
             let state = color_hex_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().to_string();
                     if this.command_add_palette_color(&text) {
@@ -245,7 +245,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("±50"));
         let sub_ease = cx.subscribe_in(&ease_input, window, {
             let state = ease_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter)
                     && let Ok(ease) = state.read(cx).value().trim().parse::<f64>()
                 {
@@ -258,7 +258,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("15,30"));
         let sub_extrude = cx.subscribe_in(&extrude_input, window, {
             let state = extrude_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().to_string();
                     this.command_extrude(&text);
@@ -270,7 +270,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("15,15,10"));
         let sub_roughen = cx.subscribe_in(&roughen_input, window, {
             let state = roughen_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().to_string();
                     this.command_roughen(&text);
@@ -282,7 +282,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("Instance name"));
         let sub_instance_name = cx.subscribe_in(&instance_name_input, window, {
             let state = instance_name_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let name = state.read(cx).value().to_string();
                     this.command_instance_upsert(&name);
@@ -297,7 +297,7 @@ impl Workspace {
         let sub_features = cx.subscribe_in(
             &features_input,
             window,
-            |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::Change) {
                     this.features_edited = true;
                     cx.notify();
@@ -306,7 +306,7 @@ impl Workspace {
         );
         let sub_slant = cx.subscribe_in(&slant_input, window, {
             let state = slant_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let Ok(angle) = state.read(cx).value().trim().parse::<f64>() else {
                         return;
@@ -321,14 +321,14 @@ impl Workspace {
                 }
             }
         });
-        let metric_sub = |cx: &mut Context<Workspace>,
+        let metric_sub = |cx: &mut Context<'_, Self>,
                           window: &mut Window,
                           state: &gpui::Entity<widgets::input::InputState>,
                           which: MetricField| {
             let state = state.clone();
             cx.subscribe_in(&state, window, {
                 let state = state.clone();
-                move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+                move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                     if matches!(ev, widgets::input::InputEvent::PressEnter) {
                         let text = state.read(cx).value().to_string();
                         if let Ok(v) = text.trim().parse::<f64>() {
@@ -344,14 +344,14 @@ impl Workspace {
         let sub_w = metric_sub(cx, window, &width_input, MetricField::Width);
         let sub_l = metric_sub(cx, window, &lsb_input, MetricField::Lsb);
         let sub_r = metric_sub(cx, window, &rsb_input, MetricField::Rsb);
-        let coord_sub = |cx: &mut Context<Workspace>,
+        let coord_sub = |cx: &mut Context<'_, Self>,
                          window: &mut Window,
                          state: &gpui::Entity<widgets::input::InputState>,
                          is_x: bool| {
             let state = state.clone();
             cx.subscribe_in(&state, window, {
                 let state = state.clone();
-                move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+                move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                     if matches!(ev, widgets::input::InputEvent::PressEnter) {
                         let text = state.read(cx).value().to_string();
                         if let Ok(v) = text.trim().parse::<f64>() {
@@ -365,14 +365,14 @@ impl Workspace {
         };
         let sub_x = coord_sub(cx, window, &x_input, true);
         let sub_y = coord_sub(cx, window, &y_input, false);
-        let size_sub = |cx: &mut Context<Workspace>,
+        let size_sub = |cx: &mut Context<'_, Self>,
                         window: &mut Window,
                         state: &gpui::Entity<widgets::input::InputState>,
                         is_width: bool| {
             let state = state.clone();
             cx.subscribe_in(&state, window, {
                 let state = state.clone();
-                move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+                move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                     if matches!(ev, widgets::input::InputEvent::PressEnter) {
                         let text = state.read(cx).value().to_string();
                         if let Ok(v) = text.trim().parse::<f64>() {
@@ -391,14 +391,14 @@ impl Workspace {
         let group_l_input = metric(cx, window);
         let group_r_input = metric(cx, window);
         // 0=name, 1=unicode, 2=left group, 3=right group.
-        let glyph_sub = |cx: &mut Context<Workspace>,
+        let glyph_sub = |cx: &mut Context<'_, Self>,
                          window: &mut Window,
                          state: &gpui::Entity<widgets::input::InputState>,
                          which: u8| {
             let state = state.clone();
             cx.subscribe_in(&state, window, {
                 let state = state.clone();
-                move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+                move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                     if matches!(ev, widgets::input::InputEvent::PressEnter) {
                         let text = state.read(cx).value().to_string();
                         match which {
@@ -428,7 +428,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("glyph name"));
         let sub_ref = cx.subscribe_in(&reference_glyph_input, window, {
             let state = reference_glyph_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _window, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _window, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().trim().to_string();
                     this.reference_glyph = (!text.is_empty()).then_some(text);
@@ -440,7 +440,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("anchor name"));
         let sub_anchor = cx.subscribe_in(&anchor_name_input, window, {
             let state = anchor_name_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _window, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _window, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().to_string();
                     this.apply_anchor_name(&text);
@@ -452,7 +452,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("corner name"));
         let sub_corner = cx.subscribe_in(&corner_name_input, window, {
             let state = corner_name_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().to_string();
                     let node = this.context_menu.as_ref().and_then(|m| m.start_point);
@@ -471,7 +471,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("Width,0,100"));
         let sub_smart_axis = cx.subscribe_in(&smart_axis_input, window, {
             let state = smart_axis_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().to_string();
                     this.command_make_smart_axis(&text);
@@ -484,7 +484,7 @@ impl Workspace {
         });
         let sub_group_name = cx.subscribe_in(&group_name_input, window, {
             let state = group_name_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().to_string();
                     let trimmed = text.trim();
@@ -506,7 +506,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("400,430"));
         let sub_axis_map = cx.subscribe_in(&axis_map_input, window, {
             let state = axis_map_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().to_string();
                     let mut parts = text.split(',').map(str::trim);
@@ -527,7 +527,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("value"));
         let sub_smart_value = cx.subscribe_in(&smart_value_input, window, {
             let state = smart_value_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().trim().to_string();
                     if !text.is_empty() {
@@ -541,7 +541,7 @@ impl Workspace {
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("note text"));
         let sub_note = cx.subscribe_in(&annotation_input, window, {
             let state = annotation_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().to_string();
                     let at = this.context_menu.as_ref().map(|m| m.design);
@@ -558,7 +558,7 @@ impl Workspace {
         });
         let sub_comp = cx.subscribe_in(&component_name_input, window, {
             let state = component_name_input.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, window, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, window, cx| {
                 if matches!(ev, widgets::input::InputEvent::PressEnter) {
                     let text = state.read(cx).value().to_string();
                     this.commit_add_component(&text);
@@ -585,7 +585,7 @@ impl Workspace {
         let sub_gprod = glyph_sub(cx, window, &production_input, 8);
         let subscription = cx.subscribe_in(&search, window, {
             let search = search.clone();
-            move |this: &mut Workspace, _, ev: &widgets::input::InputEvent, _window, cx| {
+            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _window, cx| {
                 if matches!(ev, widgets::input::InputEvent::Change) {
                     this.sidebar.search_query = search.read(cx).value().to_string().to_lowercase();
                     this.rebuild_search_regex();
@@ -597,7 +597,7 @@ impl Workspace {
                 }
             }
         });
-        let mut workspace = Workspace {
+        let mut workspace = Self {
             project,
             load_error,
             selected: None,
@@ -618,21 +618,21 @@ impl Workspace {
             status_note: None,
             last_save_label: None,
             context_menu: None,
-            coord_quadrant: Default::default(),
+            coord_quadrant: runebender_core::outline::path::Quadrant::default(),
             curve_comb: false,
             curve_continuity: false,
             measure_opts: MeasureOpts::default(),
             show_background: true,
-            visible_glyph_layers: Default::default(),
+            visible_glyph_layers: HashSet::default(),
             reference_glyph: None,
-            glyph_image_cache: Default::default(),
+            glyph_image_cache: Arc::default(),
             color_selected: 0,
             show_color_preview: true,
             show_trajectories: false,
             hoi_live: None,
             shaping_focus: None,
             show_mark_cloud: false,
-            feature_overrides: Default::default(),
+            feature_overrides: HashMap::default(),
             shaping_locale: None,
             roughen_seed: 0,
             features_edited: false,

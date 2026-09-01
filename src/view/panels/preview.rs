@@ -8,6 +8,7 @@ use crate::Workspace;
 use crate::view::blur;
 use crate::view::paint::blur_key;
 use crate::view::paint::build_fill_path;
+use crate::view::render::px32;
 use crate::view::theme as t;
 use gpui::Bounds;
 use gpui::Context;
@@ -22,7 +23,7 @@ use kurbo::BezPath;
 impl Workspace {
     /// The strip along the editor's bottom that renders the text
     /// buffer's line as filled outlines, blurred when asked.
-    pub(crate) fn preview_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn preview_strip(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         let Some(font) = self.font() else {
             return div().into_any_element();
         };
@@ -154,8 +155,8 @@ impl Workspace {
                         let image = cached.or_else(|| {
                             let image = blur::blurred_line(
                                 &line,
-                                w as f32,
-                                h as f32,
+                                px32(w),
+                                px32(h),
                                 window.scale_factor(),
                                 ink,
                                 ground,

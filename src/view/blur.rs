@@ -16,6 +16,8 @@
 
 use std::sync::Arc;
 
+use crate::view::render::px32;
+use crate::view::render::to_count;
 use gpui::{RenderImage, Rgba};
 use kurbo::{BezPath, PathEl};
 
@@ -25,7 +27,7 @@ use kurbo::{BezPath, PathEl};
 /// `path` is already in the pane's own pixel coordinates. `radius` is
 /// in logical pixels. `scale` is device pixels per logical pixel.
 /// Returns `None` for a degenerate size or a path with nothing in it.
-pub fn blurred_line(
+pub(crate) fn blurred_line(
     path: &BezPath,
     width: f32,
     height: f32,
@@ -35,8 +37,8 @@ pub fn blurred_line(
     radius: f32,
 ) -> Option<Arc<RenderImage>> {
     let scale = scale.max(1.0);
-    let w = (width * scale).round() as u32;
-    let h = (height * scale).round() as u32;
+    let w = to_count(width * scale);
+    let h = to_count(height * scale);
     if w == 0 || h == 0 || w > 8192 || h > 8192 || path.elements().is_empty() {
         return None;
     }
@@ -48,21 +50,18 @@ pub fn blurred_line(
     let s = scale as f64;
     for element in path.elements() {
         match element {
-            PathEl::MoveTo(p) => builder.move_to((p.x * s) as f32, (p.y * s) as f32),
-            PathEl::LineTo(p) => builder.line_to((p.x * s) as f32, (p.y * s) as f32),
-            PathEl::QuadTo(c, p) => builder.quad_to(
-                (c.x * s) as f32,
-                (c.y * s) as f32,
-                (p.x * s) as f32,
-                (p.y * s) as f32,
-            ),
+            PathEl::MoveTo(p) => builder.move_to(px32(p.x * s), px32(p.y * s)),
+            PathEl::LineTo(p) => builder.line_to(px32(p.x * s), px32(p.y * s)),
+            PathEl::QuadTo(c, p) => {
+                builder.quad_to(px32(c.x * s), px32(c.y * s), px32(p.x * s), px32(p.y * s));
+            }
             PathEl::CurveTo(c1, c2, p) => builder.cubic_to(
-                (c1.x * s) as f32,
-                (c1.y * s) as f32,
-                (c2.x * s) as f32,
-                (c2.y * s) as f32,
-                (p.x * s) as f32,
-                (p.y * s) as f32,
+                px32(c1.x * s),
+                px32(c1.y * s),
+                px32(c2.x * s),
+                px32(c2.y * s),
+                px32(p.x * s),
+                px32(p.y * s),
             ),
             PathEl::ClosePath => builder.close(),
         }
@@ -82,13 +81,15 @@ pub fn blurred_line(
 
     // The pixmap is premultiplied, so the passes can average the
     // channels directly.
-    let r = (radius * scale).round() as i32;
+    let r = i32::try_from(to_count(radius * scale)).unwrap_or(i32::MAX);
+    let width_i32 = i32::try_from(w).unwrap_or(i32::MAX);
+    let height_i32 = i32::try_from(h).unwrap_or(i32::MAX);
     if r > 0 {
         let data = pixmap.pixels_mut();
         let mut buffer = vec![tiny_skia::PremultipliedColorU8::TRANSPARENT; data.len()];
         for _ in 0..3 {
-            box_pass(data, &mut buffer, w as i32, h as i32, r, true);
-            box_pass(data, &mut buffer, w as i32, h as i32, r, false);
+            box_pass(data, &mut buffer, width_i32, height_i32, r, true);
+            box_pass(data, &mut buffer, width_i32, height_i32, r, false);
         }
     }
 
@@ -122,7 +123,7 @@ fn box_pass(
     let window = (radius * 2 + 1) as u32;
     for a in 0..outer {
         for b in 0..inner {
-            let (mut r, mut g, mut bl, mut al) = (0u32, 0u32, 0u32, 0u32);
+            let (mut r, mut g, mut bl, mut al) = (0_u32, 0_u32, 0_u32, 0_u32);
             for k in -radius..=radius {
                 // Clamp at the edges: the ground colour continues
                 // rather than fading to nothing.
@@ -134,10 +135,10 @@ fn box_pass(
                 al += p.alpha() as u32;
             }
             scratch[index(a, b)] = tiny_skia::PremultipliedColorU8::from_rgba(
-                (r / window) as u8,
-                (g / window) as u8,
-                (bl / window) as u8,
-                (al / window) as u8,
+                u8::try_from(r / window).unwrap_or(u8::MAX),
+                u8::try_from(g / window).unwrap_or(u8::MAX),
+                u8::try_from(bl / window).unwrap_or(u8::MAX),
+                u8::try_from(al / window).unwrap_or(u8::MAX),
             )
             .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
         }

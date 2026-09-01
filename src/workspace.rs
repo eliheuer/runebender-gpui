@@ -440,9 +440,6 @@ pub(crate) enum SidebarFilter {
 
 /// Glyph counts for every sidebar row, computed once per font state.
 pub(crate) struct SidebarCounts {
-    /// Every glyph in the font.
-    #[allow(dead_code)]
-    pub(crate) total: usize,
     /// One count per category row, in `SIDEBAR_CATEGORIES` order.
     pub(crate) categories: Vec<usize>,
     /// Counts keyed by (category row, subfilter) indices.
@@ -815,16 +812,15 @@ impl Default for MeasureOpts {
 /// What the Measure menu shows as ticked. The menu is built outside
 /// the view, so the live options are mirrored here whenever they
 /// change.
-pub(crate) static MEASURE_MENU: std::sync::Mutex<MeasureOpts> =
-    std::sync::Mutex::new(MeasureOpts {
-        colorize: false,
-        handles: false,
-        segments: false,
-        spans: false,
-        sidebearings: false,
-        sizes: false,
-        popcount: true,
-    });
+pub(crate) static MEASURE_MENU: Mutex<MeasureOpts> = Mutex::new(MeasureOpts {
+    colorize: false,
+    handles: false,
+    segments: false,
+    spans: false,
+    sidebearings: false,
+    sizes: false,
+    popcount: true,
+});
 
 impl MeasureOpts {
     /// Whether any measurement layer is on; popcount alone does not

@@ -29,7 +29,7 @@ use serde::Deserialize;
 /// What the file can say. Every field is optional.
 #[derive(Debug, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
-pub struct Config {
+pub(crate) struct Config {
     /// Theme id, as View → Theme names them: dark, midnight, gray, light.
     pub theme: Option<String>,
     /// Where to look for local models.
@@ -39,7 +39,7 @@ pub struct Config {
 }
 
 /// Where the file lives, whether or not it exists.
-pub fn path() -> Option<PathBuf> {
+pub(crate) fn path() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
         let xdg = PathBuf::from(xdg);
         if !xdg.as_os_str().is_empty() {
@@ -53,12 +53,12 @@ pub fn path() -> Option<PathBuf> {
 ///
 /// Separate from reading the file so the rules can be tested without
 /// a filesystem, and so a caller can report on a string it already has.
-pub fn parse(text: &str) -> Result<Config, toml::de::Error> {
+pub(crate) fn parse(text: &str) -> Result<Config, toml::de::Error> {
     toml::from_str(text)
 }
 
 /// The config for this run. Never fails: a bad file yields defaults.
-pub fn load() -> Config {
+pub(crate) fn load() -> Config {
     let Some(path) = path() else {
         return Config::default();
     };

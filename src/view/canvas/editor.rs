@@ -14,6 +14,8 @@ use crate::Workspace;
 use crate::view::paint::build_fill_path;
 use crate::view::paint::build_path;
 use crate::view::paint::paint_batched;
+use crate::view::render::px32;
+use crate::view::render::{to_byte, to_index};
 use crate::view::theme as t;
 use crate::workspace::Drag;
 use crate::workspace::HIT_RADIUS_PX;
@@ -249,7 +251,7 @@ impl Screen {
             transform = vp.affine();
             zoom = vp.zoom;
         }
-        Screen {
+        Self {
             transform,
             zoom,
             origin: bounds.origin,
@@ -260,10 +262,7 @@ impl Screen {
     /// Maps a design-space point to window pixels.
     fn to_screen(&self, x: f64, y: f64) -> Point<gpui::Pixels> {
         let p = self.transform * kurbo::Point::new(x, y);
-        gpui::point(
-            self.origin.x + px(p.x as f32),
-            self.origin.y + px(p.y as f32),
-        )
+        gpui::point(self.origin.x + px(px32(p.x)), self.origin.y + px(px32(p.y)))
     }
 }
 
@@ -728,10 +727,10 @@ impl Workspace {
                             glyph,
                         )),
                         gpui::Rgba {
-                            r: c[0] as f32,
-                            g: c[1] as f32,
-                            b: c[2] as f32,
-                            a: c[3] as f32,
+                            r: px32(c[0]),
+                            g: px32(c[1]),
+                            b: px32(c[2]),
+                            a: px32(c[3]),
                         },
                     ))
                 })
@@ -882,7 +881,7 @@ impl Workspace {
     pub(crate) fn editor_view(
         &self,
         index: usize,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) -> impl IntoElement + use<> {
         let scene = self.editor_scene(index);
 
@@ -1027,7 +1026,7 @@ fn point_scale(zoom: f64) -> f64 {
 /// Point chrome widths at this zoom: the point scale, the ring width,
 /// and the halo width.
 fn point_widths(zoom: f64) -> (f32, f32, f32) {
-    let ps = point_scale(zoom) as f32;
+    let ps = px32(point_scale(zoom));
     let ring_w = (1.5 * ps).max(1.0);
     let halo_w = ring_w + 2.0;
     (ps, ring_w, halo_w)
@@ -1042,10 +1041,10 @@ fn zero() -> Point<gpui::Pixels> {
 /// bytes stand in.
 fn color_key(c: gpui::Rgba) -> u32 {
     u32::from_be_bytes([
-        (c.r * 255.0) as u8,
-        (c.g * 255.0) as u8,
-        (c.b * 255.0) as u8,
-        (c.a * 255.0) as u8,
+        to_byte(c.r * 255.0),
+        to_byte(c.g * 255.0),
+        to_byte(c.b * 255.0),
+        to_byte(c.a * 255.0),
     ])
 }
 
@@ -1105,7 +1104,7 @@ fn paint_design_grid(scene: &EditorScene, s: &Screen, window: &mut Window) {
                      color: gpui::Rgba,
                      window: &mut Window| {
             let mut pb = PathBuilder::stroke(px(width_px));
-            for ix in (min_x / spacing).floor() as i64..=(max_x / spacing).ceil() as i64 {
+            for ix in to_index((min_x / spacing).floor())..=to_index((max_x / spacing).ceil()) {
                 if skip_every > 0 && ix.unsigned_abs() % skip_every == 0 {
                     continue;
                 }
@@ -1113,7 +1112,7 @@ fn paint_design_grid(scene: &EditorScene, s: &Screen, window: &mut Window) {
                 pb.move_to(s.to_screen(x, min_y));
                 pb.line_to(s.to_screen(x, max_y));
             }
-            for iy in (min_y / spacing).floor() as i64..=(max_y / spacing).ceil() as i64 {
+            for iy in to_index((min_y / spacing).floor())..=to_index((max_y / spacing).ceil()) {
                 if skip_every > 0 && iy.unsigned_abs() % skip_every == 0 {
                     continue;
                 }
@@ -1129,14 +1128,14 @@ fn paint_design_grid(scene: &EditorScene, s: &Screen, window: &mut Window) {
             8.0,
             0,
             1.0,
-            t::design_grid_coarse(grid_mid_alpha as f32),
+            t::design_grid_coarse(px32(grid_mid_alpha)),
             window,
         );
         let close_alpha = smoothstep(((s.zoom - 8.0) / 8.0).clamp(0.0, 1.0));
         if close_alpha > 0.0 {
             // The 2s only; every 4th line is an 8 the mid pass
             // already drew.
-            level(2.0, 4, 0.5, t::design_grid_fine(close_alpha as f32), window);
+            level(2.0, 4, 0.5, t::design_grid_fine(px32(close_alpha)), window);
         }
     }
 }
@@ -1223,7 +1222,7 @@ fn paint_metrics(scene: &EditorScene, s: &Screen, window: &mut Window) {
 /// brighter and thicker, each with a grab knob on its anchor.
 fn paint_guides(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let bounds = s.bounds;
-    let mut counts = (0usize, 0usize);
+    let mut counts = (0_usize, 0_usize);
     for (local, line) in scene.guides.iter() {
         let (local, line) = (*local, line);
         let gi = if local {
@@ -1386,7 +1385,7 @@ fn paint_trajectories(scene: &EditorScene, s: &Screen, window: &mut Window) {
                 // One-sided comb, like Glyphs': offset to the left
                 // of travel.
                 let (nx, ny) = (-dy_ / len, dx_ / len);
-                let thick = RIBBON_PX * speed as f32;
+                let thick = RIBBON_PX * px32(speed);
                 let mut quad = BezPath::new();
                 quad.move_to((ax as f64, ay as f64));
                 quad.line_to((bx as f64, by as f64));
@@ -1522,7 +1521,7 @@ fn paint_sort_boxes(scene: &EditorScene, s: &Screen, window: &mut Window) {
             let cb = s.to_screen(sp.x + sp.advance, sp.y + sort_top);
             let (left, right) = (ca.x.min(cb.x), ca.x.max(cb.x));
             let (top_px, bottom_px) = (ca.y.min(cb.y), ca.y.max(cb.y));
-            let mark_px = px(mark as f32);
+            let mark_px = px(px32(mark));
             for ex in [sp.x, sp.x + sp.advance] {
                 for my in [sort_bottom, 0.0, ascender, sort_top] {
                     let c = s.to_screen(ex, sp.y + my);
@@ -1596,8 +1595,8 @@ fn paint_sort_fills(scene: &EditorScene, s: &Screen, window: &mut Window) {
         let mut current = kurbo::Point::ZERO;
         let mut start = kurbo::Point::ZERO;
         let hline2 = |a: kurbo::Point, b: kurbo::Point, pb: &mut PathBuilder, any: &mut bool| {
-            pb.move_to(gpui::point(px(a.x as f32), px(a.y as f32)));
-            pb.line_to(gpui::point(px(b.x as f32), px(b.y as f32)));
+            pb.move_to(gpui::point(px(px32(a.x)), px(px32(a.y))));
+            pb.line_to(gpui::point(px(px32(b.x)), px(px32(b.y))));
             *any = true;
         };
         for el in path.elements() {
@@ -1668,8 +1667,8 @@ fn paint_text_caret(scene: &EditorScene, s: &Screen, window: &mut Window) {
             caret_color,
         ));
         let tri_scale = ((sort_h_px * 0.09).clamp(4.0, 34.0)) / 24.0;
-        let tw = px((24.0 * tri_scale) as f32);
-        let th = px((16.0 * tri_scale) as f32);
+        let tw = px(px32(24.0 * tri_scale));
+        let th = px(px32(16.0 * tri_scale));
         let mut tri = PathBuilder::fill();
         tri.move_to(gpui::point(top.x - tw / 2.0, top.y));
         tri.line_to(gpui::point(top.x + tw / 2.0, top.y));
@@ -1878,7 +1877,7 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let transform = s.transform;
     let (grid_mid_alpha, grid_close_alpha) = grid_alphas(s.zoom);
     let (ps, ring_w, halo_w) = point_widths(s.zoom);
-    let shape = |center: Point<gpui::Pixels>, r: f32, square: bool| -> kurbo::BezPath {
+    let shape = |center: Point<gpui::Pixels>, r: f32, square: bool| -> BezPath {
         use kurbo::Shape as _;
         let (cx_, cy_) = (f32::from(center.x) as f64, f32::from(center.y) as f64);
         if square {
@@ -1897,7 +1896,6 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let mut halo_batch: Vec<BezPath> = Vec::new();
     let mut fill_batch: ColorBatch = std::collections::BTreeMap::new();
     let mut ring_batch: ColorBatch = std::collections::BTreeMap::new();
-    #[allow(clippy::type_complexity)]
     let mut chord_batch: std::collections::BTreeMap<u32, (gpui::Rgba, Vec<(f32, BezPath)>)> =
         std::collections::BTreeMap::new();
     for p in scene.points.iter() {
@@ -1956,7 +1954,7 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
                     continue;
                 }
                 let mut tint = ring;
-                tint.a = alpha as f32;
+                tint.a = px32(alpha);
                 let mut lines = BezPath::new();
                 // Vertical gridlines: the chord is the circle's
                 // half-height at that offset (the full radius for a
@@ -1964,7 +1962,7 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
                 let a = (inv * kurbo::Point::new(cx_ - r, cy_)).x;
                 let b = (inv * kurbo::Point::new(cx_ + r, cy_)).x;
                 let (lo, hi) = (a.min(b), a.max(b));
-                for k in (lo / spacing).ceil() as i64..=(hi / spacing).floor() as i64 {
+                for k in to_index((lo / spacing).ceil())..=to_index((hi / spacing).floor()) {
                     let sx = (transform * kurbo::Point::new(k as f64 * spacing, 0.0)).x;
                     let d = sx - cx_;
                     let half = if is_square {
@@ -1981,7 +1979,7 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
                 let a = (inv * kurbo::Point::new(cx_, cy_ - r)).y;
                 let b = (inv * kurbo::Point::new(cx_, cy_ + r)).y;
                 let (lo, hi) = (a.min(b), a.max(b));
-                for k in (lo / spacing).ceil() as i64..=(hi / spacing).floor() as i64 {
+                for k in to_index((lo / spacing).ceil())..=to_index((hi / spacing).floor()) {
                     let sy = (transform * kurbo::Point::new(0.0, k as f64 * spacing)).y;
                     let d = sy - cy_;
                     let half = if is_square {
@@ -2218,7 +2216,7 @@ fn paint_measure_hud(scene: &EditorScene, s: &Screen, window: &mut Window, cx: &
     let measure_opts = scene.measure_opts;
     if let Some((strokes, measurements, sb)) = &scene.measure_hud {
         use runebender_core::analysis::measure::{self, MeasureKind};
-        let t32 = (((zoom - 0.30) / 0.40).clamp(0.0, 1.0)) as f32;
+        let t32 = px32(((zoom - 0.30) / 0.40).clamp(0.0, 1.0));
         if t32 > 0.0 {
             let fade = |mut c: gpui::Rgba, mul: f32| {
                 c.a *= t32 * mul;
@@ -2233,11 +2231,11 @@ fn paint_measure_hud(scene: &EditorScene, s: &Screen, window: &mut Window, cx: &
                 }
             }
             let gp =
-                |p: kurbo::Point| gpui::point(origin.x + px(p.x as f32), origin.y + px(p.y as f32));
+                |p: kurbo::Point| gpui::point(origin.x + px(px32(p.x)), origin.y + px(px32(p.y)));
             // A span's dimension line: a shaft that stops short of
             // both endpoints with an outward arrowhead at each end.
             let dim_line =
-                |window: &mut gpui::Window, a: kurbo::Point, b: kurbo::Point, color: gpui::Rgba| {
+                |window: &mut Window, a: kurbo::Point, b: kurbo::Point, color: gpui::Rgba| {
                     let (dx, dy) = (b.x - a.x, b.y - a.y);
                     let len = dx.hypot(dy);
                     if len < 1e-3 {
@@ -2271,8 +2269,8 @@ fn paint_measure_hud(scene: &EditorScene, s: &Screen, window: &mut Window, cx: &
             let line_h = px(15.0);
             let label_font = window.text_style().font();
             let mut placed: Vec<kurbo::Rect> = Vec::new();
-            let draw_label = |window: &mut gpui::Window,
-                              cx: &mut gpui::App,
+            let draw_label = |window: &mut Window,
+                              cx: &mut App,
                               a: kurbo::Point,
                               b: kurbo::Point,
                               text: String,

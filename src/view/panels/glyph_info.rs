@@ -14,6 +14,8 @@ use crate::view::paint::build_fill_path;
 use crate::view::paint::build_path;
 use crate::view::paint::glyph_free_icon;
 use crate::view::paint::paint_batched;
+use crate::view::render::px32;
+use crate::view::render::to_byte;
 use crate::view::theme as t;
 use crate::widgets;
 use crate::workspace::BOTTOM_BAR_H;
@@ -50,7 +52,7 @@ impl Workspace {
         &self,
         rows: Vec<Vec<(usize, usize)>>,
         fit: GridFit,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) -> Option<impl IntoElement + use<>> {
         let _ = cx;
         let font = self.font()?;
@@ -105,10 +107,10 @@ impl Workspace {
                         );
                         let place = Affine::translate((cell.x as f64, cell.y as f64)) * transform;
                         let key = u32::from_be_bytes([
-                            (color.r * 255.0) as u8,
-                            (color.g * 255.0) as u8,
-                            (color.b * 255.0) as u8,
-                            (color.a * 255.0) as u8,
+                            to_byte(color.r * 255.0),
+                            to_byte(color.g * 255.0),
+                            to_byte(color.b * 255.0),
+                            to_byte(color.a * 255.0),
                         ]);
                         batches
                             .entry(key)
@@ -134,7 +136,7 @@ impl Workspace {
 
     /// Right tile: details of the selected glyph. This is
     /// `GlyphInfoSidebar` in runebender-web.
-    pub(crate) fn glyph_info_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn glyph_info_panel(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         // Read-only facts read as one line each, label left and value
         // right. A stack of big accent-green headings for one-word
         // values was most of what made this panel shout.
@@ -409,8 +411,8 @@ impl Workspace {
                         let to_screen = |x: f64, y: f64| {
                             let p = view * kurbo::Point::new(x, y);
                             gpui::point(
-                                bounds.origin.x + px(p.x as f32),
-                                bounds.origin.y + px(p.y as f32),
+                                bounds.origin.x + px(px32(p.x)),
+                                bounds.origin.y + px(px32(p.y)),
                             )
                         };
                         // No metric frame here: this tile is a shape
@@ -510,7 +512,7 @@ impl Workspace {
 
     /// The row of mark colour swatches: clicking one sets the selected
     /// glyph's mark, and the last swatch clears it.
-    pub(crate) fn mark_colors_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn mark_colors_panel(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let current = self
             .selected
             .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))

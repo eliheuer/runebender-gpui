@@ -52,7 +52,7 @@ pub struct MenuBar {
 impl MenuBar {
     /// Build the bar from the same `gpui::Menu` list the native bar
     /// uses.
-    pub fn new(menus: Vec<Menu>, cx: &mut Context<Self>) -> Self {
+    pub fn new(menus: Vec<Menu>, cx: &mut Context<'_, Self>) -> Self {
         let _ = cx;
         Self {
             menus: menus.into_iter().map(convert).collect(),
@@ -89,7 +89,7 @@ fn flatten(source: Vec<MenuItem>, out: &mut Vec<Entry>) {
 }
 
 impl Render for MenuBar {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let open = self.open;
         let mut bar = div()
             .flex()
@@ -138,7 +138,7 @@ use gpui::prelude::FluentBuilder as _;
 impl MenuBar {
     /// The open menu's dropdown: its rows, and the click handlers
     /// that dispatch an action and close the menu.
-    fn dropdown(&self, index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    fn dropdown(&self, index: usize, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let mut list = div()
             .absolute()
             .top(px(24.0))

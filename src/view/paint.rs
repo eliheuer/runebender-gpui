@@ -5,6 +5,7 @@
 //! kurbo paths into gpui paths, icons drawn from paths, batched fills,
 //! and the blur cache key.
 
+use crate::view::render::px32;
 use crate::view::theme as t;
 use crate::widgets;
 use gpui::Bounds;
@@ -33,7 +34,7 @@ pub(crate) fn build_path(
     mut builder: PathBuilder,
 ) -> Option<gpui::Path<gpui::Pixels>> {
     let mut any = false;
-    let gp = |p: kurbo::Point| gpui::point(origin.x + px(p.x as f32), origin.y + px(p.y as f32));
+    let gp = |p: kurbo::Point| gpui::point(origin.x + px(px32(p.x)), origin.y + px(px32(p.y)));
     for el in transform * outline {
         match el {
             PathEl::MoveTo(p) => builder.move_to(gp(p)),
@@ -166,10 +167,10 @@ pub(crate) fn blur_key(
     for element in line.elements() {
         match element {
             PathEl::MoveTo(p) | PathEl::LineTo(p) => {
-                (p.x.to_bits(), p.y.to_bits()).hash(&mut hasher)
+                (p.x.to_bits(), p.y.to_bits()).hash(&mut hasher);
             }
             PathEl::QuadTo(a, b) => {
-                (a.x.to_bits(), a.y.to_bits(), b.x.to_bits(), b.y.to_bits()).hash(&mut hasher)
+                (a.x.to_bits(), a.y.to_bits(), b.x.to_bits(), b.y.to_bits()).hash(&mut hasher);
             }
             PathEl::CurveTo(a, b, c) => (
                 a.x.to_bits(),
@@ -180,7 +181,7 @@ pub(crate) fn blur_key(
                 c.y.to_bits(),
             )
                 .hash(&mut hasher),
-            PathEl::ClosePath => 0u8.hash(&mut hasher),
+            PathEl::ClosePath => 0_u8.hash(&mut hasher),
         }
     }
     (
@@ -211,7 +212,7 @@ pub(crate) fn eye_icon(color: gpui::Rgba, open: bool) -> impl IntoElement {
             let (cx_, cy_) = (w / 2.0, h / 2.0);
             let rx = w * 0.40;
             let ry = h * 0.30;
-            let pt = |x: f64, y: f64| gpui::point(o.x + px(x as f32), o.y + px(y as f32));
+            let pt = |x: f64, y: f64| gpui::point(o.x + px(px32(x)), o.y + px(px32(y)));
             let mut pb = PathBuilder::stroke(px(1.2));
             // The almond: one curve over, one curve back.
             pb.move_to(pt(cx_ - rx, cy_));
@@ -252,7 +253,7 @@ pub(crate) fn glyph_free_icon(color: gpui::Rgba, kind: IconMark) -> impl IntoEle
             let o = bounds.origin;
             let (cx_, cy_) = (w / 2.0, h / 2.0);
             let r = (w.min(h) / 2.0) * 0.42;
-            let pt = |x: f64, y: f64| gpui::point(o.x + px(x as f32), o.y + px(y as f32));
+            let pt = |x: f64, y: f64| gpui::point(o.x + px(px32(x)), o.y + px(px32(y)));
             let mut pb = PathBuilder::stroke(px(1.3));
             match kind {
                 IconMark::Plus | IconMark::Minus => {

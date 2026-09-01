@@ -73,7 +73,7 @@ fn panel_bounds(cx: &App, group: &SharedString, index: usize) -> Option<Bounds<P
 }
 
 /// One panel in a group.
-pub struct ResizablePanel {
+pub(crate) struct ResizablePanel {
     /// The panel's size. `None` means take the space the sized panels leave.
     size: Option<Pixels>,
     /// The limits a drag clamps to, when set.
@@ -85,7 +85,7 @@ pub struct ResizablePanel {
 }
 
 /// An empty, visible panel with no size of its own.
-pub fn resizable_panel() -> ResizablePanel {
+pub(crate) fn resizable_panel() -> ResizablePanel {
     ResizablePanel {
         size: None,
         range: None,
@@ -97,25 +97,25 @@ pub fn resizable_panel() -> ResizablePanel {
 impl ResizablePanel {
     /// The size this panel starts at. Without one it takes the space
     /// the sized panels leave.
-    pub fn size(mut self, size: Pixels) -> Self {
+    pub(crate) fn size(mut self, size: Pixels) -> Self {
         self.size = Some(size);
         self
     }
 
     /// How far a drag may take it.
-    pub fn size_range(mut self, range: Range<Pixels>) -> Self {
+    pub(crate) fn size_range(mut self, range: Range<Pixels>) -> Self {
         self.range = Some(range);
         self
     }
 
     /// A hidden panel takes no space and grows no divider.
-    pub fn visible(mut self, visible: bool) -> Self {
+    pub(crate) fn visible(mut self, visible: bool) -> Self {
         self.visible = visible;
         self
     }
 
     /// Set the panel's content.
-    pub fn child(mut self, child: impl IntoElement) -> Self {
+    pub(crate) fn child(mut self, child: impl IntoElement) -> Self {
         self.child = Some(child.into_any_element());
         self
     }
@@ -123,7 +123,7 @@ impl ResizablePanel {
 
 /// A row or column of panels.
 #[derive(gpui::IntoElement)]
-pub struct ResizableGroup {
+pub(crate) struct ResizableGroup {
     /// Keys the group's stored sizes and bounds.
     id: SharedString,
     /// Whether the panels run in a row or a column.
@@ -133,7 +133,7 @@ pub struct ResizableGroup {
 }
 
 /// Panels side by side, dividers running vertically.
-pub fn h_resizable(id: impl Into<SharedString>) -> ResizableGroup {
+pub(crate) fn h_resizable(id: impl Into<SharedString>) -> ResizableGroup {
     ResizableGroup {
         id: id.into(),
         axis: Axis::Horizontal,
@@ -142,7 +142,7 @@ pub fn h_resizable(id: impl Into<SharedString>) -> ResizableGroup {
 }
 
 /// Panels stacked, dividers running horizontally.
-pub fn v_resizable(id: impl Into<SharedString>) -> ResizableGroup {
+pub(crate) fn v_resizable(id: impl Into<SharedString>) -> ResizableGroup {
     ResizableGroup {
         id: id.into(),
         axis: Axis::Vertical,
@@ -152,7 +152,7 @@ pub fn v_resizable(id: impl Into<SharedString>) -> ResizableGroup {
 
 impl ResizableGroup {
     /// Append a panel to the group.
-    pub fn child(mut self, panel: ResizablePanel) -> Self {
+    pub(crate) fn child(mut self, panel: ResizablePanel) -> Self {
         self.panels.push(panel);
         self
     }
@@ -349,7 +349,11 @@ impl gpui::RenderOnce for ResizableGroup {
 struct DragDivider(usize);
 
 impl gpui::Render for DragDivider {
-    fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<'_, Self>,
+    ) -> impl IntoElement {
         gpui::Empty
     }
 }

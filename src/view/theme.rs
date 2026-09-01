@@ -9,12 +9,14 @@
 
 use std::sync::RwLock;
 
+use crate::view::render::px32;
+use crate::view::render::to_count;
 use gpui::Rgba;
 use runebender_core::ui::theme::ColorRgba;
 use runebender_core::ui::theme_oklch::{self, Theme};
 
 /// The themes in the shared token file, in menu order.
-pub const THEMES: [(&str, &str); 4] = [
+pub(crate) const THEMES: [(&str, &str); 4] = [
     ("dark", "Dark"),
     ("midnight", "Midnight"),
     ("gray", "Gray"),
@@ -33,7 +35,7 @@ static CURRENT: RwLock<Option<(&'static str, &'static Theme)>> = RwLock::new(Non
 ///
 /// One name, so the fallback in `theme()` and the answer from
 /// `current_theme()` cannot disagree about what "no choice yet" means.
-pub const DEFAULT_THEME: &str = "gray";
+pub(crate) const DEFAULT_THEME: &str = "gray";
 
 /// The resolved live theme, loading `DEFAULT_THEME` on the first call.
 fn theme() -> &'static Theme {
@@ -52,7 +54,7 @@ fn theme() -> &'static Theme {
 ///
 /// A name the token file does not define leaves the current theme
 /// alone. Returns `false` for such a name.
-pub fn set_theme(id: &str) -> bool {
+pub(crate) fn set_theme(id: &str) -> bool {
     let Some((name, _)) = THEMES.iter().find(|(name, _)| *name == id) else {
         return false;
     };
@@ -64,7 +66,7 @@ pub fn set_theme(id: &str) -> bool {
 }
 
 /// The active theme's id.
-pub fn current_theme() -> &'static str {
+pub(crate) fn current_theme() -> &'static str {
     theme();
     CURRENT
         .read()
@@ -91,7 +93,7 @@ fn c(color: ColorRgba) -> Rgba {
 /// Themes disagree. Tinting a rule works on a near-black or
 /// near-white ground and fails on a mid grey. There, a hue saturated
 /// enough to read sits at mid lightness too.
-pub struct MarkPaint {
+pub(crate) struct MarkPaint {
     /// Cell fill, when the theme fills its marks.
     pub bg: Option<Rgba>,
     /// Cell rule.
@@ -103,16 +105,16 @@ pub struct MarkPaint {
 /// The paint for a marked cell, or `None` when the glyph has no mark.
 /// One place decides, so the grid, the detail view and the list cannot
 /// drift apart on it.
-pub fn mark_paint(label: Option<&str>) -> Option<MarkPaint> {
+pub(crate) fn mark_paint(label: Option<&str>) -> Option<MarkPaint> {
     let color = mark_color(label?)?;
     let theme = theme();
     Some(match theme.mark_style {
-        runebender_core::ui::theme_oklch::MarkStyle::Fill => MarkPaint {
+        theme_oklch::MarkStyle::Fill => MarkPaint {
             bg: Some(color),
             border: theme.mark_outline.map(c).unwrap_or_else(cell_border),
             ink: theme.mark_ink.map(c).unwrap_or_else(text),
         },
-        runebender_core::ui::theme_oklch::MarkStyle::Border => MarkPaint {
+        theme_oklch::MarkStyle::Border => MarkPaint {
             bg: None,
             border: color,
             ink: color,
@@ -126,23 +128,23 @@ pub fn mark_paint(label: Option<&str>) -> Option<MarkPaint> {
 // `rounded_sm()` / `border_1()`, or a theme cannot change them.
 
 /// The default corner, on small chrome.
-pub fn radius() -> gpui::Pixels {
+pub(crate) fn radius() -> gpui::Pixels {
     gpui::px(theme().geometry.radius)
 }
 
 /// Pressable tiles: toolbar tiles, sidebar tabs, toggles.
-pub fn radius_control() -> gpui::Pixels {
+pub(crate) fn radius_control() -> gpui::Pixels {
     gpui::px(theme().geometry.radius_control)
 }
 
 /// The ordinary rule, on panels and chrome.
-pub fn stroke() -> gpui::Pixels {
+pub(crate) fn stroke() -> gpui::Pixels {
     gpui::px(theme().geometry.stroke)
 }
 
 /// Rings that mark a thing selected or grabbable. Never `stroke()`
 /// doubled: that assumes a 1px base and goes too heavy from a 2px one.
-pub fn stroke_emphasis() -> gpui::Pixels {
+pub(crate) fn stroke_emphasis() -> gpui::Pixels {
     gpui::px(theme().geometry.stroke_emphasis)
 }
 
@@ -156,27 +158,27 @@ fn with_alpha(color: ColorRgba, a: f32) -> Rgba {
 // ---- surfaces ----
 
 /// The window ground, behind every panel.
-pub fn window_bg() -> Rgba {
+pub(crate) fn window_bg() -> Rgba {
     c(theme().surface("app"))
 }
 /// The fill of panels and bars.
-pub fn panel_bg() -> Rgba {
+pub(crate) fn panel_bg() -> Rgba {
     c(theme().surface("panel"))
 }
 /// The rule around a panel.
-pub fn panel_outline() -> Rgba {
+pub(crate) fn panel_outline() -> Rgba {
     c(theme().surface("outline"))
 }
 /// The fill of an unselected grid cell; the panel fill.
-pub fn cell_bg() -> Rgba {
+pub(crate) fn cell_bg() -> Rgba {
     panel_bg()
 }
 /// The rule around a grid cell.
-pub fn cell_border() -> Rgba {
+pub(crate) fn cell_border() -> Rgba {
     c(theme().surface("outline"))
 }
 /// The fill of a selected grid cell.
-pub fn cell_selected_bg() -> Rgba {
+pub(crate) fn cell_selected_bg() -> Rgba {
     // Half way between the cell's own ground and the hover surface:
     // enough to read as picked, not so much that the cell jumps out of
     // the grid.
@@ -190,82 +192,82 @@ pub fn cell_selected_bg() -> Rgba {
     }
 }
 /// Selected grid cell ring (neutral, like the web editor).
-pub fn cell_selected_ring() -> Rgba {
+pub(crate) fn cell_selected_ring() -> Rgba {
     c(theme().role("gridSelected"))
 }
 
 // ---- accents and text ----
 
 /// The accent hue, used for selection and emphasis.
-pub fn accent() -> Rgba {
+pub(crate) fn accent() -> Rgba {
     c(theme().role("accent"))
 }
 /// The primary text ink.
-pub fn text() -> Rgba {
+pub(crate) fn text() -> Rgba {
     c(theme().text("primary"))
 }
 /// The secondary, quieter text ink.
-pub fn text_muted() -> Rgba {
+pub(crate) fn text_muted() -> Rgba {
     c(theme().text("secondary"))
 }
 /// The accent behind selected text: the same hue, quiet enough that
 /// the glyphs on top stay readable.
-pub fn accent_soft() -> Rgba {
+pub(crate) fn accent_soft() -> Rgba {
     let a = accent();
     Rgba { a: 0.28, ..a }
 }
 /// The warning hue, used for status text and the preview glyph.
-pub fn status_yellow() -> Rgba {
+pub(crate) fn status_yellow() -> Rgba {
     c(theme().role("warning"))
 }
 
 // ---- glyph rendering ----
 
 /// The fill of glyph outlines in cells and previews.
-pub fn glyph_fill() -> Rgba {
+pub(crate) fn glyph_fill() -> Rgba {
     c(theme().text("glyph"))
 }
 /// The stroke of a glyph path in the editing view.
-pub fn path_stroke() -> Rgba {
+pub(crate) fn path_stroke() -> Rgba {
     c(theme().role("pathStroke"))
 }
 /// Metric lines such as baseline and x-height; the accent hue.
-pub fn metrics_line() -> Rgba {
+pub(crate) fn metrics_line() -> Rgba {
     accent()
 }
 /// The preview-mode glyph fill; the status yellow.
-pub fn preview_glyph() -> Rgba {
+pub(crate) fn preview_glyph() -> Rgba {
     status_yellow()
 }
 /// The translucent fill of a component.
-pub fn component_fill() -> Rgba {
+pub(crate) fn component_fill() -> Rgba {
     with_alpha(theme().role("component"), 0.35)
 }
 /// The translucent fill of a selected component.
-pub fn component_selected_fill() -> Rgba {
+pub(crate) fn component_selected_fill() -> Rgba {
     with_alpha(theme().role("componentSelected"), 0.45)
 }
 /// The interpolated-instance ghost outline; the component hue at full
 /// alpha.
-pub fn ghost() -> Rgba {
+pub(crate) fn ghost() -> Rgba {
     c(theme().role("component"))
 }
 /// The zoom-dependent design grid line, faded by the level's ramp-in
 /// alpha. The alphas are the web's `DESIGN_GRID_FINE`/`COARSE`,
 /// shared constants in core.
-pub fn design_grid_fine(alpha: f32) -> Rgba {
+pub(crate) fn design_grid_fine(alpha: f32) -> Rgba {
     let mut rgba = c(runebender_core::ui::theme::design_grid::FINE);
     rgba.a *= alpha;
     rgba
 }
 /// The coarse design grid line, faded by `alpha` like the fine one.
-pub fn design_grid_coarse(alpha: f32) -> Rgba {
+pub(crate) fn design_grid_coarse(alpha: f32) -> Rgba {
     let mut rgba = c(runebender_core::ui::theme::design_grid::COARSE);
     rgba.a *= alpha;
     rgba
 }
 /// Greyed-out ring on read-only points (inactive sorts, zoomed in).
-pub fn point_readonly() -> Rgba {
+pub(crate) fn point_readonly() -> Rgba {
     Rgba {
         r: 0x8a as f32 / 255.0,
         g: 0x8a as f32 / 255.0,
@@ -277,42 +279,42 @@ pub fn point_readonly() -> Rgba {
 // ---- points (dark inner, colored ring — the web style) ----
 
 /// The dark inner fill every point marker shares.
-pub fn point_inner() -> Rgba {
+pub(crate) fn point_inner() -> Rgba {
     c(theme().role("pointInner"))
 }
 /// The ring on a smooth on-curve point.
-pub fn point_smooth_outer() -> Rgba {
+pub(crate) fn point_smooth_outer() -> Rgba {
     c(theme().role("pointSmooth"))
 }
 /// The ring on a corner on-curve point.
-pub fn point_corner_outer() -> Rgba {
+pub(crate) fn point_corner_outer() -> Rgba {
     c(theme().role("pointCorner"))
 }
 /// The ring on a hyperbezier point.
-pub fn point_hyper_outer() -> Rgba {
+pub(crate) fn point_hyper_outer() -> Rgba {
     c(theme().role("pointHyper"))
 }
 /// The ring on an off-curve control point.
-pub fn point_offcurve_outer() -> Rgba {
+pub(crate) fn point_offcurve_outer() -> Rgba {
     c(theme().role("pointOffcurve"))
 }
 /// The fill of a selected point marker.
-pub fn point_selected() -> Rgba {
+pub(crate) fn point_selected() -> Rgba {
     c(theme().role("pointSelected"))
 }
 /// The line from an on-curve point to its off-curve handle.
-pub fn handle_line() -> Rgba {
+pub(crate) fn handle_line() -> Rgba {
     c(theme().text("secondary"))
 }
 
 // ---- selection marquee ----
 
 /// The translucent interior of the drag-selection marquee.
-pub fn marquee_fill() -> Rgba {
+pub(crate) fn marquee_fill() -> Rgba {
     with_alpha(theme().role("selection"), 0.125)
 }
 /// The outline of the drag-selection marquee.
-pub fn marquee_stroke() -> Rgba {
+pub(crate) fn marquee_stroke() -> Rgba {
     c(theme().role("selection"))
 }
 
@@ -320,12 +322,12 @@ pub fn marquee_stroke() -> Rgba {
 // ---- glyph mark colors ----
 
 /// The display color for a mark label.
-pub fn mark_color(label: &str) -> Option<Rgba> {
+pub(crate) fn mark_color(label: &str) -> Option<Rgba> {
     theme().mark(label).map(c)
 }
 
 /// The full mark palette in order, for the Colors panel.
-pub fn mark_palette() -> Vec<(String, Rgba)> {
+pub(crate) fn mark_palette() -> Vec<(String, Rgba)> {
     theme()
         .marks
         .iter()
@@ -334,44 +336,44 @@ pub fn mark_palette() -> Vec<(String, Rgba)> {
 }
 
 /// The text caret.
-pub fn text_cursor() -> Rgba {
+pub(crate) fn text_cursor() -> Rgba {
     c(theme().role("textCursor"))
 }
 /// Quiet per-sort metric boxes in the text buffer.
-pub fn metric_quiet() -> Rgba {
+pub(crate) fn metric_quiet() -> Rgba {
     c(theme().role("metricQuiet"))
 }
 /// Global guides from fontinfo: the status yellow, thinned so the
 /// metric lines stay the louder of the two.
-pub fn guide_line() -> Rgba {
+pub(crate) fn guide_line() -> Rgba {
     let mut color = status_yellow();
     color.a = 0.75;
     color
 }
 /// Local (per-glyph) guides: the accent hue, thinned the same way,
 /// so the two guide scopes read apart at a glance.
-pub fn guide_local() -> Rgba {
+pub(crate) fn guide_local() -> Rgba {
     let mut color = accent();
     color.a = 0.75;
     color
 }
 /// Alignment-zone bands: the accent at a whisper. These are the
 /// beige zones in Glyphs, in this palette's terms.
-pub fn zone_band() -> Rgba {
+pub(crate) fn zone_band() -> Rgba {
     let mut color = accent();
     color.a = 0.10;
     color
 }
 /// Annotation marks: arrows, circles, and notes in the kern-drag
 /// red, full strength. Working marks should shout a little.
-pub fn annotation() -> Rgba {
+pub(crate) fn annotation() -> Rgba {
     c(theme().role("kernActive"))
 }
 /// The HOI velocity ribbon's speed ramp: slow steps in a deep
 /// ember, fast ones in gold. `t` is the normalized speed. This is
 /// Show velocity in Glyphs, in this palette's warm terms.
-pub fn velocity_ramp(t: f64) -> Rgba {
-    let t = t.clamp(0.0, 1.0) as f32;
+pub(crate) fn velocity_ramp(t: f64) -> Rgba {
+    let t = px32(t.clamp(0.0, 1.0));
     let slow = (0.52, 0.16, 0.10);
     let fast = (0.87, 0.62, 0.16);
     Rgba {
@@ -382,31 +384,31 @@ pub fn velocity_ramp(t: f64) -> Rgba {
     }
 }
 /// The HOI node trajectory connector line, across the axis.
-pub fn trajectory_line() -> Rgba {
+pub(crate) fn trajectory_line() -> Rgba {
     with_alpha(theme().role("kernActive"), 0.55)
 }
 /// The velocity dots on an HOI node trajectory.
-pub fn trajectory_dot() -> Rgba {
+pub(crate) fn trajectory_dot() -> Rgba {
     c(theme().role("kernActive"))
 }
 /// The sort being manually kerned.
-pub fn kern_active() -> Rgba {
+pub(crate) fn kern_active() -> Rgba {
     c(theme().role("kernActive"))
 }
 /// The sort before the one being kerned.
-pub fn kern_previous() -> Rgba {
+pub(crate) fn kern_previous() -> Rgba {
     c(theme().role("kernPrevious"))
 }
 /// Reference-layer underlay stroke. A reference layer is another
 /// master shown via the Layers eyes.
-pub fn reference_layer() -> Rgba {
+pub(crate) fn reference_layer() -> Rgba {
     c(theme().role("reference"))
 }
 
 // ---- curve overlays (web curve_gradient + continuity palette) ----
 
 /// The comb's cool-to-warm curvature ramp.
-pub fn comb_gradient(t: f64) -> Rgba {
+pub(crate) fn comb_gradient(t: f64) -> Rgba {
     const STOPS: [[f32; 3]; 5] = [
         [0.16, 0.80, 0.82], // teal
         [0.40, 0.44, 0.95], // indigo
@@ -414,8 +416,10 @@ pub fn comb_gradient(t: f64) -> Rgba {
         [1.00, 0.55, 0.24], // orange
         [1.00, 0.84, 0.36], // amber
     ];
-    let u = (t.clamp(0.0, 1.0) as f32) * (STOPS.len() as f32 - 1.0);
-    let i = (u.floor() as usize).min(STOPS.len() - 2);
+    let u = px32(t.clamp(0.0, 1.0)) * (STOPS.len() as f32 - 1.0);
+    let i = usize::try_from(to_count(u.floor()))
+        .unwrap_or(0)
+        .min(STOPS.len() - 2);
     let f = u - i as f32;
     let (a, b) = (STOPS[i], STOPS[i + 1]);
     Rgba {
@@ -428,7 +432,7 @@ pub fn comb_gradient(t: f64) -> Rgba {
 
 /// Continuity badge for a curvature-continuous (G2 or better) joint:
 /// green.
-pub fn continuity_g2() -> Rgba {
+pub(crate) fn continuity_g2() -> Rgba {
     Rgba {
         r: 0.30,
         g: 0.85,
@@ -437,7 +441,7 @@ pub fn continuity_g2() -> Rgba {
     }
 }
 /// Continuity badge for a tangent-only (G1) joint: yellow.
-pub fn continuity_g1() -> Rgba {
+pub(crate) fn continuity_g1() -> Rgba {
     Rgba {
         r: 0.95,
         g: 0.80,
@@ -446,7 +450,7 @@ pub fn continuity_g1() -> Rgba {
     }
 }
 /// Continuity badge where a curve meets a straight line: neutral grey.
-pub fn continuity_line() -> Rgba {
+pub(crate) fn continuity_line() -> Rgba {
     Rgba {
         r: 0.55,
         g: 0.62,
@@ -455,7 +459,7 @@ pub fn continuity_line() -> Rgba {
     }
 }
 /// Continuity badge for a kink: red.
-pub fn continuity_kink() -> Rgba {
+pub(crate) fn continuity_kink() -> Rgba {
     Rgba {
         r: 0.95,
         g: 0.35,
@@ -468,7 +472,7 @@ pub fn continuity_kink() -> Rgba {
 
 /// Popcount tier ramp: 1 power is structural (green), 2 an elegant
 /// sum (yellow), 3 acceptable (orange), 4+ a flagged correction (red).
-pub fn popcount_tier(pc: u32) -> Rgba {
+pub(crate) fn popcount_tier(pc: u32) -> Rgba {
     match pc {
         0 | 1 => Rgba {
             r: 0.09,
@@ -500,13 +504,13 @@ pub fn popcount_tier(pc: u32) -> Rgba {
 /// The dark casing drawn under points and labels, so they keep an
 /// edge over an outline or the curvature comb. This is `HALO` in the
 /// web editor.
-pub fn halo() -> Rgba {
+pub(crate) fn halo() -> Rgba {
     c(theme().role("halo"))
 }
 
 /// The ring around a selected point. This is `pointSelectedOuter` in
 /// the web editor, which feeds it from the selection colour.
-pub fn point_selected_ring() -> Rgba {
+pub(crate) fn point_selected_ring() -> Rgba {
     c(theme().role("selection"))
 }
 
@@ -515,7 +519,7 @@ pub fn point_selected_ring() -> Rgba {
 /// The anchor mark's pink. Anchors read as their own kind of thing
 /// beside on-curve and off-curve points. This is `ANCHOR_MARK_PINK`
 /// in the web editor.
-pub fn anchor() -> Rgba {
+pub(crate) fn anchor() -> Rgba {
     theme()
         .mark("pink")
         .map(c)
@@ -547,7 +551,7 @@ mod perf {
     fn a_theme_lookup_is_cheap() {
         let n = 100_000;
         let start = std::time::Instant::now();
-        let mut sink = 0f32;
+        let mut sink = 0_f32;
         for _ in 0..n {
             sink += super::text().r + super::accent().g;
         }

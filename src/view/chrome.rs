@@ -14,6 +14,7 @@ use crate::view::paint::flat_slider;
 use crate::view::paint::glyph_free_icon;
 use crate::view::paint::icon_svg;
 use crate::view::paint::invert_icon;
+use crate::view::render::px32;
 use crate::view::theme as t;
 use crate::widgets;
 use crate::workspace::BAR_BUTTON;
@@ -37,7 +38,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::px;
 impl Workspace {
     /// The header bar: the file name and its save status.
-    pub(crate) fn header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn header(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         let (title, status): (SharedString, SharedString) = match (self.font(), &self.load_error) {
             (Some(font), _) => (
                 // Just the file name, like Glyphs' title. The glyph
@@ -119,7 +120,7 @@ impl Workspace {
     }
 
     /// Create the axis sliders once a project with axes exists.
-    pub(crate) fn ensure_axis_sliders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_axis_sliders(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(project) = self.project.as_ref() else {
             return;
         };
@@ -149,14 +150,14 @@ impl Workspace {
                 .unwrap_or(axis.default);
             let slider = cx.new(|_| {
                 widgets::slider::SliderState::new()
-                    .max(axis.max as f32)
-                    .min(axis.min as f32)
+                    .max(px32(axis.max))
+                    .min(px32(axis.min))
                     .step(1.0)
-                    .default_value(here as f32)
+                    .default_value(px32(here))
             });
             let axis_info = axis.clone();
             let sub = cx.subscribe_in(&slider, window, {
-                move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
+                move |this: &mut Self, _, event: &widgets::slider::SliderEvent, _window, cx| {
                     let widgets::slider::SliderEvent::Change(value) = event;
                     let raw = *value as f64;
                     let landed = {
@@ -194,7 +195,7 @@ impl Workspace {
         &mut self,
         target: &runebender_core::document::var_model::Location,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         let landed = {
             let Some(project) = self.project.as_mut() else {
@@ -219,7 +220,7 @@ impl Workspace {
                         axis.default,
                         axis.max,
                     );
-                    Some((slider.clone(), raw as f32))
+                    Some((slider.clone(), px32(raw)))
                 })
                 .collect()
         };
@@ -236,7 +237,7 @@ impl Workspace {
 
     /// The preview's on/off switch, in the bottom bar's left corner
     /// where the tool hints used to be.
-    pub(crate) fn preview_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn preview_toggle(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         div()
             .flex()
             .items_center()
@@ -280,7 +281,7 @@ impl Workspace {
     /// What is left on the right of the bar: the blur, which is a
     /// spacing check. Show/hide and the ink flip live in the left
     /// corner beside each other.
-    pub(crate) fn preview_controls(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn preview_controls(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         div()
             .flex()
             .items_center()
@@ -296,7 +297,11 @@ impl Workspace {
     }
 
     /// Create the bottom bar's cell-size slider once a window exists.
-    pub(crate) fn ensure_preview_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_preview_slider(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         if self.preview.blur_slider.is_some() {
             return;
         }
@@ -308,7 +313,7 @@ impl Workspace {
                 .default_value(0.0)
         });
         let sub = cx.subscribe_in(&slider, window, {
-            move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
+            move |this: &mut Self, _, event: &widgets::slider::SliderEvent, _window, cx| {
                 let widgets::slider::SliderEvent::Change(value) = event;
                 this.preview.blur = *value;
                 cx.notify();
@@ -322,7 +327,7 @@ impl Workspace {
     pub(crate) fn ensure_model_strength_slider(
         &mut self,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         if self.models.strength_slider.is_some() {
             return;
@@ -335,7 +340,7 @@ impl Workspace {
                 .default_value(1.0)
         });
         let sub = cx.subscribe_in(&slider, window, {
-            move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
+            move |this: &mut Self, _, event: &widgets::slider::SliderEvent, _window, cx| {
                 let widgets::slider::SliderEvent::Change(value) = event;
                 this.models.strength = *value as f64;
                 // The last judgement was made at the old strength.
@@ -349,7 +354,11 @@ impl Workspace {
 
     /// Creates the editor sidebar's mini-grid zoom slider once,
     /// 24 to 120 pixels in steps of 2.
-    pub(crate) fn ensure_sidebar_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_sidebar_slider(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
         if self.sidebar.slider.is_some() {
             return;
         }
@@ -361,7 +370,7 @@ impl Workspace {
                 .default_value(MINI_CELL)
         });
         let sub = cx.subscribe_in(&slider, window, {
-            move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
+            move |this: &mut Self, _, event: &widgets::slider::SliderEvent, _window, cx| {
                 let widgets::slider::SliderEvent::Change(value) = event;
                 this.sidebar.cell_size = *value;
                 this.sidebar.scroll_row = 0;
@@ -374,7 +383,7 @@ impl Workspace {
 
     /// Creates the grid's cell zoom slider once, 48 to 200 pixels in
     /// steps of 4.
-    pub(crate) fn ensure_cell_slider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_cell_slider(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         if self.grid.cell_slider.is_some() {
             return;
         }
@@ -386,7 +395,7 @@ impl Workspace {
                 .default_value(CELL)
         });
         let sub = cx.subscribe_in(&slider, window, {
-            move |this: &mut Workspace, _, event: &widgets::slider::SliderEvent, _window, cx| {
+            move |this: &mut Self, _, event: &widgets::slider::SliderEvent, _window, cx| {
                 let widgets::slider::SliderEvent::Change(value) = event;
                 this.grid.cell_size = *value;
                 cx.notify();
@@ -398,7 +407,7 @@ impl Workspace {
 
     /// The bar along the bottom: glyph add/remove, the selection count
     /// and cell zoom in grid mode; live readouts in the editor.
-    pub(crate) fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn status_bar(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         // Grid mode gets the Glyphs bottom bar: add/remove glyph on
         // the left, the selection count centered, cell zoom on the
         // right.
@@ -470,7 +479,7 @@ impl Workspace {
                          label: &'static str,
                          mode: FontViewMode,
                          current: FontViewMode,
-                         cx: &mut Context<Self>| {
+                         cx: &mut Context<'_, Self>| {
                             div()
                                 .id(id)
                                 .px_1p5()

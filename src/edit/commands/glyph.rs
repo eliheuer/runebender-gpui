@@ -13,7 +13,7 @@ use std::path::PathBuf;
 impl Workspace {
     /// Copy the selection as text: the glyphs' characters. This is
     /// the sidebar footer's action in the web editor.
-    pub(crate) fn command_copy_selection_text(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_copy_selection_text(&mut self, cx: &mut Context<'_, Self>) {
         let Some(font) = self.font() else { return };
         let text: String = self
             .selection_names()
@@ -74,7 +74,7 @@ impl Workspace {
             return;
         };
         let upm = project.active_font().units_per_em;
-        let mut added = 0usize;
+        let mut added = 0_usize;
         for master in project.masters.iter_mut() {
             for (name, unicode) in &targets {
                 if master.name_map.contains_key(name) {
@@ -209,7 +209,7 @@ impl Workspace {
         let Some(project) = self.project.as_mut() else {
             return;
         };
-        let mut added = 0usize;
+        let mut added = 0_usize;
         for master in project.masters.iter_mut() {
             let members = master.font.groups.entry(group_name.clone()).or_default();
             for name in &names {

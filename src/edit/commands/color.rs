@@ -1,7 +1,7 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Color: palettes, color layers, COLRv1, gradients.
+//! Color: palettes, color layers, `COLRv1`, gradients.
 
 use crate::Workspace;
 use runebender_core::formats::color_font::COLOR_LAYERS_EXPLICIT_KEY;
@@ -100,7 +100,7 @@ impl Workspace {
             .first()
             .map(|m| read_color_mapping(&m.font))
             .unwrap_or_default();
-        let mut n = 0usize;
+        let mut n = 0_usize;
         let layer_name = loop {
             let candidate = format!("color.{n}");
             if !mapping.iter().any(|(l, _)| *l == candidate) {
@@ -147,14 +147,14 @@ impl Workspace {
 
     /// Explode every color glyph's layers into real suffixed glyphs
     /// and write the explicit colorLayers structures (solid paints),
-    /// the COLRv1 baseline. From here ufo2ft's own exploding is off;
+    /// the `COLRv1` baseline. From here ufo2ft's own exploding is off;
     /// gradients upgrade individual paints. This is the Color
     /// section's "To v1" button.
     pub(crate) fn command_convert_to_colrv1(&mut self) {
         let Some(project) = self.project.as_mut() else {
             return;
         };
-        let mut exploded = 0usize;
+        let mut exploded = 0_usize;
         for master in project.masters.iter_mut() {
             let mapping = read_color_mapping(&master.font);
             if mapping.is_empty() {
@@ -202,7 +202,7 @@ impl Workspace {
                 }
                 if !rows.is_empty() {
                     let mut root = plist::Dictionary::new();
-                    root.insert("Format".into(), plist::Value::Integer(1u64.into()));
+                    root.insert("Format".into(), plist::Value::Integer(1_u64.into()));
                     root.insert("Layers".into(), plist::Value::Array(rows));
                     layers_dict.insert(name.clone(), plist::Value::Dictionary(root));
                     exploded += 1;
@@ -246,7 +246,7 @@ impl Workspace {
         let Some(project) = self.project.as_mut() else {
             return;
         };
-        let mut changed = 0usize;
+        let mut changed = 0_usize;
         for master in project.masters.iter_mut() {
             let (ascender, mapping) = (master.ascender, read_color_mapping(&master.font));
             let Some((_, stop0)) = mapping.get(row) else {

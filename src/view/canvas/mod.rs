@@ -45,7 +45,7 @@ impl Workspace {
         cell: f32,
         cell_h: f32,
         jump_on_click: bool,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) -> impl IntoElement + use<> {
         let font = self.font().unwrap();
         let entry = &font.glyphs[index];
@@ -195,7 +195,7 @@ impl Workspace {
     /// opens the editor. Values are the active master's, edited
     /// through the Glyph panel, which already batch-edits a
     /// multi-selection. This is the list view in Glyphs.
-    pub(crate) fn glyph_list_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn glyph_list_view(&self, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
         let Some(font) = self.font() else {
             return div().into_any_element();
         };
@@ -365,7 +365,7 @@ impl Workspace {
     /// isol/init/medi/fina as columns, each a live thumbnail. Click a
     /// form to open it. A dash marks a missing form. This is Matrix
     /// Mode in Counterpunch.
-    pub(crate) fn glyph_matrix_view(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn glyph_matrix_view(&self, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
         let Some(font) = self.font() else {
             return div().into_any_element();
         };

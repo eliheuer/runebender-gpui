@@ -6,8 +6,8 @@
 //! See `slider.rs` for why: the dependency they replace forces
 //! `cargo install --locked` and breaks the browser build.
 
-pub mod input;
+pub(crate) mod input;
 #[cfg(not(target_os = "macos"))]
 pub mod menu_bar;
-pub mod resizable;
-pub mod slider;
+pub(crate) mod resizable;
+pub(crate) mod slider;

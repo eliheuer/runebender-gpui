@@ -111,10 +111,10 @@ unitsPerEm = 1000;
         // editor validates before writing, the test only checks the
         // round-trip.
         font.images
-            .insert(std::path::PathBuf::from("scan.png"), png.to_vec())
+            .insert(PathBuf::from("scan.png"), png.to_vec())
             .expect("store accepts");
         let image = norad::Image::new(
-            std::path::PathBuf::from("scan.png"),
+            PathBuf::from("scan.png"),
             None,
             norad::AffineTransform::default(),
         )
@@ -457,13 +457,13 @@ mod theme_geometry_tests {
         let dark_r = t::radius();
         t::set_theme("gray");
         assert_ne!(dark_r, t::radius(), "Gray should be square");
-        assert_eq!(t::radius(), gpui::px(0.0));
-        assert_eq!(t::radius_control(), gpui::px(0.0));
+        assert_eq!(t::radius(), px(0.0));
+        assert_eq!(t::radius_control(), px(0.0));
         // Gray changes the corners and not the rule weight. A theme
         // naming only part of the geometry is the case the optional
         // fields exist for, so it is worth pinning.
-        assert_eq!(t::stroke(), gpui::px(1.0), "an editor rule is a hairline");
-        assert_eq!(t::stroke_emphasis(), gpui::px(2.0));
+        assert_eq!(t::stroke(), px(1.0), "an editor rule is a hairline");
+        assert_eq!(t::stroke_emphasis(), px(2.0));
         t::set_theme(t::DEFAULT_THEME);
     }
 }
@@ -536,7 +536,10 @@ mod model_discovery_tests {
     /// A directory only counts as a model if it holds a `config.json`.
     /// Without that check, every stray folder becomes a broken entry.
     #[test]
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "set_var is unsafe in edition 2024; the test is single-threaded"
+    )]
     fn a_folder_without_a_config_is_not_a_model() {
         let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = std::env::temp_dir().join("rb-model-discovery-test");
@@ -555,7 +558,10 @@ mod model_discovery_tests {
     }
 
     #[test]
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "set_var is unsafe in edition 2024; the test is single-threaded"
+    )]
     fn a_missing_folder_is_not_an_error() {
         let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("RUNEBENDER_MODELS", "/nope/does/not/exist") };

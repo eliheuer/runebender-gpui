@@ -8,6 +8,7 @@
 
 use crate::Arc;
 use crate::Workspace;
+use crate::view::render::to_count;
 use crate::workspace::FontViewMode;
 use crate::workspace::GRID_GAP;
 use crate::workspace::GRID_PAD;
@@ -53,7 +54,8 @@ impl Workspace {
         rows_total: usize,
     ) -> bool {
         let max = rows_total.saturating_sub(rows_visible);
-        let step = (delta_y / row_h.max(1.0)).abs().ceil() as usize;
+        let step = (delta_y / row_h.max(1.0)).abs().ceil().max(1.0);
+        let step = usize::try_from(to_count(step)).unwrap_or(1);
         let step = step.clamp(1, rows_visible.max(1));
         let next = if delta_y > 0.0 {
             offset.saturating_sub(step)
@@ -84,12 +86,16 @@ impl Workspace {
             };
         }
         let usable_w = (vw - pad * 2.0).max(target);
-        let cols = (((usable_w + GRID_GAP) / (target + GRID_GAP)).floor() as usize).max(1);
+        let cols = usize::try_from(to_count((usable_w + GRID_GAP) / (target + GRID_GAP)))
+            .unwrap_or(1)
+            .max(1);
         let cell_w = ((usable_w - GRID_GAP * (cols - 1) as f32) / cols as f32).floor();
 
         let target_row = cell_w + label_h(cell_w);
         let usable_h = (vh - pad.min(GRID_PAD_Y) * 2.0).max(target_row);
-        let rows = (((usable_h + GRID_GAP) / (target_row + GRID_GAP)).round() as usize).max(1);
+        let rows = usize::try_from(to_count((usable_h + GRID_GAP) / (target_row + GRID_GAP)))
+            .unwrap_or(1)
+            .max(1);
         let cell_h = ((usable_h - GRID_GAP * (rows - 1) as f32) / rows as f32).floor();
         GridFit {
             cell_w,
@@ -442,7 +448,7 @@ pub(crate) fn pack_spans(spans: &[(usize, usize)], cols: usize) -> Vec<Vec<(usiz
     let cols = cols.max(1);
     let mut rows: Vec<Vec<(usize, usize)>> = Vec::new();
     let mut row: Vec<(usize, usize)> = Vec::new();
-    let mut used = 0usize;
+    let mut used = 0_usize;
     for &(item, span) in spans {
         let span = span.clamp(1, cols);
         if used + span > cols && !row.is_empty() {

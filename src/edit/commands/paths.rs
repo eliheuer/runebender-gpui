@@ -37,7 +37,7 @@ impl Workspace {
         };
         let name = project.active_font().glyphs[index].name.to_string();
         let tolerance = (project.active_font().units_per_em / 1000.0).max(0.5);
-        let mut converted = 0usize;
+        let mut converted = 0_usize;
         for master in project.masters.iter_mut() {
             let Some(gi) = master.name_map.get(name.as_str()).copied() else {
                 continue;
@@ -89,7 +89,7 @@ impl Workspace {
         } else {
             format!("_corner.{name}")
         };
-        let mut applied = 0usize;
+        let mut applied = 0_usize;
         for master in project.masters.iter_mut() {
             let Some(corner) = master.font.get_glyph(corner_name.as_str()).cloned() else {
                 continue;
@@ -315,7 +315,7 @@ impl Workspace {
             let selected = if in_editor {
                 self.editor.selected.clone()
             } else {
-                Default::default()
+                HashSet::default()
             };
             self.clipboard = font.contours_for_copy(index, &selected);
             self.status_note = Some(format!("Copied {} contours", self.clipboard.len()).into());
@@ -347,7 +347,7 @@ impl Workspace {
     /// clipboard holds contours and the Text tool is not in hand,
     /// they paste. Otherwise the system clipboard's text types into
     /// the editor's buffer.
-    pub(crate) fn command_paste_routed(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_paste_routed(&mut self, cx: &mut Context<'_, Self>) {
         let text_target = matches!(self.mode, Mode::Editor(_));
         if (!self.clipboard.is_empty() && self.editor.tool != Tool::Text) || !text_target {
             self.command_paste();

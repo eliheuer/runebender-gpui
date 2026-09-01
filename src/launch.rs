@@ -36,7 +36,6 @@ use crate::ZoomToFit;
 use crate::platform::host::default_font_path;
 use crate::widgets;
 use gpui::App;
-#[cfg(not(target_family = "wasm"))]
 use gpui::SharedString;
 use kurbo::Affine;
 #[cfg(not(target_family = "wasm"))]
@@ -208,11 +207,11 @@ pub(crate) fn print_font_families(cx: &mut App) {
 /// actually has. A name gpui cannot resolve shapes to nothing, and
 /// no text draws at all. So the preferences are tried in order,
 /// and the first family the text system reports wins.
-pub(crate) fn ui_font_family(cx: &gpui::App) -> gpui::SharedString {
+pub(crate) fn ui_font_family(cx: &App) -> SharedString {
     // Cached: asking the platform for its font list takes about 140ms,
     // and this is read once per frame. Uncached it capped the whole
     // editor at roughly seven frames a second.
-    static RESOLVED: std::sync::OnceLock<gpui::SharedString> = std::sync::OnceLock::new();
+    static RESOLVED: std::sync::OnceLock<SharedString> = std::sync::OnceLock::new();
     if let Some(name) = RESOLVED.get() {
         return name.clone();
     }
@@ -222,7 +221,7 @@ pub(crate) fn ui_font_family(cx: &gpui::App) -> gpui::SharedString {
 }
 
 /// The uncached lookup. Runs once.
-pub(crate) fn resolve_ui_font_family(cx: &gpui::App) -> gpui::SharedString {
+pub(crate) fn resolve_ui_font_family(cx: &App) -> SharedString {
     // Each platform's own interface font first, then the families that
     // are actually installed on that platform, then a last-resort
     // shared one. Ordered per platform rather than in one list, or a

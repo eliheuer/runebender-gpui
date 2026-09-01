@@ -5,6 +5,7 @@
 
 use crate::Mode;
 use crate::Workspace;
+use crate::edit::commands::ds_f32;
 use runebender_core::document::project::BraceSource;
 use runebender_core::formats::lib_keys::bake_masks;
 use runebender_core::formats::lib_keys::read_masks;
@@ -114,7 +115,7 @@ impl Workspace {
             // Date-named like Glyphs' backup layers; a counter
             // steps in when the same minute already has one.
             let stamp = chrono::Local::now().format("%b %-d, %H.%M").to_string();
-            let mut n = 0usize;
+            let mut n = 0_usize;
             let layer_name = loop {
                 let candidate = if n == 0 {
                     stamp.clone()
@@ -248,7 +249,7 @@ impl Workspace {
                     .iter()
                     .map(|(axis, value)| norad::designspace::Dimension {
                         name: axis.clone(),
-                        xvalue: Some(*value as f32),
+                        xvalue: Some(ds_f32(*value)),
                         ..Default::default()
                     })
                     .collect(),
@@ -362,7 +363,7 @@ impl Workspace {
             return;
         };
         let name = project.active_font().glyphs[index].name.to_string();
-        let mut baked = 0usize;
+        let mut baked = 0_usize;
         for master in project.masters.iter_mut() {
             let Some(gi) = master.name_map.get(name.as_str()).copied() else {
                 continue;

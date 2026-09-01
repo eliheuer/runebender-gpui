@@ -19,7 +19,7 @@ impl Workspace {
     /// character by character. Switches to the Text tool; newlines
     /// become line breaks; characters with no glyph are skipped.
     /// This is `pasteTextIntoBuffer` in the web editor.
-    pub(crate) fn paste_text_into_buffer(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn paste_text_into_buffer(&mut self, cx: &mut Context<'_, Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
@@ -30,8 +30,8 @@ impl Workspace {
             self.editor.previous_tool = self.editor.tool;
             self.editor.tool = Tool::Text;
         }
-        let mut inserted = 0usize;
-        let mut skipped = 0usize;
+        let mut inserted = 0_usize;
+        let mut skipped = 0_usize;
         for c in text.chars() {
             if c == '\r' {
                 continue;

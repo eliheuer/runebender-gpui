@@ -24,7 +24,7 @@ use runebender_core::formats::lib_keys::read_saved_filters;
 impl Workspace {
     /// The category sidebar: expandable category rows with glyph
     /// counts, plus the saved filters.
-    pub(crate) fn category_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn category_sidebar(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         use runebender_core::ui::sidebar as sb;
         let counts = self.sidebar.counts.as_ref();
 
@@ -356,7 +356,7 @@ impl Workspace {
     /// The Glyphs-style tab strip under the header: a Font tab that
     /// returns to the full glyph overview, plus one tab per edit
     /// session, titled with the session's text.
-    pub(crate) fn tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(crate) fn tab_strip(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         if self.project.is_none() {
             return div().into_any_element();
         }

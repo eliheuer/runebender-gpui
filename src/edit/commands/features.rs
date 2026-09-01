@@ -15,7 +15,7 @@ impl Workspace {
     pub(crate) fn command_generate_features(
         &mut self,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         let Some(font) = self.font() else { return };
         let blocks = Self::generated_feature_blocks(&font.font);
@@ -42,7 +42,7 @@ impl Workspace {
     /// compile verdict. A file that does not compile is still saved;
     /// the old joining rules carry on. This is how Glyphs lets you
     /// keep a broken feature file open while you fix it.
-    pub(crate) fn command_apply_features(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn command_apply_features(&mut self, cx: &mut Context<'_, Self>) {
         let fea = self.inputs.features.read(cx).value().to_string();
         let verdict = self.font().map(|f| Self::check_features_compile(f, &fea));
         if let Some(font) = self.font_mut() {

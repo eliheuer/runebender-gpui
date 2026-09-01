@@ -6,6 +6,7 @@
 use crate::Mode;
 use crate::Workspace;
 use crate::view::paint::flat_slider;
+use crate::view::render::px32;
 use crate::view::theme as t;
 use crate::widgets;
 use crate::workspace::Tool;
@@ -32,7 +33,7 @@ impl Workspace {
     pub(crate) fn editor_info_panel(
         &self,
         index: usize,
-        _cx: &mut Context<Self>,
+        _cx: &mut Context<'_, Self>,
     ) -> impl IntoElement + use<> {
         if self.editor.tool == Tool::Preview {
             return div().into_any_element();
@@ -210,7 +211,7 @@ impl Workspace {
     /// The editor holds one file at a time: UFO keeps prefixes,
     /// classes, and features together in `features.fea`. This is the
     /// Features tab in Glyphs.
-    pub(crate) fn features_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn features_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         if self.project.is_none() {
             return self.section(cx, "Features", div());
         }
@@ -286,12 +287,12 @@ impl Workspace {
     /// selection. The field creates a group from the selection: 'o'
     /// for kern1, '|o' for kern2. This is the Glyphs 4 visual groups
     /// shelf, click-to-assign instead of drag for now.
-    pub(crate) fn groups_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn groups_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let Some(font) = self.font() else {
             return self.section(cx, "Groups", div());
         };
         let mut rows = div().flex().flex_col().gap_1();
-        let mut shown = 0usize;
+        let mut shown = 0_usize;
         for (full, members) in font.font.groups.iter() {
             let name = full.as_str();
             let (side, short) = if let Some(s) = name.strip_prefix("public.kern1.") {
@@ -314,7 +315,7 @@ impl Workspace {
                 let full_for_chip = full_owned.clone();
                 chips = chips.child(
                     div()
-                        .id(gpui::SharedString::from(format!("grp-{name}-{member}")))
+                        .id(SharedString::from(format!("grp-{name}-{member}")))
                         .px_1()
                         .rounded(t::radius())
                         .border(t::stroke())
@@ -355,7 +356,7 @@ impl Workspace {
                             )
                             .child(
                                 div()
-                                    .id(gpui::SharedString::from(format!("grp-add-{name}")))
+                                    .id(SharedString::from(format!("grp-add-{name}")))
                                     .px_1()
                                     .rounded(t::radius())
                                     .text_xs()
@@ -397,7 +398,7 @@ impl Workspace {
     ///
     /// The drag workflow in text mode stays the fast path. Glyphs
     /// keeps this list in its kerning window.
-    pub(crate) fn kerning_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn kerning_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let Some(font) = self.font() else {
             return self.section(cx, "Kerning", div());
         };
@@ -410,7 +411,7 @@ impl Workspace {
             .trim()
             .to_lowercase();
         let mut pairs: Vec<(String, String, f64)> = Vec::new();
-        let mut hidden = 0usize;
+        let mut hidden = 0_usize;
         const CAP: usize = 200;
         for (first, seconds) in font.font.kerning.iter() {
             for (second, value) in seconds.iter() {
@@ -539,18 +540,18 @@ impl Workspace {
     /// Color section: the CPAL palette, the layer mapping, and the
     /// stacked-preview toggle.
     ///
-    /// The color data is COLRv0, stored through the ufo2ft lib keys.
-    pub(crate) fn color_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    /// The color data is `COLRv0`, stored through the ufo2ft lib keys.
+    pub(crate) fn color_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let Some(font) = self.font() else {
             return self.section(cx, "Color", div());
         };
         let palette = read_color_palette(&font.font);
         let mapping = read_color_mapping(&font.font);
         let swatch_color = |c: &[f64; 4]| gpui::Rgba {
-            r: c[0] as f32,
-            g: c[1] as f32,
-            b: c[2] as f32,
-            a: c[3] as f32,
+            r: px32(c[0]),
+            g: px32(c[1]),
+            b: px32(c[2]),
+            a: px32(c[3]),
         };
         let mut swatches = div().flex().flex_wrap().gap_1().items_center();
         for (i, c) in palette.iter().enumerate() {
@@ -724,7 +725,7 @@ impl Workspace {
     /// advances, kerning pair count, and the vertical metrics that
     /// disagree. This is the Compare Fonts window's job in Glyphs,
     /// inside one project.
-    pub(crate) fn compare_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn compare_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let Some(project) = self.project.as_ref() else {
             return self.section(cx, "Compare", div());
         };
@@ -825,12 +826,12 @@ impl Workspace {
     /// Dimensions section (grid mode): measured stems and bars for
     /// the reference glyphs, per master. Glyphs' Dimensions palette
     /// is hand-typed; these are measured from the outlines.
-    pub(crate) fn dimensions_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn dimensions_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         if self.project.is_none() {
             return self.section(cx, "Dimensions", div());
         }
         let mut rows = div().flex().flex_col().gap_0p5();
-        let mut shown = 0usize;
+        let mut shown = 0_usize;
         for name in ["H", "O", "n", "o", "t", "v"] {
             let (stem, bar) = self.measured_dimensions(name);
             if stem.is_none() && bar.is_none() {
@@ -879,7 +880,7 @@ impl Workspace {
     /// Font Info section (grid mode): names and vertical metrics of
     /// the active master, saved to fontinfo.plist. The first slice of
     /// Glyphs' Font Info window; axes and instances come later.
-    pub(crate) fn font_info_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn font_info_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         if self.project.is_none() {
             return self.section(cx, "Font Info", div());
         }
@@ -973,7 +974,7 @@ impl Workspace {
     }
 
     /// Selection section: count plus editable X/Y for a single point.
-    pub(crate) fn selection_section(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn selection_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let count = self.editor.selected.len();
         let single = self.single_selected_point();
         // A quiet count line rather than a heading: the fields below
@@ -1212,7 +1213,7 @@ impl Workspace {
     ///
     /// The web editor and Glyphs place these in a pane rather than a
     /// full-width strip.
-    pub(crate) fn axes_section(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+    pub(crate) fn axes_section(&self, cx: &mut Context<'_, Self>) -> Option<gpui::Div> {
         let project = self.project.as_ref()?;
         if self.axis_sliders.is_empty() {
             return None;

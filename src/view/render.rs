@@ -106,6 +106,55 @@ use gpui::px;
 use kurbo::Affine;
 use runebender_core::outline::glyph_ops::CurveOp;
 
+/// A kurbo value as the `f32` GPUI paints with.
+///
+/// The editor's geometry is `f64`, because that is what kurbo and a
+/// font's own coordinates are. GPUI's is `f32`. Every value that
+/// crosses into a paint call goes through here, so the conversion is
+/// in one place and says what it costs: `f32` holds about seven
+/// digits, which is far below a pixel at any zoom the canvas allows.
+pub(crate) fn px32(value: f64) -> f32 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the seam between kurbo's f64 and GPUI's f32; see above"
+    )]
+    {
+        value as f32
+    }
+}
+
+/// A colour channel, 0.0 to 1.0 scaled to 0.0 to 255.0, as a byte.
+///
+/// Clamping first makes the conversion total: paint code produces
+/// channels that are already in range, and a value that somehow is
+/// not saturates rather than wrapping to an unrelated colour.
+pub(crate) fn to_byte(value: f32) -> u8 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "clamped to 0..=255 on the line above"
+    )]
+    {
+        value.clamp(0.0, 255.0).round() as u8
+    }
+}
+
+/// A pixel measurement as a whole number of pixels.
+pub(crate) fn to_count(value: f32) -> u32 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "clamped to the range of u32 on the line above"
+    )]
+    {
+        value.round().clamp(0.0, f32::from(u16::MAX)) as u32
+    }
+}
+
+/// A canvas coordinate as a whole-number index, for grid lines and
+/// the like.
+pub(crate) fn to_index(value: f64) -> i64 {
+    runebender_core::outline::glyph_paths::round_units(value)
+}
+
 /// The hover tooltip on a sidebar tab icon.
 ///
 /// The tabs show icons only, so the full name appears on hover.
@@ -115,7 +164,7 @@ pub(crate) struct TabTooltip {
 }
 
 impl Render for TabTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
         div()
             .px_1p5()
             .py_0p5()
@@ -130,7 +179,7 @@ impl Render for TabTooltip {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         // Claim focus only when nothing else has it, so text inputs
         // (the search box) keep theirs while focused.
         if window.focused(cx).is_none() {
@@ -207,7 +256,7 @@ impl Render for Workspace {
                 let _query = self.sidebar.search_query.clone();
                 let fit = self.grid_cell_metrics();
                 let (cell_w, cell_h) = (fit.cell_w, fit.cell_h);
-                let mut rows_total = 0usize;
+                let mut rows_total = 0_usize;
                 let indices = self.glyph_order();
                 let mut visible_rows: Vec<Vec<(usize, usize)>> = Vec::new();
                 let grid: Vec<_> = match self.font() {
