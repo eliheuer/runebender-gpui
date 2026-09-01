@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/eliheuer/runebender-gpui/actions/workflows/ci.yml/badge.svg)](https://github.com/eliheuer/runebender-gpui/actions/workflows/ci.yml)
 
-The main [Runebender](https://runebender.org) font editor, built on
-[GPUI](https://gpui.rs/). The window, the input, and the drawing live
-here; everything that changes a font lives in
+The current primary [Runebender](https://runebender.org) frontend
+GUI, built on [GPUI](https://gpui.rs/). The GUI, window, input, and
+drawing are in this repo; everything else is in
 [runebender-core](https://github.com/eliheuer/runebender-core).
 [Runebender-Xilem](https://github.com/eliheuer/runebender-xilem)
 builds the same editor on Xilem, to compare the two frameworks on one
