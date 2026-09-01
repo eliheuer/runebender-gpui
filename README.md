@@ -123,11 +123,11 @@ Three consequences follow, and they are the whole argument:
   so a pipeline can branch without parsing prose.
 
 ```sh
-runebender check --a Light.ufo --b Bold.ufo || echo "masters drifted"
+runebender-core check --a Light.ufo --b Bold.ufo || echo "masters drifted"
 runebender --json color Font.ufo | jq '.findings[] | select(.reads=="darker")'
 ```
 
-Being exact about the claim: `runebender` takes paths rather than
+Being exact about the claim: `runebender-core` takes paths rather than
 stdin, and writes reports rather than fonts. You cannot pipe one
 invocation into the next. A font source is a directory, not a stream.
 And a window is not a filter. What holds is that the parts are
