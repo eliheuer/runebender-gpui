@@ -1,10 +1,10 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The world outside the window: files, watching, the browser host.
+//! Files: build scripts, export paths, reloading a master from disk,
+//! and the paths the editor reads and writes.
 //!
-//! Build scripts and export paths, watching sources for changes made
-//! by other tools, reloading, and the web host's fetch and save.
+//! Watching those files for other writers is `platform::watch`.
 
 use crate::Mode;
 use crate::PathBuf;
@@ -65,70 +65,6 @@ impl Workspace {
         }
         std::env::join_paths(parts.into_iter().filter(|p| p.exists()))
             .unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
-    }
-
-    /// Watch every master's UFO directory.
-    ///
-    /// External changes reload the affected masters. In-memory edits
-    /// are never clobbered: dirty masters skip the reload with a
-    /// status note. Our own saves are suppressed via the `last_save`
-    /// timestamp.
-    #[cfg(target_family = "wasm")]
-    pub(crate) fn start_watching(&mut self, _cx: &mut Context<'_, Self>) {
-        // No filesystem on the web: live reload will ride the host
-        // data layer instead.
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    /// The native arm: watch each master's source directory with `notify` and reload masters that change on disk.
-    pub(crate) fn start_watching(&mut self, cx: &mut Context<'_, Self>) {
-        use futures::StreamExt;
-        self._watcher = None;
-        let Some(project) = self.project.as_ref() else {
-            return;
-        };
-        let (tx, mut rx) = futures::channel::mpsc::unbounded::<()>();
-        let mut watcher =
-            match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-                if res.is_ok() {
-                    let _ = tx.unbounded_send(());
-                }
-            }) {
-                Ok(w) => w,
-                Err(_) => return,
-            };
-        for master in &project.masters {
-            let _ = notify::Watcher::watch(
-                &mut watcher,
-                &master.source_path,
-                notify::RecursiveMode::Recursive,
-            );
-        }
-        self._watcher = Some(watcher);
-        let last_save = self.last_save.clone();
-        cx.spawn(async move |this, cx| {
-            while rx.next().await.is_some() {
-                // Debounce: drain everything arriving in the next
-                // half second into one reload.
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(500))
-                    .await;
-                while rx.try_recv().is_ok() {}
-                if last_save.lock().unwrap().elapsed() < std::time::Duration::from_secs(2) {
-                    continue;
-                }
-                if this
-                    .update(cx, |workspace, cx| {
-                        workspace.reload_from_disk();
-                        cx.notify();
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
     }
 
     /// Re-read every clean master from disk, keeping the open glyph.
