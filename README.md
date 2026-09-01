@@ -1,4 +1,4 @@
-# Runebender-GPUI
+# Runebender GPUI
 
 [![CI](https://github.com/eliheuer/runebender-gpui/actions/workflows/ci.yml/badge.svg)](https://github.com/eliheuer/runebender-gpui/actions/workflows/ci.yml)
 
