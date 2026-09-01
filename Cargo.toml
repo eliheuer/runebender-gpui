@@ -53,7 +53,6 @@ notify = "8"
 futures = "0.3"
 linesweeper = "0.4"
 web-time = "1"
-include_dir = "0.7.4"
 unicode_names2 = "3.1.0"
 plist = "1"
 skrifa = "0.44"
@@ -63,15 +62,11 @@ skrifa = "0.44"
 # 0.5 with runebender-core rather than pulling a second copy.
 parley = { version = "0.8", default-features = false, features = ["std", "system"] }
 
-# Shared editing/model crate used by all Runebender editors. Pulled
-# from git so a plain clone (or `cargo install --git`) builds without
-# a sibling checkout. To develop the two together, point cargo at a
-# local copy — see "Building" in the README.
-# Local model inference: outline models over font sources. Pinned like
-# every other git dependency so a fresh resolve lands on the same
-# graph.
+# The config file at ~/.config/runebender/config.toml.
 toml = "0.8"
 
+# Local model inference: outline models over font sources. Pinned like
+# every other git dependency so a fresh resolve lands on the same graph.
 [dependencies.font-ml]
 git = "https://github.com/eliheuer/font-ml"
 rev = "2dc1898923271f46b9d1cbe9cba8c8b6bdaddb7e"
@@ -85,9 +80,15 @@ git = "https://github.com/eliheuer/font-ml"
 rev = "2dc1898923271f46b9d1cbe9cba8c8b6bdaddb7e"
 features = ["accelerate"]
 
+# Shared library for all Runebender editors. Pulled from git so a
+# plain clone (or `cargo install --git`) builds without a sibling
+# checkout. To develop the two together, point cargo at a local copy:
+# see "Building" in the README. default-features = false leaves out
+# its command line, which is the only thing that needs clap.
 [dependencies.runebender-core]
 git = "https://github.com/eliheuer/runebender-core"
 rev = "403d51b4b4ab5e335843d11d7fd4d669be68cee0"
+default-features = false
 
 [dependencies.serde]
 version = "1.0"
@@ -99,6 +100,9 @@ version = "1.0"
 [target.'cfg(target_family = "wasm")'.dependencies]
 web-sys = { version = "0.3", features = ["Window", "Location"] }
 js-sys = "0.3"
+# The demo font, compiled into the browser build. Native builds open a
+# font from disk instead, so they do not need it.
+include_dir = "0.7.4"
 
 [dev-dependencies]
 # Writing a .glyphspackage fixture for the import test. The crate is
