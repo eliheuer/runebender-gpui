@@ -56,7 +56,7 @@ pub(crate) struct TaskInput {
 impl TaskRow {
     /// The rows in a `font-ml tasks --json` answer, in the tool's
     /// order. A malformed answer is an empty list, not a crash.
-    pub(crate) fn parse(json: &str) -> Vec<TaskRow> {
+    pub(crate) fn parse(json: &str) -> Vec<Self> {
         let value: serde_json::Value = match serde_json::from_str(json) {
             Ok(v) => v,
             Err(_) => return Vec::new(),
