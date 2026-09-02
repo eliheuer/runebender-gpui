@@ -70,7 +70,7 @@ impl Workspace {
             let selected = self.selected == Some(glyph)
                 || self.grid.multi_selected.contains(entry.name.as_ref());
             let color = if selected {
-                t::cell_selected_ring()
+                t::cell_selected_ink()
             } else {
                 t::mark_paint(entry.mark.as_deref())
                     .map(|p| p.ink)

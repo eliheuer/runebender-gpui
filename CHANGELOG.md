@@ -21,6 +21,10 @@ Until then, `main` is the only line and this section stays open.
 - A bare `runebender-gpui` opens with no font and File → Open, instead
   of a Virtua Grotesk checkout beside the repository. Nothing on one
   machine is a default for everyone else's.
+- A selected glyph-grid cell follows the theme's `cellSelectedFill`
+  and `cellSelectedInk` tokens: Gray and Light invert to the ink, Dark
+  keeps its lift. The HUD card headers no longer borrow the selected
+  fill.
 - Selection in the chrome is shown by inversion, ink on the panel
   fill, not by the green accent: active tools, toggles, tabs, sidebar
   rows, menu items, and the focused field. The accent stays for

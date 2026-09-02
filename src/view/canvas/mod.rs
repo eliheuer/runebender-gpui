@@ -156,7 +156,7 @@ impl Workspace {
                                 .items_center()
                                 .gap_1()
                                 .text_color(if selected {
-                                    t::cell_selected_ring()
+                                    t::cell_selected_ink()
                                 } else {
                                     mark.unwrap_or_else(t::text)
                                 })
@@ -171,7 +171,7 @@ impl Workspace {
                             el.child(
                                 div()
                                     .text_color(if selected {
-                                        t::cell_selected_ring()
+                                        t::cell_selected_ink()
                                     } else {
                                         mark.unwrap_or_else(t::text_muted)
                                     })

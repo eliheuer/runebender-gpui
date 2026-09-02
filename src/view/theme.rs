@@ -183,21 +183,17 @@ pub(crate) fn cell_bg() -> Rgba {
 pub(crate) fn cell_border() -> Rgba {
     c(theme().surface("outline"))
 }
-/// The fill of a selected grid cell.
+/// The fill of a selected grid cell. A theme decides: Gray and Light
+/// invert to the ink, Dark lifts the cell instead, because a light
+/// slab on a dark grid shouts.
 pub(crate) fn cell_selected_bg() -> Rgba {
-    // Half way between the cell's own ground and the hover surface:
-    // enough to read as picked, not so much that the cell jumps out of
-    // the grid.
-    let base = c(theme().surface("panel"));
-    let lift = c(theme().surface("buttonHover"));
-    Rgba {
-        r: (base.r + lift.r) / 2.0,
-        g: (base.g + lift.g) / 2.0,
-        b: (base.b + lift.b) / 2.0,
-        a: 1.0,
-    }
+    c(theme().role("cellSelectedFill"))
 }
-/// Selected grid cell ring (neutral, like the web editor).
+/// The glyph and label on a selected grid cell.
+pub(crate) fn cell_selected_ink() -> Rgba {
+    c(theme().role("cellSelectedInk"))
+}
+/// Selected grid cell ring.
 pub(crate) fn cell_selected_ring() -> Rgba {
     c(theme().role("gridSelected"))
 }
