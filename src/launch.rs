@@ -33,7 +33,6 @@ use crate::Undo;
 use crate::Workspace;
 use crate::ZoomToFit;
 #[cfg(not(target_family = "wasm"))]
-use crate::platform::host::default_font_path;
 use crate::widgets;
 use gpui::App;
 use gpui::SharedString;
@@ -156,10 +155,11 @@ pub(crate) fn keymap() -> Vec<gpui::KeyBinding> {
 /// bar rather than stopping the launch.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn open_from_args() -> (Option<Project>, Option<SharedString>) {
-    let font_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(default_font_path);
+    // No path means no font: the window opens empty with File → Open.
+    // Nothing on one machine is a default for everyone else's.
+    let Some(font_path) = std::env::args().nth(1).map(PathBuf::from) else {
+        return (None, None);
+    };
     match Project::load(&font_path) {
         Ok(p) => (Some(p), None),
         Err(e) => (None, Some(e.into())),

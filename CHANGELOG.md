@@ -18,6 +18,9 @@ Until then, `main` is the only line and this section stays open.
   Commands read as verbs (Add extremes, Round corners), units live in
   the label (Slant °, Fit curve %), and the Local AI panel uses the
   same controls.
+- A bare `runebender-gpui` opens with no font and File → Open, instead
+  of a Virtua Grotesk checkout beside the repository. Nothing on one
+  machine is a default for everyone else's.
 - Glyph-grid cells fill with the mark colour in every theme, not only
   Gray, from the shared token file.
 - Words: sentence case in Font info, "Saved" in the muted text colour

@@ -326,10 +326,3 @@ pub(crate) fn fontc_binary() -> Option<PathBuf> {
     let cargo_bin = PathBuf::from(home).join(".cargo/bin/fontc");
     cargo_bin.exists().then_some(cargo_bin)
 }
-
-/// The designspace a bare `cargo run` opens: Virtua Grotesk from a checkout beside this repository.
-#[cfg(not(target_family = "wasm"))]
-pub(crate) fn default_font_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../virtua-grotesk/sources/VirtuaGrotesk.designspace")
-}
