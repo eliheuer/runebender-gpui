@@ -234,7 +234,7 @@ impl Workspace {
                     )
                 },
             )
-            .child(input_row("Glyph Name", &self.inputs.glyph.name))
+            .child(input_row("Glyph name", &self.inputs.glyph.name))
             .when(in_editor, |el| {
                 el.child(row("Width", format!("{:.0}", entry.advance).into()))
             })
@@ -249,12 +249,12 @@ impl Workspace {
                 )
             })
             .child(pair_row(
-                "Kerning Groups (L · R)",
+                "Kerning groups (L · R)",
                 &self.inputs.glyph.group_l,
                 &self.inputs.glyph.group_r,
             ))
             .child(pair_row(
-                "Metrics Keys (L · R)",
+                "Metrics keys (L · R)",
                 &self.inputs.glyph.lsb_key,
                 &self.inputs.glyph.rsb_key,
             ))
@@ -270,7 +270,7 @@ impl Workspace {
                     el.child(div().text_xs().text_color(t::text_muted()).child(uni_name))
                 },
             )
-            .child(input_row("Production Name", &self.inputs.glyph.production))
+            .child(input_row("Production name", &self.inputs.glyph.production))
             .child(input_row("Note", &self.inputs.glyph.note))
             // A part glyph's smart axis ("Width,0,100"): defines the
             // axis and seeds the top pole layer.
@@ -283,7 +283,7 @@ impl Workspace {
                         div()
                             .text_xs()
                             .text_color(t::text_muted())
-                            .child("Smart Axis (name,min,max)"),
+                            .child("Smart axis (name,min,max)"),
                     )
                     .child(widgets::input::Input::new(&self.glyph_smart_axis_ref())),
             )
@@ -339,7 +339,7 @@ impl Workspace {
                             div()
                                 .text_xs()
                                 .text_color(t::text_muted())
-                                .child("Switch At (axis value)"),
+                                .child("Switch at (axis value)"),
                         )
                         .child(widgets::input::Input::new(&self.inputs.glyph.switch_at)),
                 }
