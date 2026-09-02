@@ -73,7 +73,7 @@ impl Workspace {
             }
         }
         if !swapped {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
             self.status_note = Some("No background to swap".into());
         }
     }
@@ -301,7 +301,7 @@ impl Workspace {
             }
         }
         if !swapped {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         }
     }
 

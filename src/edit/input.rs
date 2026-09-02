@@ -144,7 +144,7 @@ impl Workspace {
                         self.editor.selected = ids.into_iter().collect();
                     }
                     None => {
-                        self.editor.undo.pop();
+                        self.discard_last_undo(index);
                     }
                 }
                 self.editor.segment_hover = None;
@@ -937,7 +937,7 @@ impl Workspace {
                     })
                     .unwrap_or(false);
                 if !changed {
-                    self.editor.undo.pop();
+                    self.discard_last_undo(index);
                 } else {
                     self.editor.selected.clear();
                 }
@@ -1014,7 +1014,7 @@ impl Workspace {
                         self.editor.selected = [id].into();
                     }
                     None => {
-                        self.editor.undo.pop();
+                        self.discard_last_undo(index);
                     }
                 }
                 return;
@@ -1424,7 +1424,7 @@ impl Workspace {
                     })
                     .unwrap_or(false);
                 if !changed {
-                    self.editor.undo.pop();
+                    self.discard_last_undo(index);
                 }
                 changed
             }

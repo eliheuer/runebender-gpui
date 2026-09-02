@@ -642,7 +642,7 @@ impl Render for Workspace {
                         })
                         .unwrap_or(false);
                     if !ok {
-                        this.editor.undo.pop();
+                        this.discard_last_undo(index);
                     } else {
                         this.editor.selected.clear();
                     }

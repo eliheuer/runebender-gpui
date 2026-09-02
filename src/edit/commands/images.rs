@@ -125,7 +125,7 @@ impl Workspace {
                             workspace.status_note =
                                 Some(format!("Imported {added} SVG contour(s)").into());
                         } else {
-                            workspace.editor.undo.pop();
+                            workspace.discard_last_undo(index);
                         }
                     }
                     Err(e) => {

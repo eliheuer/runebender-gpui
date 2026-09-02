@@ -380,7 +380,7 @@ impl Workspace {
                         })
                         .unwrap_or(false);
                     if !ok {
-                        self.editor.undo.pop();
+                        self.discard_last_undo(index);
                     }
                     self.editor.selected_component = None;
                 }
@@ -389,7 +389,7 @@ impl Workspace {
                 self.push_undo_snapshot(index);
                 let ok = self.font_mut().is_some_and(|f| f.decompose(index));
                 if !ok {
-                    self.editor.undo.pop();
+                    self.discard_last_undo(index);
                 }
                 self.editor.selected_component = None;
             }
@@ -455,7 +455,7 @@ impl Workspace {
                         self.editor.selected.insert(id);
                     }
                     None => {
-                        self.editor.undo.pop();
+                        self.discard_last_undo(index);
                     }
                 }
             }
@@ -467,7 +467,7 @@ impl Workspace {
                         .and_then(|f| f.edit_glyph(index, |g| toggle_contour_open(g, ci, pi)))
                         .unwrap_or(false);
                     if !changed {
-                        self.editor.undo.pop();
+                        self.discard_last_undo(index);
                     } else {
                         self.editor.selected.clear();
                     }
@@ -496,7 +496,7 @@ impl Workspace {
                         })
                         .unwrap_or(false);
                     if !ok {
-                        self.editor.undo.pop();
+                        self.discard_last_undo(index);
                     }
                 }
             }
@@ -513,7 +513,7 @@ impl Workspace {
                         })
                         .unwrap_or(false);
                     if !ok {
-                        self.editor.undo.pop();
+                        self.discard_last_undo(index);
                     }
                 }
             }
@@ -531,7 +531,7 @@ impl Workspace {
                         })
                         .unwrap_or(false);
                     if !ok {
-                        self.editor.undo.pop();
+                        self.discard_last_undo(index);
                     } else {
                         self.editor.selected.clear();
                     }
@@ -577,7 +577,7 @@ impl Workspace {
             })
             .unwrap_or(false);
         if !ok {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
             self.status_note = Some(format!("No glyph named {base}").into());
         } else {
             self.status_note = Some(format!("Added component {base}").into());
@@ -1180,7 +1180,7 @@ impl Workspace {
             })
             .unwrap_or(false);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         }
     }
 
@@ -1196,7 +1196,7 @@ impl Workspace {
             .is_some_and(|f| f.curve_op(index, &selected, op));
         if !changed {
             // Nothing moved: drop the useless snapshot.
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         }
     }
 
@@ -1237,7 +1237,7 @@ impl Workspace {
                 })
                 .unwrap_or(false);
             if !changed {
-                self.editor.undo.pop();
+                self.discard_last_undo(index);
                 self.nudging = false;
             }
             return changed;
@@ -1270,7 +1270,7 @@ impl Workspace {
                 .unwrap_or(false);
         }
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
             self.nudging = false;
         }
         changed

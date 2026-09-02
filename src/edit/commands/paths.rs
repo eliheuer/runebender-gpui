@@ -126,7 +126,7 @@ impl Workspace {
             .and_then(|f| f.edit_glyph(index, tidy_contours))
             .unwrap_or(0);
         if removed == 0 {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         }
         self.status_note = Some(format!("Tidy up Paths: {removed} point(s) removed").into());
     }
@@ -142,7 +142,7 @@ impl Workspace {
             .and_then(|f| f.edit_glyph(index, correct_path_directions))
             .unwrap_or(0);
         if flipped == 0 {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         }
         self.status_note =
             Some(format!("Correct Path Direction: {flipped} contour(s) reversed").into());
@@ -159,7 +159,7 @@ impl Workspace {
             .and_then(|f| f.edit_glyph(index, round_glyph_coordinates))
             .unwrap_or(0);
         if moved == 0 {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         }
         self.status_note = Some(format!("Round Coordinates: {moved} point(s) moved").into());
     }
@@ -218,7 +218,7 @@ impl Workspace {
         match new_selection {
             Some(selection) => self.editor.selected = selection,
             None => {
-                self.editor.undo.pop();
+                self.discard_last_undo(index);
             }
         }
     }
@@ -276,7 +276,7 @@ impl Workspace {
             }
         };
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         }
     }
 
@@ -284,9 +284,12 @@ impl Workspace {
     /// repeats around a center. This is duplicate-repeat in the web
     /// editor.
     pub(crate) fn command_duplicate_repeat(&mut self) {
-        let before = self.editor.undo.len();
+        let Mode::Editor(index) = self.mode else {
+            return;
+        };
+        let before = self.font().map_or(0, |f| f.undo_depth(index));
         self.command_duplicate();
-        if self.editor.undo.len() == before {
+        if self.font().map_or(0, |f| f.undo_depth(index)) == before {
             return;
         }
         if let Some(transform) = self.editor.last_transform {
@@ -364,7 +367,7 @@ impl Workspace {
         self.push_undo_snapshot(index);
         let changed = self.font_mut().is_some_and(|f| f.remove_overlap(index));
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         } else {
             self.journal("remove overlap", Some(index), None);
             self.editor.selected.clear();
@@ -397,7 +400,7 @@ impl Workspace {
             })
             .unwrap_or(false);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         } else {
             self.editor.selected.clear();
         }
@@ -415,7 +418,7 @@ impl Workspace {
             .and_then(|f| f.edit_glyph(index, |g| offset_glyph_contours(g, delta)))
             .unwrap_or(false);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         } else {
             self.editor.selected.clear();
         }
@@ -434,7 +437,7 @@ impl Workspace {
             .and_then(|f| f.edit_glyph(index, |g| fit_curve_handles(g, &selected, fraction)))
             .unwrap_or(false);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         }
     }
 
@@ -466,7 +469,7 @@ impl Workspace {
             })
             .unwrap_or(false);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         } else {
             self.editor.selected.clear();
         }
@@ -505,7 +508,7 @@ impl Workspace {
             })
             .unwrap_or(false);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         } else {
             self.editor.selected.clear();
         }
@@ -523,7 +526,7 @@ impl Workspace {
             .and_then(|f| f.edit_glyph(index, |g| add_extreme_points(g, &selected)))
             .unwrap_or(false);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
             self.status_note = Some("No missing extremes".into());
         } else {
             self.editor.selected.clear();
@@ -555,7 +558,7 @@ impl Workspace {
                 })
                 .unwrap_or(false);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         } else {
             self.editor.selected.clear();
         }
@@ -582,7 +585,7 @@ impl Workspace {
             })
             .unwrap_or(false);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         } else {
             self.editor.selected = [(contour, 0)].into();
         }
@@ -644,7 +647,7 @@ impl Workspace {
             })
             .unwrap_or(false);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         } else {
             self.editor.selected.clear();
         }
@@ -658,7 +661,7 @@ impl Workspace {
         self.push_undo_snapshot(index);
         let changed = self.font_mut().is_some_and(|f| f.decompose(index));
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         } else {
             self.journal("decompose", Some(index), None);
         }

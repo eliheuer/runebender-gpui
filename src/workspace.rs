@@ -26,7 +26,6 @@ use gpui::SharedString;
 use kurbo::Affine;
 use runebender_core::analysis::search::SearchPred;
 use runebender_core::document::project::Project;
-use runebender_core::outline::glyph_ops::GlyphSnapshot;
 use runebender_core::ui::editing::ViewPort;
 use std::collections::{HashMap, HashSet};
 
@@ -303,10 +302,6 @@ pub(crate) struct EditorState {
     pub(crate) cursor: (f64, f64),
     /// The mouse gesture in progress, if any.
     pub(crate) drag: Option<Drag>,
-    /// Undo/redo stacks of glyph snapshots for the open glyph.
-    pub(crate) undo: Vec<GlyphSnapshot>,
-    /// Snapshots undone from `undo`, replayed by redo.
-    pub(crate) redo: Vec<GlyphSnapshot>,
     /// Canvas bounds in window coordinates, written during paint so
     /// mouse handlers can map window→design coordinates.
     pub(crate) bounds: Arc<Mutex<Bounds<gpui::Pixels>>>,
@@ -341,8 +336,6 @@ impl EditorState {
             selected_anchors: Vec::new(),
             cursor: (0.0, 0.0),
             drag: None,
-            undo: Vec::new(),
-            redo: Vec::new(),
             bounds: Arc::new(Mutex::new(Bounds::default())),
         }
     }

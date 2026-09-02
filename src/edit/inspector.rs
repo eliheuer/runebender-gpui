@@ -1145,7 +1145,7 @@ impl Workspace {
         self.push_undo_snapshot(index);
         let changed = self.translate_selected(index, delta);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         }
     }
 
@@ -1183,7 +1183,7 @@ impl Workspace {
         self.push_undo_snapshot(index);
         let changed = self.transform_selected(index, transform);
         if !changed {
-            self.editor.undo.pop();
+            self.discard_last_undo(index);
         }
     }
 

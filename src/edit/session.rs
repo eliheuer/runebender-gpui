@@ -183,8 +183,6 @@ impl Workspace {
         self.editor.initialized = false;
         self.editor.selected.clear();
         self.editor.drag = None;
-        self.editor.undo.clear();
-        self.editor.redo.clear();
         self.editor.tool = Tool::Select;
         self.editor.pen = None;
         self.editor.hyper_contour = None;
@@ -252,14 +250,22 @@ impl Workspace {
     #[cfg(target_family = "wasm")]
     pub(crate) fn journal(&self, _op: &str, _index: Option<usize>, _detail: Option<String>) {}
 
-    /// Snapshot the glyph's contours onto the undo stack and clear redo.
+    /// Record the glyph's state as an undo step in core's history,
+    /// before an edit. Core keeps the pile; this shell holds no
+    /// snapshots of its own.
     pub(crate) fn push_undo_snapshot(&mut self, index: usize) {
         // Any other edit ends a nudge burst, so the next arrow press
         // opens a fresh undo group.
         self.nudging = false;
-        if let Some(snapshot) = self.font().and_then(|f| f.snapshot_contours(index)) {
-            self.editor.undo.push(snapshot);
-            self.editor.redo.clear();
+        if let Some(font) = self.font_mut() {
+            font.record_undo(index);
+        }
+    }
+
+    /// Drop the step just recorded, for an edit that changed nothing.
+    pub(crate) fn discard_last_undo(&mut self, index: usize) {
+        if let Some(font) = self.font_mut() {
+            font.discard_last_undo(index);
         }
     }
 
@@ -274,37 +280,23 @@ impl Workspace {
         self.nudging = true;
     }
 
-    /// Restore the last undo snapshot, pushing the current state onto redo.
+    /// Undo the open glyph's latest step.
     pub(crate) fn undo(&mut self) {
         let Mode::Editor(index) = self.mode else {
             return;
         };
-        let Some(previous) = self.editor.undo.pop() else {
-            return;
-        };
         if let Some(font) = self.font_mut() {
-            let current = font.snapshot_contours(index);
-            font.restore_contours(index, previous);
-            if let Some(current) = current {
-                self.editor.redo.push(current);
-            }
+            font.undo(index);
         }
     }
 
-    /// Restore the last redo snapshot, pushing the current state onto undo.
+    /// Redo the open glyph's latest undone step.
     pub(crate) fn redo(&mut self) {
         let Mode::Editor(index) = self.mode else {
             return;
         };
-        let Some(next) = self.editor.redo.pop() else {
-            return;
-        };
         if let Some(font) = self.font_mut() {
-            let current = font.snapshot_contours(index);
-            font.restore_contours(index, next);
-            if let Some(current) = current {
-                self.editor.undo.push(current);
-            }
+            font.redo(index);
         }
     }
 }

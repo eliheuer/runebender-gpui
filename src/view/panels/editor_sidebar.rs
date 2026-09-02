@@ -883,7 +883,7 @@ impl Workspace {
                                         })
                                         .unwrap_or(false);
                                     if !changed {
-                                        this.editor.undo.pop();
+                                        this.discard_last_undo(index);
                                     } else {
                                         this.editor.selected.clear();
                                     }

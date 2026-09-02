@@ -195,7 +195,7 @@ impl Workspace {
                 .font_mut()
                 .is_some_and(|f| f.toggle_smooth(index, &set));
             if !changed {
-                self.editor.undo.pop();
+                self.discard_last_undo(index);
             }
             return changed;
         }
@@ -249,8 +249,6 @@ impl Workspace {
             self.editor.selected_anchors.clear();
             self.editor.selected_component = None;
             self.editor.drag = None;
-            self.editor.undo.clear();
-            self.editor.redo.clear();
             self.sync_sort_offset();
             return true;
         }
@@ -288,8 +286,6 @@ impl Workspace {
             self.editor.selected.clear();
             self.editor.selected_anchors.clear();
             self.editor.drag = None;
-            self.editor.undo.clear();
-            self.editor.redo.clear();
         }
         self.sync_sort_offset();
         true
