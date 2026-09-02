@@ -14,6 +14,22 @@ the input, and the drawing, and calls
 everything that changes a font or reads one. If a change you are
 making does font work with no GPUI in it, it belongs in core.
 
+## Which shell is which
+
+This is the current shell. runebender-xilem is the long-term target.
+That can change, and the rule that makes the change cheap is:
+
+- No local-AI or task logic lives in a shell. Models, proposals, undo,
+  and the task list live in runebender-core and in font-ml.
+- font-ml is a separate binary. This shell runs it as a subprocess and
+  reads JSON back, the way export runs fontc. It never links font-ml
+  or candle.
+- A proposal from a model is a UFO layer named
+  `com.runebender.proposal.<task>`. The shell shows it and asks core to
+  install or discard it. It does not interpret it.
+- The shell renders state from core. If a feature needs new state,
+  add the state to core first.
+
 ## Layout
 
 The editor is one `Workspace` struct. Its methods are split across
