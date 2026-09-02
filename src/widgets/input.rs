@@ -718,9 +718,7 @@ impl gpui::RenderOnce for Input {
             } else {
                 t::field_outline()
             })
-            // The panel's own fill: a field is a place to type, not a
-            // darker box sitting on the panel.
-            .bg(t::panel_bg())
+            .bg(t::field_bg())
             .cursor_text()
             .track_focus(&focus_handle);
 

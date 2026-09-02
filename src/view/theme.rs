@@ -165,6 +165,11 @@ pub(crate) fn panel_bg() -> Rgba {
 pub(crate) fn panel_outline() -> Rgba {
     c(theme().surface("outline"))
 }
+/// The fill of a text field: one step darker than the panel it sits
+/// on, so it reads as a place to type without becoming a box.
+pub(crate) fn field_bg() -> Rgba {
+    c(theme().surface("field"))
+}
 /// The rule around a text field: quieter than a panel's, so a column
 /// of fields reads as values, not as boxes.
 pub(crate) fn field_outline() -> Rgba {
