@@ -750,6 +750,7 @@ impl Workspace {
                 summary: None,
                 score: None,
                 busy: None,
+                job: None,
                 proposals: Vec::new(),
                 tasks: None,
                 tasks_asked: false,

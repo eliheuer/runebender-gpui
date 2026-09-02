@@ -12,6 +12,8 @@
 //! proposal layer into the open font, and hand it to core to install
 //! or discard.
 
+use std::sync::{Arc, Mutex};
+
 use crate::PathBuf;
 use crate::Workspace;
 use gpui::SharedString;
@@ -79,6 +81,107 @@ impl TaskRow {
             .iter()
             .any(|i| i.kind == "glyph" || i.kind == "glyphs")
     }
+}
+
+/// Run one font-ml task to completion on the calling thread, feeding
+/// progress lines into `progress` and parking the child in `job` so
+/// it can be killed. Returns the JSON object font-ml printed last.
+#[cfg(not(target_family = "wasm"))]
+#[allow(clippy::too_many_arguments)]
+fn run_font_ml(
+    font_ml: &std::path::Path,
+    task: &str,
+    model: &std::path::Path,
+    source: &std::path::Path,
+    glyph: Option<&str>,
+    strength: f64,
+    reference: Option<&std::path::Path>,
+    progress: &Mutex<Option<(usize, usize, String)>>,
+    job: &Mutex<Option<std::process::Child>>,
+) -> Result<serde_json::Value, String> {
+    use std::io::BufRead as _;
+    let mut cmd = std::process::Command::new(font_ml);
+    cmd.arg("run")
+        .arg(task)
+        .arg("--model")
+        .arg(model)
+        .arg("--source")
+        .arg(source)
+        .arg("--strength")
+        .arg(format!("{strength}"))
+        .arg("--write")
+        .arg("--json")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    match glyph {
+        Some(name) => {
+            cmd.arg("--glyph").arg(name);
+        }
+        None => {
+            cmd.arg("--all");
+        }
+    }
+    if let Some(reference) = reference {
+        cmd.arg("--reference").arg(reference);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("{e}"))?;
+    let stderr = child.stderr.take().ok_or("no stderr")?;
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    *job.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+    // stdout is one JSON object at the end and stays small; read it on
+    // a thread so a full pipe can never stall the run.
+    let stdout_reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = std::io::Read::read_to_string(&mut std::io::BufReader::new(stdout), &mut text);
+        text
+    });
+    let mut last_error = String::new();
+    for line in std::io::BufReader::new(stderr)
+        .lines()
+        .map_while(Result::ok)
+    {
+        match parse_progress(&line) {
+            Some((done, total, glyph)) => {
+                *progress.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((done, total, glyph.to_string()));
+            }
+            None if !line.trim().is_empty() => last_error = line,
+            None => {}
+        }
+    }
+    let status = {
+        let mut slot = job.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.as_mut() {
+            Some(child) => child.wait().map_err(|e| format!("{e}"))?,
+            None => return Err("cancelled".into()),
+        }
+    };
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let report: serde_json::Value = stdout
+        .lines()
+        .rev()
+        .find_map(|l| serde_json::from_str(l).ok())
+        .unwrap_or(serde_json::Value::Null);
+    if status.success() {
+        Ok(report)
+    } else if status.code().is_none() {
+        Err("cancelled".into())
+    } else {
+        Err(report
+            .get("error")
+            .and_then(|e| e.as_str())
+            .map(str::to_string)
+            .unwrap_or(last_error))
+    }
+}
+
+/// A progress line as font-ml prints it: `progress <done>/<total> <glyph>`.
+pub(crate) fn parse_progress(line: &str) -> Option<(usize, usize, &str)> {
+    let rest = line.strip_prefix("progress ")?;
+    let (count, glyph) = rest.split_once(' ')?;
+    let (done, total) = count.split_once('/')?;
+    Some((done.parse().ok()?, total.parse().ok()?, glyph.trim()))
 }
 
 impl Workspace {
@@ -366,62 +469,65 @@ impl Workspace {
         let strength = self.models.strength;
         let label: SharedString = match &glyph_name {
             Some(name) => format!("Running {task} on {name}…").into(),
-            None => format!("Running {task} on every glyph… this takes a while").into(),
+            None => format!("Running {task} on every glyph…").into(),
         };
         self.models.busy = Some(label.clone());
         self.status_note = Some(label);
+
+        // The process runs on a background thread. Its progress lines
+        // land in `progress`, its handle in `job` so Cancel can kill
+        // it, and its result in `finished`. The foreground polls a few
+        // times a second and redraws the count.
+        let progress: Arc<Mutex<Option<(usize, usize, String)>>> = Arc::new(Mutex::new(None));
+        let job: Arc<Mutex<Option<std::process::Child>>> = Arc::new(Mutex::new(None));
+        let finished: Arc<Mutex<Option<Result<serde_json::Value, String>>>> =
+            Arc::new(Mutex::new(None));
+        self.models.job = Some(job.clone());
+        cx.background_executor()
+            .spawn({
+                let source = source.clone();
+                let task = task.clone();
+                let progress = progress.clone();
+                let job = job.clone();
+                let finished = finished.clone();
+                async move {
+                    let result = run_font_ml(
+                        &font_ml,
+                        &task,
+                        &model,
+                        &source,
+                        glyph_name.as_deref(),
+                        strength,
+                        reference.as_deref(),
+                        &progress,
+                        &job,
+                    );
+                    *finished.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+                }
+            })
+            .detach();
         cx.spawn(async move |this, cx| {
-            let result: Result<serde_json::Value, String> = cx
-                .background_executor()
-                .spawn({
-                    let source = source.clone();
+            let result = loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(200))
+                    .await;
+                if let Some(result) = finished.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                    break result;
+                }
+                let seen = progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                if let Some((done, total, glyph)) = seen {
                     let task = task.clone();
-                    async move {
-                        let mut cmd = std::process::Command::new(&font_ml);
-                        cmd.arg("run")
-                            .arg(&task)
-                            .arg("--model")
-                            .arg(&model)
-                            .arg("--source")
-                            .arg(&source)
-                            .arg("--strength")
-                            .arg(format!("{strength}"))
-                            .arg("--write")
-                            .arg("--json");
-                        match &glyph_name {
-                            Some(name) => {
-                                cmd.arg("--glyph").arg(name);
-                            }
-                            None => {
-                                cmd.arg("--all");
-                            }
-                        }
-                        if let Some(reference) = &reference {
-                            cmd.arg("--reference").arg(reference);
-                        }
-                        let output = cmd.output().map_err(|e| format!("{e}"))?;
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let report: serde_json::Value = stdout
-                            .lines()
-                            .rev()
-                            .find_map(|l| serde_json::from_str(l).ok())
-                            .unwrap_or(serde_json::Value::Null);
-                        if output.status.success() {
-                            Ok(report)
-                        } else {
-                            Err(report
-                                .get("error")
-                                .and_then(|e| e.as_str())
-                                .map(str::to_string)
-                                .unwrap_or_else(|| {
-                                    String::from_utf8_lossy(&output.stderr).trim().to_string()
-                                }))
-                        }
-                    }
-                })
-                .await;
+                    this.update(cx, |workspace, cx| {
+                        workspace.models.busy =
+                            Some(format!("{task}: {done}/{total} ({glyph})").into());
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            };
             this.update(cx, |workspace, cx| {
                 workspace.models.busy = None;
+                workspace.models.job = None;
                 match result {
                     Ok(report) => workspace.task_finished(&task, &source, glyph, &report),
                     Err(e) => workspace.status_note = Some(format!("font-ml: {e}").into()),
@@ -431,6 +537,18 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    /// Stop the running task. font-ml writes its proposal only at the
+    /// end, so a killed run leaves nothing behind.
+    pub(crate) fn cancel_task(&mut self) {
+        let Some(job) = self.models.job.take() else {
+            return;
+        };
+        if let Some(child) = job.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            let _ = child.kill();
+        }
+        self.status_note = Some("Cancelled".into());
     }
 
     /// What happens when font-ml comes back: the proposal layer is

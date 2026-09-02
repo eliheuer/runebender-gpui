@@ -604,4 +604,14 @@ mod model_discovery_tests {
         assert!(TaskRow::parse("not json").is_empty());
         assert!(TaskRow::parse(r#"{"tasks":"?"}"#).is_empty());
     }
+
+    /// The count in the panel comes from font-ml's stderr lines, whose
+    /// shape is fixed: `progress <done>/<total> <glyph>`.
+    #[test]
+    fn progress_lines_from_the_tool_parse() {
+        use crate::edit::local_ai::parse_progress;
+        assert_eq!(parse_progress("progress 12/397 H"), Some((12, 397, "H")));
+        assert_eq!(parse_progress("H: 25/25 points moved"), None);
+        assert_eq!(parse_progress("progress x/y H"), None);
+    }
 }

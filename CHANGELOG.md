@@ -21,6 +21,10 @@ Until then, `main` is the only line and this section stays open.
   New: "Propose Bold master" runs every drawn glyph and leaves the
   result waiting in the panel with Install and Discard. Scoring runs
   `font-ml eval` the same way.
+- A long run shows its count in the panel (`bolden: 120/397 (H)`),
+  read from font-ml's progress lines, and a Cancel button kills the
+  process. font-ml writes its proposal only at the end, so a cancelled
+  run leaves nothing behind.
 - The panel's task rows come from `font-ml tasks --json`. Each task
   the tool reports as built gets "this glyph" and, when it takes a
   glyph set, "every glyph". No task name lives in the panel; the one

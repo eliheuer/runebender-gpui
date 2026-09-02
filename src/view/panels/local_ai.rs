@@ -206,7 +206,35 @@ impl Workspace {
         };
 
         let body = match &self.models.busy {
-            Some(note) => body.child(div().text_xs().text_color(t::accent()).child(note.clone())),
+            Some(note) => body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xs()
+                            .text_color(t::accent())
+                            .child(note.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("ai-cancel")
+                            .px_1()
+                            .py_0p5()
+                            .border(t::stroke())
+                            .border_color(t::panel_outline())
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(t::text_muted())
+                            .child("Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.cancel_task();
+                                cx.notify();
+                            })),
+                    ),
+            ),
             None => body,
         };
 

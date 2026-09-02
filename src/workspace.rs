@@ -709,6 +709,8 @@ pub(crate) struct ModelsState {
     pub(crate) score: Option<(SharedString, f64, f64)>,
     /// What font-ml is doing right now, while it runs.
     pub(crate) busy: Option<SharedString>,
+    /// The running font-ml process, so Cancel can kill it.
+    pub(crate) job: Option<Arc<Mutex<Option<std::process::Child>>>>,
     /// Proposals waiting in the active master, one per task.
     pub(crate) proposals: Vec<runebender_core::document::proposal::ProposalSummary>,
     /// What font-ml says it can do. None until it has answered.
