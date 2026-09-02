@@ -351,7 +351,7 @@ impl Workspace {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(t::accent())
+                                    .text_color(t::text())
                                     .child(format!("@{short} · {side}")),
                             )
                             .child(
@@ -565,7 +565,7 @@ impl Workspace {
                     .bg(swatch_color(c))
                     .border(t::stroke_emphasis())
                     .border_color(if selected {
-                        t::accent()
+                        t::text()
                     } else {
                         t::cell_border()
                     })
@@ -703,7 +703,9 @@ impl Workspace {
                             .cursor_pointer()
                             .border(t::stroke())
                             .when(toggle_on, |el| {
-                                el.border_color(t::accent()).text_color(t::accent())
+                                el.bg(t::selected_bg())
+                                    .border_color(t::selected_bg())
+                                    .text_color(t::selected_ink())
                             })
                             .when(!toggle_on, |el| {
                                 el.border_color(t::cell_border()).text_color(t::text())
@@ -1070,7 +1072,7 @@ impl Workspace {
                             .rounded_full()
                             .cursor_pointer()
                             .border(t::stroke())
-                            .when(active, |el| el.bg(t::accent()).border_color(t::accent()))
+                            .when(active, |el| el.bg(t::text()).border_color(t::text()))
                             .when(!active, |el| el.border_color(t::cell_border()))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.coord_quadrant = quadrant;
@@ -1157,7 +1159,9 @@ impl Workspace {
                                 .cursor_pointer()
                                 .border(t::stroke())
                                 .when(aligned, |el| {
-                                    el.border_color(t::accent()).text_color(t::accent())
+                                    el.bg(t::selected_bg())
+                                        .border_color(t::selected_bg())
+                                        .text_color(t::selected_ink())
                                 })
                                 .when(!aligned, |el| {
                                     el.border_color(t::cell_border()).text_color(t::text())
@@ -1262,7 +1266,11 @@ impl Workspace {
                         .py_0p5()
                         .text_sm()
                         .cursor_pointer()
-                        .text_color(if at_instance { t::accent() } else { t::text() })
+                        .text_color(if at_instance {
+                            t::text()
+                        } else {
+                            t::text_muted()
+                        })
                         .hover(|el| el.bg(t::cell_selected_bg()))
                         .child(
                             div()
@@ -1365,7 +1373,9 @@ impl Workspace {
                         .cursor_pointer()
                         .border(t::stroke())
                         .when(on, |el| {
-                            el.border_color(t::accent()).text_color(t::accent())
+                            el.bg(t::selected_bg())
+                                .border_color(t::selected_bg())
+                                .text_color(t::selected_ink())
                         })
                         .when(!on, |el| {
                             el.border_color(t::cell_border()).text_color(t::text())

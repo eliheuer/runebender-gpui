@@ -261,7 +261,7 @@ impl Workspace {
                     .cursor_pointer()
                     .child(eye_icon(
                         if self.preview.visible {
-                            t::accent()
+                            t::text()
                         } else {
                             t::text_muted()
                         },
@@ -278,7 +278,7 @@ impl Workspace {
                     .flex_none()
                     .cursor_pointer()
                     .child(invert_icon(if self.preview.invert {
-                        t::accent()
+                        t::text()
                     } else {
                         t::text_muted()
                     }))
@@ -498,7 +498,7 @@ impl Workspace {
                                 .text_xs()
                                 .cursor_pointer()
                                 .text_color(if mode == current {
-                                    t::accent()
+                                    t::text()
                                 } else {
                                     t::text_muted()
                                 })

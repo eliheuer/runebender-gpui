@@ -500,8 +500,9 @@ impl Workspace {
             .gap_1()
             .when(active, |el| {
                 el.border(t::stroke())
-                    .border_color(t::accent())
-                    .text_color(t::accent())
+                    .bg(t::selected_bg())
+                    .border_color(t::selected_bg())
+                    .text_color(t::selected_ink())
             })
             .when(!active, |el| el.text_color(t::text()))
             .when_some(chevron, |el, expanded| {
@@ -511,14 +512,22 @@ impl Workspace {
                 el.child(
                     div()
                         .w(px(16.0))
-                        .text_color(if active { t::accent() } else { t::text_muted() })
+                        .text_color(if active {
+                            t::selected_ink()
+                        } else {
+                            t::text_muted()
+                        })
                         .child(icon),
                 )
             })
             .child(div().flex_1().child(label))
             .child(
                 div()
-                    .text_color(if active { t::accent() } else { t::text_muted() })
+                    .text_color(if active {
+                        t::selected_ink()
+                    } else {
+                        t::text_muted()
+                    })
                     .child(count),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -549,7 +558,9 @@ impl Workspace {
             .text_xs()
             .cursor_pointer()
             .when(active, |el| {
-                el.border_color(t::accent()).text_color(t::accent())
+                el.bg(t::selected_bg())
+                    .border_color(t::selected_bg())
+                    .text_color(t::selected_ink())
             })
             .when(!active, |el| {
                 el.border_color(t::cell_border())
@@ -611,7 +622,7 @@ impl Workspace {
                 .text_xs()
                 .cursor_pointer()
                 .when(active, |el| {
-                    el.bg(t::cell_selected_bg()).text_color(t::text())
+                    el.bg(t::selected_bg()).text_color(t::selected_ink())
                 })
                 .when(!active, |el| el.text_color(t::text_muted()))
                 .child(div().w(px(10.0)).child(mark))
@@ -767,8 +778,11 @@ impl Workspace {
             .h(px(crate::view::controls::CONTROL_H))
             .rounded(t::radius_control())
             .cursor_pointer()
-            .when(active, |el| el.bg(t::cell_selected_bg()))
-            .child(icon_svg(icon, if active { t::accent() } else { t::text() }))
+            .when(active, |el| el.bg(t::selected_bg()))
+            .child(icon_svg(
+                icon,
+                if active { t::selected_ink() } else { t::text() },
+            ))
     }
 
     /// Tool icons for the header bar (editor mode only).
@@ -883,13 +897,18 @@ impl Workspace {
                 .items_center()
                 .rounded(t::radius())
                 .border(t::stroke())
+                .when(active, |el| el.bg(t::selected_bg()))
                 .border_color(if active {
-                    t::accent()
+                    t::selected_bg()
                 } else {
                     t::cell_border()
                 })
                 .text_sm()
-                .text_color(if active { t::accent() } else { t::text_muted() })
+                .text_color(if active {
+                    t::selected_ink()
+                } else {
+                    t::text_muted()
+                })
                 .cursor_pointer()
                 .child(label)
         };

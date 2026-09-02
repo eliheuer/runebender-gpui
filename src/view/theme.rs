@@ -202,6 +202,19 @@ pub(crate) fn cell_selected_ring() -> Rgba {
     c(theme().role("gridSelected"))
 }
 
+// ---- selection ----
+
+/// The fill of a selected control: the ink itself. A selected state
+/// is shown by inverting, not by a hue, so it reads in every theme and
+/// for every eye.
+pub(crate) fn selected_bg() -> Rgba {
+    text()
+}
+/// The text and icon colour on a selected control: the panel's fill.
+pub(crate) fn selected_ink() -> Rgba {
+    panel_bg()
+}
+
 // ---- accents and text ----
 
 /// The accent hue, used for selection and emphasis.

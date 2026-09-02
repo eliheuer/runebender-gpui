@@ -101,10 +101,14 @@ impl Workspace {
                 .flex_shrink_0()
                 .rounded(t::radius_control())
                 .cursor_pointer()
-                .when(active, |el| el.bg(t::cell_selected_bg()))
+                .when(active, |el| el.bg(t::selected_bg()))
                 .child(icon_svg(
                     icon,
-                    if active { t::accent() } else { t::text_muted() },
+                    if active {
+                        t::selected_ink()
+                    } else {
+                        t::text_muted()
+                    },
                 ))
                 .tooltip(move |_, cx| cx.new(|_| TabTooltip { label }).into())
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -458,7 +462,12 @@ impl Workspace {
                 .py_0p5()
                 .rounded(t::radius())
                 .border(t::stroke())
-                .border_color(if lit { t::accent() } else { t::cell_border() })
+                .when(lit, |el| el.bg(t::selected_bg()))
+                .border_color(if lit {
+                    t::selected_bg()
+                } else {
+                    t::cell_border()
+                })
                 .flex()
                 .flex_col()
                 .items_center()
@@ -469,7 +478,7 @@ impl Workspace {
                         .text_color(if dim {
                             t::text_muted()
                         } else if lit {
-                            t::accent()
+                            t::selected_ink()
                         } else {
                             t::text()
                         })
@@ -599,13 +608,14 @@ impl Workspace {
                     .border(t::stroke())
                     .text_xs()
                     .cursor_pointer()
+                    .when(state == Some(true), |el| el.bg(t::selected_bg()))
                     .border_color(match state {
-                        Some(true) => t::accent(),
+                        Some(true) => t::selected_bg(),
                         Some(false) => t::annotation(),
                         None => t::cell_border(),
                     })
                     .text_color(match state {
-                        Some(true) => t::accent(),
+                        Some(true) => t::selected_ink(),
                         Some(false) => t::annotation(),
                         None => t::text_muted(),
                     })
@@ -668,8 +678,17 @@ impl Workspace {
                     .border(t::stroke())
                     .text_xs()
                     .cursor_pointer()
-                    .border_color(if lit { t::accent() } else { t::cell_border() })
-                    .text_color(if lit { t::accent() } else { t::text_muted() })
+                    .when(lit, |el| el.bg(t::selected_bg()))
+                    .border_color(if lit {
+                        t::selected_bg()
+                    } else {
+                        t::cell_border()
+                    })
+                    .text_color(if lit {
+                        t::selected_ink()
+                    } else {
+                        t::text_muted()
+                    })
                     .child(*label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let (script, lang) = (LOCALES[li].1.to_string(), LOCALES[li].2.to_string());
@@ -1078,8 +1097,9 @@ impl Workspace {
                             .cursor_pointer()
                             .when(is_active, |el| {
                                 el.border(t::stroke())
-                                    .border_color(t::accent())
-                                    .text_color(t::accent())
+                                    .bg(t::selected_bg())
+                                    .border_color(t::selected_bg())
+                                    .text_color(t::selected_ink())
                             })
                             .when(!is_active && eye_on, |el| el.text_color(t::text()))
                             .when(!is_active && !eye_on, |el| el.text_color(t::text_muted()))
@@ -1124,7 +1144,7 @@ impl Workspace {
                                 .w(px(20.0))
                                 .text_sm()
                                 .cursor_pointer()
-                                .text_color(if eye_on { t::accent() } else { t::text_muted() })
+                                .text_color(if eye_on { t::text() } else { t::text_muted() })
                                 .child("◉")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if !this.visible_glyph_layers.remove(&l_eye) {

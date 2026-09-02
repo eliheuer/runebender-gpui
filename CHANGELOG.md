@@ -21,6 +21,11 @@ Until then, `main` is the only line and this section stays open.
 - A bare `runebender-gpui` opens with no font and File → Open, instead
   of a Virtua Grotesk checkout beside the repository. Nothing on one
   machine is a default for everyone else's.
+- Selection in the chrome is shown by inversion, ink on the panel
+  fill, not by the green accent: active tools, toggles, tabs, sidebar
+  rows, menu items, and the focused field. The accent stays for
+  meaning only. Two theme accessors carry it, `selected_bg` and
+  `selected_ink`.
 - The glyph grid's side padding equals the gap between cells, so the
   margin is the same on all four sides and the cells take the width.
 - Text fields sit in the panel colour with a quiet `fieldOutline`

@@ -227,14 +227,19 @@ impl Workspace {
                     .gap_1()
                     .when(active, |el| {
                         el.border(t::stroke())
-                            .border_color(t::accent())
-                            .text_color(t::accent())
+                            .bg(t::selected_bg())
+                            .border_color(t::selected_bg())
+                            .text_color(t::selected_ink())
                     })
                     .when(!active, |el| el.text_color(t::text()))
                     .child(
                         div()
                             .w(px(16.0))
-                            .text_color(if active { t::accent() } else { t::text_muted() })
+                            .text_color(if active {
+                                t::selected_ink()
+                            } else {
+                                t::text_muted()
+                            })
                             .child("⌕"),
                     )
                     .child(div().flex_1().child(SharedString::from(label.clone())))
@@ -253,7 +258,11 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .text_color(if active { t::accent() } else { t::text_muted() })
+                            .text_color(if active {
+                                t::selected_ink()
+                            } else {
+                                t::text_muted()
+                            })
                             .child(SharedString::from(format!("{count}"))),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -373,8 +382,9 @@ impl Workspace {
                 .cursor_pointer()
                 .when(active, |el| {
                     el.border(t::stroke())
-                        .border_color(t::accent())
-                        .text_color(t::accent())
+                        .bg(t::selected_bg())
+                        .border_color(t::selected_bg())
+                        .text_color(t::selected_ink())
                 })
                 .when(!active, |el| {
                     el.border(t::stroke())

@@ -77,7 +77,9 @@ pub(crate) fn toggle(
 ) -> Stateful<gpui::Div> {
     let el = base(id).child(label.into());
     if active {
-        el.border_color(t::accent()).text_color(t::accent())
+        el.bg(t::selected_bg())
+            .border_color(t::selected_bg())
+            .text_color(t::selected_ink())
     } else {
         el.border_color(t::cell_border()).text_color(t::text())
     }

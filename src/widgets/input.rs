@@ -714,7 +714,7 @@ impl gpui::RenderOnce for Input {
             .py(px(PAD_Y))
             .border(t::stroke())
             .border_color(if focused {
-                t::accent()
+                t::text()
             } else {
                 t::field_outline()
             })

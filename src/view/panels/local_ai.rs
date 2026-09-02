@@ -172,7 +172,7 @@ impl Workspace {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_xs()
-                            .text_color(t::accent())
+                            .text_color(t::text())
                             .child(note.clone()),
                     )
                     .child(

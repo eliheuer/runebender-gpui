@@ -109,7 +109,9 @@ impl Render for MenuBar {
                 .flex()
                 .items_center()
                 .text_color(t::text())
-                .when(is_open, |el| el.bg(t::accent()))
+                .when(is_open, |el| {
+                    el.bg(t::selected_bg()).text_color(t::selected_ink())
+                })
                 .child(menu.title.clone())
                 .on_mouse_down(
                     MouseButton::Left,
@@ -173,7 +175,7 @@ impl MenuBar {
                             .px(px(10.0))
                             .py(px(3.0))
                             .text_color(t::text())
-                            .hover(|el| el.bg(t::accent()))
+                            .hover(|el| el.bg(t::selected_bg()).text_color(t::selected_ink()))
                             .child(name.clone())
                             .on_mouse_down(
                                 MouseButton::Left,
