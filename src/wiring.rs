@@ -723,7 +723,13 @@ impl Workspace {
                 viewport: gpui::size(px(0.0), px(0.0)),
                 search_re: None,
                 scroll_row: 0,
-                tab: 0,
+                // QA hook, like RB_OPEN_GLYPH: RB_SIDEBAR_TAB=<0..3> starts
+                // the left sidebar on that tab so a capture can reach it.
+                tab: std::env::var("RB_SIDEBAR_TAB")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .filter(|t: &u8| *t <= 3)
+                    .unwrap_or(0),
                 cell_size: MINI_CELL,
                 slider: None,
                 search_input: search,

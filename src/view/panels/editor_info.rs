@@ -882,7 +882,7 @@ impl Workspace {
     /// Glyphs' Font Info window; axes and instances come later.
     pub(crate) fn font_info_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         if self.project.is_none() {
-            return self.section(cx, "Font Info", div());
+            return self.section(cx, "Font info", div());
         }
         let field = |header: &'static str, input: &gpui::Entity<widgets::input::InputState>| {
             div()
@@ -897,14 +897,14 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2()
-            .child(field("Family Name", &self.inputs.font_info.family))
-            .child(field("Style Name", &self.inputs.font_info.style))
+            .child(field("Family name", &self.inputs.font_info.family))
+            .child(field("Style name", &self.inputs.font_info.style))
             .child(
                 div()
                     .flex()
                     .gap_1()
                     .child(field("UPM", &self.inputs.font_info.upm))
-                    .child(field("Italic Angle", &self.inputs.font_info.italic_angle)),
+                    .child(field("Italic angle", &self.inputs.font_info.italic_angle)),
             )
             .child(
                 div()
@@ -917,8 +917,8 @@ impl Workspace {
                 div()
                     .flex()
                     .gap_1()
-                    .child(field("x-Height", &self.inputs.font_info.x_height))
-                    .child(field("Cap Height", &self.inputs.font_info.cap_height)),
+                    .child(field("x-height", &self.inputs.font_info.x_height))
+                    .child(field("Cap height", &self.inputs.font_info.cap_height)),
             )
             // The vertical-metrics parameters (typo/hhea/win), kept
             // together the way the Glyphs Masters tab carries them.
@@ -926,7 +926,7 @@ impl Workspace {
                 div()
                     .text_xs()
                     .text_color(t::text_muted())
-                    .child("Vertical Metrics"),
+                    .child("Vertical metrics"),
             )
             .child(
                 div()
@@ -959,10 +959,10 @@ impl Workspace {
                 div()
                     .text_xs()
                     .text_color(t::text_muted())
-                    .child("Zones & Stems"),
+                    .child("Zones and stems"),
             )
-            .child(field("Blue Values", &self.inputs.font_info.blue_values))
-            .child(field("Other Blues", &self.inputs.font_info.other_blues))
+            .child(field("Blue values", &self.inputs.font_info.blue_values))
+            .child(field("Other blues", &self.inputs.font_info.other_blues))
             .child(
                 div()
                     .flex()
@@ -970,7 +970,7 @@ impl Workspace {
                     .child(field("Stems H", &self.inputs.font_info.stems_h))
                     .child(field("Stems V", &self.inputs.font_info.stems_v)),
             );
-        self.section(cx, "Font Info", body)
+        self.section(cx, "Font info", body)
     }
 
     /// Selection section: count plus editable X/Y for a single point.

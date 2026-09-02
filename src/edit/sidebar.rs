@@ -872,11 +872,15 @@ impl Workspace {
         use runebender_core::text::buffer::TextDirection;
         let auto = self.edit_buffer.direction_is_auto();
         let dir = self.edit_buffer.direction();
+        // The same shape as a session tab, on the same height, so the
+        // header reads as one row of controls.
         let button = |id: &'static str, label: &'static str, active: bool| {
             div()
                 .id(id)
+                .h(px(crate::workspace::TAB_H))
                 .px_2()
-                .py_0p5()
+                .flex()
+                .items_center()
                 .rounded(t::radius())
                 .border(t::stroke())
                 .border_color(if active {

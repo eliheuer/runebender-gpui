@@ -18,6 +18,14 @@ Until then, `main` is the only line and this section stays open.
   Commands read as verbs (Add extremes, Round corners), units live in
   the label (Slant °, Fit curve %), and the Local AI panel uses the
   same controls.
+- Glyph-grid cells fill with the mark colour in every theme, not only
+  Gray, from the shared token file.
+- Words: sentence case in Font info, "Saved" in the muted text colour
+  with only "Not saved" in the warning colour, and the LTR/RTL/Auto
+  buttons on the tab height so the header is one row of controls.
+- `RB_SIDEBAR_TAB=<0..3>` starts the left sidebar on that tab, the way
+  `RB_OPEN_GLYPH` starts in the editor, so a capture reaches the Local
+  AI panel without clicks.
 - The canvas reads in every theme. The glyph gets a mid-tone fill from
   the new `outlineFill` token instead of a 16% wash of the ink, and
   metric lines draw in the quiet `metricsLine` neutral instead of the

@@ -106,7 +106,18 @@ impl Workspace {
                     .gap_2()
                     .overflow_hidden()
                     .child(div().text_sm().text_color(t::text()).child(title))
-                    .child(div().text_sm().text_color(t::status_yellow()).child(status)),
+                    // "Saved" is the quiet state; only "Not saved" earns
+                    // the warning colour.
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(if self.font().is_some_and(|f| f.dirty) {
+                                t::status_yellow()
+                            } else {
+                                t::text_muted()
+                            })
+                            .child(status),
+                    ),
             )
             .when(
                 // Always up in the editor, the Glyphs bottom-corner

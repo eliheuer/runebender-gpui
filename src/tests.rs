@@ -488,19 +488,18 @@ mod mark_paint_tests {
     fn the_treatment_follows_the_theme() {
         let _g = THEME.lock().unwrap_or_else(|e| e.into_inner());
 
-        t::set_theme("dark");
-        let dark = t::mark_paint(Some("yellow")).expect("yellow is a mark");
-        assert!(dark.bg.is_none(), "Dark should not fill the cell");
-        assert_eq!(dark.border, dark.ink, "a tinted rule and its label match");
-
-        t::set_theme("gray");
-        let gray = t::mark_paint(Some("yellow")).expect("yellow is a mark");
-        let fill = gray.bg.expect("Gray fills the cell");
-        // The bug this guards: the glyph and label used to be painted
-        // in the mark colour. On a filled cell that is the colour they
-        // are sitting on, so the cell would come out blank.
-        assert_ne!(fill, gray.ink, "ink must not be the fill it sits on");
-        assert_ne!(fill, gray.border, "the keyline must not be the fill");
+        // Every theme fills the cell now, so the grid keeps one
+        // character across themes. The bug this guards: the glyph and
+        // label used to be painted in the mark colour. On a filled
+        // cell that is the colour they are sitting on, so the cell
+        // would come out blank.
+        for id in ["dark", "gray", "light"] {
+            t::set_theme(id);
+            let paint = t::mark_paint(Some("yellow")).expect("yellow is a mark");
+            let fill = paint.bg.expect("the theme fills the cell");
+            assert_ne!(fill, paint.ink, "{id}: ink must not be the fill it sits on");
+            assert_ne!(fill, paint.border, "{id}: the keyline must not be the fill");
+        }
 
         t::set_theme(t::DEFAULT_THEME);
     }

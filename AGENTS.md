@@ -86,7 +86,7 @@ Where they differ on purpose:
 | `wiring.rs` | `view/recipes.rs` | GPUI builds input widgets once and subscribes. Xilem rebuilds views from state every frame, so there is nothing to wire; what repeats becomes a recipe. |
 | GPUI's own scale | `view/design.rs` | GPUI ships `px_1`, `text_xs`, `rounded_md`. Xilem takes a number wherever a measurement goes, so the scale is application code. |
 | `view/blur.rs` | none | GPUI blurs box shadows and nothing else, so the preview's blur is rasterized on the CPU. Vello blurs what it is asked to. |
-| `RB_OPEN_GLYPH` | `--bin screenshot` | Two ways to see a frame without clicking. Xilem has a headless render path; GPUI opens on a named glyph instead. |
+| `RB_OPEN_GLYPH`, `RB_SIDEBAR_TAB` | `--bin screenshot` | Two ways to see a frame without clicking. Xilem has a headless render path; GPUI opens on a named glyph and a named sidebar tab instead. |
 | `widgets/` | `widgets/` | Same directory, different contents: each toolkit is missing different things. |
 
 When one editor gets ahead, the port is: read the file at the same
