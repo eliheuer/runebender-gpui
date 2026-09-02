@@ -7,6 +7,7 @@
 pub(crate) mod blur;
 pub(crate) mod canvas;
 pub(crate) mod chrome;
+pub(crate) mod controls;
 pub(crate) mod grid;
 pub(crate) mod paint;
 pub(crate) mod panels;

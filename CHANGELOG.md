@@ -12,6 +12,12 @@ Until then, `main` is the only line and this section stays open.
 
 ### Changed
 
+- The inspector's controls come from one place, `view/controls.rs`:
+  buttons, toggles, row labels, and fields share one height, one type
+  size, and fill their row, so nothing clips at the panel edge.
+  Commands read as verbs (Add extremes, Round corners), units live in
+  the label (Slant °, Fit curve %), and the Local AI panel uses the
+  same controls.
 - The canvas reads in every theme. The glyph gets a mid-tone fill from
   the new `outlineFill` token instead of a 16% wash of the ink, and
   metric lines draw in the quiet `metricsLine` neutral instead of the

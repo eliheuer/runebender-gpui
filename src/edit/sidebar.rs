@@ -755,7 +755,7 @@ impl Workspace {
             .when(!collapsed, |el| el.child(body))
     }
 
-    /// A 30px icon tile (header tools, transform section).
+    /// An icon tile on the shared control height (header tools, transform section).
     pub(crate) fn icon_tile(
         id: &'static str,
         icon: &'static str,
@@ -763,8 +763,8 @@ impl Workspace {
     ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
-            .w(px(30.0))
-            .h(px(30.0))
+            .w(px(crate::view::controls::CONTROL_H))
+            .h(px(crate::view::controls::CONTROL_H))
             .rounded(t::radius_control())
             .cursor_pointer()
             .when(active, |el| el.bg(t::cell_selected_bg()))

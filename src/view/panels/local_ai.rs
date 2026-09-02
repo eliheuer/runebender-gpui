@@ -1,14 +1,15 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The Local AI panel: installed models and the bolden control.
+//! The Local AI panel: installed models, the tasks font-ml runs, and
+//! the proposals waiting.
 
 use crate::Mode;
 use crate::Workspace;
+use crate::view::controls as c;
 use crate::view::paint::flat_slider;
 use crate::view::theme as t;
 use gpui::Context;
-use gpui::InteractiveElement;
 use gpui::ParentElement;
 use gpui::SharedString;
 use gpui::StatefulInteractiveElement;
@@ -16,35 +17,27 @@ use gpui::Styled;
 use gpui::div;
 use gpui::px;
 impl Workspace {
-    /// The Local AI section: choose a model, run it, and see how the
-    /// result scores against a master already drawn.
+    /// The Local AI section: choose a model, run a task, and see how
+    /// the result scores against a master already drawn.
     ///
     /// Both halves matter. Running a model is easy to offer and easy
     /// to trust too far; scoring it against work done by hand is what
     /// says whether the proposal was worth having.
     pub(crate) fn local_ai_panel(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
-        let body = div().flex().flex_col().gap_1p5();
+        let body = c::column();
 
         // Which model, and a way to change it.
         let label: SharedString = self
             .models
             .summary
             .clone()
-            .unwrap_or_else(|| "No model chosen".into());
+            .unwrap_or_else(|| "Choose a model…".into());
         let body = body.child(
-            div()
-                .id("ai-model")
-                .px_1()
-                .py_0p5()
-                .border(t::stroke())
-                .border_color(t::panel_outline())
-                .cursor_pointer()
-                .text_xs()
-                .text_color(t::text())
-                .child(label)
-                .on_click(cx.listener(|this, _, _, cx| {
+            c::row().child(
+                c::button("ai-model", label).on_click(cx.listener(|this, _, _, cx| {
                     this.command_choose_model(cx);
                 })),
+            ),
         );
 
         // Anything installed, listed without a file picker. A model is
@@ -57,24 +50,17 @@ impl Workspace {
             installed.into_iter().fold(body, |el, (name, path)| {
                 let current = self.models.dir.as_deref() == Some(path.as_path());
                 el.child(
-                    div()
-                        .id(SharedString::from(format!("ai-installed-{name}")))
-                        .px_1()
-                        .py_0p5()
-                        .border(t::stroke())
-                        .border_color(if current {
-                            t::accent()
-                        } else {
-                            t::panel_outline()
-                        })
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(if current { t::accent() } else { t::text() })
-                        .child(name)
+                    c::row().child(
+                        c::toggle(
+                            SharedString::from(format!("ai-installed-{name}")),
+                            name,
+                            current,
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.load_model(&path);
                             cx.notify();
                         })),
+                    ),
                 )
             })
         };
@@ -94,17 +80,8 @@ impl Workspace {
         // short on distance.
         let body = match &self.models.strength_slider {
             Some(slider) => body.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .w(px(58.0))
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child(format!("{:.2}x", self.models.strength)),
-                    )
+                c::row()
+                    .child(c::label(format!("Strength {:.2}×", self.models.strength)))
                     .child(div().flex_1().child(flat_slider(slider, cx))),
             ),
             None => body,
@@ -146,35 +123,21 @@ impl Workspace {
                 let name = task.name.clone();
                 let one = task.takes_glyph();
                 let all = task.takes_glyphs();
-                let row = div().flex().gap_1();
+                let row = c::row();
                 let row = if one {
                     let name = name.clone();
                     row.child(
-                        div()
-                            .id(SharedString::from(format!("ai-run-{}", task.name)))
-                            .flex_1()
-                            .px_1()
-                            .py_0p5()
-                            .border(t::stroke())
-                            .border_color(if in_editor {
-                                t::accent()
-                            } else {
-                                t::panel_outline()
-                            })
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(if in_editor {
-                                t::text()
-                            } else {
-                                t::text_muted()
-                            })
-                            .child(format!("{}: this glyph", task.title))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Mode::Editor(index) = this.mode {
-                                    this.run_task(&name, Some(index), cx);
-                                    cx.notify();
-                                }
-                            })),
+                        c::toggle(
+                            SharedString::from(format!("ai-run-{}", task.name)),
+                            format!("{}: this glyph", task.title),
+                            in_editor,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Mode::Editor(index) = this.mode {
+                                this.run_task(&name, Some(index), cx);
+                                cx.notify();
+                            }
+                        })),
                     )
                 } else {
                     row
@@ -182,21 +145,15 @@ impl Workspace {
                 let row = if all {
                     let name = name.clone();
                     row.child(
-                        div()
-                            .id(SharedString::from(format!("ai-run-all-{}", task.name)))
-                            .flex_1()
-                            .px_1()
-                            .py_0p5()
-                            .border(t::stroke())
-                            .border_color(t::panel_outline())
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(if has_font { t::text() } else { t::text_muted() })
-                            .child(format!("{}: every glyph", task.title))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.run_task(&name, None, cx);
-                                cx.notify();
-                            })),
+                        c::toggle(
+                            SharedString::from(format!("ai-run-all-{}", task.name)),
+                            format!("{}: every glyph", task.title),
+                            has_font,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.run_task(&name, None, cx);
+                            cx.notify();
+                        })),
                     )
                 } else {
                     row
@@ -207,28 +164,21 @@ impl Workspace {
 
         let body = match &self.models.busy {
             Some(note) => body.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
+                c::row()
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
                             .text_xs()
                             .text_color(t::accent())
                             .child(note.clone()),
                     )
                     .child(
-                        div()
-                            .id("ai-cancel")
-                            .px_1()
-                            .py_0p5()
-                            .border(t::stroke())
-                            .border_color(t::panel_outline())
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child("Cancel")
+                        c::button("ai-cancel", "Cancel")
+                            .flex_none()
+                            .w(px(72.0))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.cancel_task();
                                 cx.notify();
@@ -249,63 +199,40 @@ impl Workspace {
                 p.compatible.len()
             )))
             .child(
-                div()
-                    .flex()
-                    .gap_1()
+                c::row()
                     .child(
-                        div()
-                            .id(SharedString::from(format!("ai-install-{}", p.task)))
-                            .flex_1()
-                            .px_1()
-                            .py_0p5()
-                            .border(t::stroke())
-                            .border_color(t::accent())
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(t::accent())
-                            .child("Install")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.install_proposal(&install_task, None);
-                                cx.notify();
-                            })),
+                        c::toggle(
+                            SharedString::from(format!("ai-install-{}", p.task)),
+                            "Install",
+                            true,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.install_proposal(&install_task, None);
+                            cx.notify();
+                        })),
                     )
                     .child(
-                        div()
-                            .id(SharedString::from(format!("ai-discard-{}", p.task)))
-                            .flex_1()
-                            .px_1()
-                            .py_0p5()
-                            .border(t::stroke())
-                            .border_color(t::panel_outline())
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child("Discard")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.discard_proposal(&discard_task);
-                                cx.notify();
-                            })),
+                        c::button(
+                            SharedString::from(format!("ai-discard-{}", p.task)),
+                            "Discard",
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.discard_proposal(&discard_task);
+                            cx.notify();
+                        })),
                     ),
             )
         });
 
         // The judgement, when there is another master to judge against.
-        let body = body.child(
-            div()
-                .id("ai-score")
-                .px_1()
-                .py_0p5()
-                .border(t::stroke())
-                .border_color(t::panel_outline())
-                .cursor_pointer()
-                .text_xs()
-                .text_color(t::text_muted())
-                .child("Score against the other master")
-                .on_click(cx.listener(|this, _, _, cx| {
+        let body = body.child(c::row().child(
+            c::button("ai-score", "Score against the other master").on_click(cx.listener(
+                |this, _, _, cx| {
                     this.command_score_model(cx);
                     cx.notify();
-                })),
-        );
+                },
+            )),
+        ));
 
         match &self.models.score {
             Some((glyph, model, baseline)) => {

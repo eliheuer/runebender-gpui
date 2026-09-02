@@ -180,10 +180,8 @@ impl Workspace {
         let sub_kern_first = kern_commit(cx, window, &kern_first);
         let sub_kern_second = kern_commit(cx, window, &kern_second);
         let sub_kern_value = kern_commit(cx, window, &kern_value);
-        let slant_input =
-            cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("Angle°"));
-        let stroke_input =
-            cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("Width"));
+        let slant_input = cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder(""));
+        let stroke_input = cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder(""));
         let sub_stroke = cx.subscribe_in(&stroke_input, window, {
             let state = stroke_input.clone();
             move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
@@ -195,8 +193,7 @@ impl Workspace {
                 }
             }
         });
-        let offset_input =
-            cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("±Units"));
+        let offset_input = cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder(""));
         let sub_offset = cx.subscribe_in(&offset_input, window, {
             let state = offset_input.clone();
             move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
@@ -208,7 +205,7 @@ impl Workspace {
                 }
             }
         });
-        let fit_input = cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("%"));
+        let fit_input = cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder(""));
         let sub_fit = cx.subscribe_in(&fit_input, window, {
             let state = fit_input.clone();
             move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {

@@ -5,6 +5,7 @@
 
 use crate::Mode;
 use crate::Workspace;
+use crate::view::controls as c;
 use crate::view::grid::glyph_column_span;
 use crate::view::grid::pack_spans;
 use crate::view::paint::build_fill_path;
@@ -727,376 +728,254 @@ impl Workspace {
 
     /// Transformations section for the right sidebar (editor mode).
     pub(crate) fn transform_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
-        let text_op = |id: &'static str, label: &'static str| {
-            div()
-                .id(id)
-                .px_2()
-                .py_0p5()
-                .rounded(t::radius())
-                .text_sm()
-                .text_color(t::text())
-                .cursor_pointer()
-                .border(t::stroke())
-                .border_color(t::cell_border())
-                .child(label)
-        };
-        self.section(
-            cx,
-            "Transformations",
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .child(
-                            Self::icon_tile("op-flip-h", "flip-h", false).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.apply_transform(Affine::scale_non_uniform(-1.0, 1.0));
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .child(
-                            Self::icon_tile("op-flip-v", "flip-v", false).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.apply_transform(Affine::scale_non_uniform(1.0, -1.0));
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .child(Self::icon_tile("op-rot-ccw", "rot-ccw", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.apply_transform(Affine::rotate(std::f64::consts::FRAC_PI_2));
-                                cx.notify();
-                            }),
-                        ))
-                        .child(
-                            Self::icon_tile("op-rot-cw", "rot-cw", false).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.apply_transform(Affine::rotate(
-                                        -std::f64::consts::FRAC_PI_2,
-                                    ));
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .child(
-                            Self::icon_tile("op-duplicate", "duplicate", false).on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.command_duplicate();
-                                    cx.notify();
-                                }),
-                            ),
-                        )
-                        .child(
-                            Self::icon_tile("op-duplicate-repeat", "duplicate-repeat", false)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.command_duplicate_repeat();
-                                    cx.notify();
-                                })),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .child(
-                            Self::icon_tile("op-union", "union", false).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.command_boolean(linesweeper::BinaryOp::Union);
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .child(Self::icon_tile("op-subtract", "subtract", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.command_boolean(linesweeper::BinaryOp::Difference);
-                                cx.notify();
-                            }),
-                        ))
-                        .child(
-                            Self::icon_tile("op-intersect", "intersect", false).on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.command_boolean(linesweeper::BinaryOp::Intersection);
-                                    cx.notify();
-                                }),
-                            ),
-                        )
-                        .child(Self::icon_tile("op-exclude", "exclude", false).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.command_boolean(linesweeper::BinaryOp::Xor);
-                                cx.notify();
-                            }),
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .child(text_op("op-harmonize", "Harmonize").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.apply_curve_op(CurveOp::Harmonize);
-                                cx.notify();
-                            },
-                        )))
-                        .child(text_op("op-balance", "Balance").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.apply_curve_op(CurveOp::Balance);
-                                cx.notify();
-                            },
-                        )))
-                        .child(text_op("op-optimize", "Optimize").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.apply_curve_op(CurveOp::Optimize(0.12));
-                                cx.notify();
-                            },
-                        )))
-                        .child(text_op("op-extremes", "Extremes").on_click(cx.listener(
+        let tile = |id: &'static str, icon: &'static str| Self::icon_tile(id, icon, false);
+        let icons = c::row()
+            .child(
+                tile("op-flip-h", "flip-h").on_click(cx.listener(|this, _, _, cx| {
+                    this.apply_transform(Affine::scale_non_uniform(-1.0, 1.0));
+                    cx.notify();
+                })),
+            )
+            .child(
+                tile("op-flip-v", "flip-v").on_click(cx.listener(|this, _, _, cx| {
+                    this.apply_transform(Affine::scale_non_uniform(1.0, -1.0));
+                    cx.notify();
+                })),
+            )
+            .child(
+                tile("op-rot-ccw", "rot-ccw").on_click(cx.listener(|this, _, _, cx| {
+                    this.apply_transform(Affine::rotate(std::f64::consts::FRAC_PI_2));
+                    cx.notify();
+                })),
+            )
+            .child(
+                tile("op-rot-cw", "rot-cw").on_click(cx.listener(|this, _, _, cx| {
+                    this.apply_transform(Affine::rotate(-std::f64::consts::FRAC_PI_2));
+                    cx.notify();
+                })),
+            )
+            .child(
+                tile("op-duplicate", "duplicate").on_click(cx.listener(|this, _, _, cx| {
+                    this.command_duplicate();
+                    cx.notify();
+                })),
+            )
+            .child(
+                tile("op-duplicate-repeat", "duplicate-repeat").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.command_duplicate_repeat();
+                        cx.notify();
+                    },
+                )),
+            );
+        let booleans = c::row()
+            .child(
+                tile("op-union", "union").on_click(cx.listener(|this, _, _, cx| {
+                    this.command_boolean(linesweeper::BinaryOp::Union);
+                    cx.notify();
+                })),
+            )
+            .child(
+                tile("op-subtract", "subtract").on_click(cx.listener(|this, _, _, cx| {
+                    this.command_boolean(linesweeper::BinaryOp::Difference);
+                    cx.notify();
+                })),
+            )
+            .child(
+                tile("op-intersect", "intersect").on_click(cx.listener(|this, _, _, cx| {
+                    this.command_boolean(linesweeper::BinaryOp::Intersection);
+                    cx.notify();
+                })),
+            )
+            .child(
+                tile("op-exclude", "exclude").on_click(cx.listener(|this, _, _, cx| {
+                    this.command_boolean(linesweeper::BinaryOp::Xor);
+                    cx.notify();
+                })),
+            );
+        // Commands are verbs, two to a row, so the column reads as a
+        // list of things to do and every row fills the panel.
+        let curves = c::column()
+            .child(
+                c::row()
+                    .child(c::button("op-harmonize", "Harmonize").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply_curve_op(CurveOp::Harmonize);
+                            cx.notify();
+                        },
+                    )))
+                    .child(c::button("op-balance", "Balance").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply_curve_op(CurveOp::Balance);
+                            cx.notify();
+                        },
+                    ))),
+            )
+            .child(
+                c::row()
+                    .child(c::button("op-optimize", "Optimize").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.apply_curve_op(CurveOp::Optimize(0.12));
+                            cx.notify();
+                        },
+                    )))
+                    .child(
+                        c::button("op-extremes", "Add extremes").on_click(cx.listener(
                             |this, _, _, cx| {
                                 this.command_add_extremes();
                                 cx.notify();
                             },
-                        )))
-                        .child(text_op("op-round", "Round").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.command_round_corners();
-                                cx.notify();
-                            },
-                        )))
-                        .child(text_op("op-reverse", "Reverse").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                if let Mode::Editor(index) = this.mode {
-                                    this.push_undo_snapshot(index);
-                                    let selected = this.editor.selected.clone();
-                                    let changed = this
-                                        .font_mut()
-                                        .and_then(|f| {
-                                            f.edit_glyph(index, |g| {
-                                                runebender_core::outline::glyph_ops::reverse_contours(
-                                                    g, &selected,
-                                                )
-                                            })
+                        )),
+                    ),
+            )
+            .child(
+                c::row()
+                    .child(c::button("op-round", "Round corners").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.command_round_corners();
+                            cx.notify();
+                        },
+                    )))
+                    .child(c::button("op-reverse", "Reverse").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            if let Mode::Editor(index) = this.mode {
+                                this.push_undo_snapshot(index);
+                                let selected = this.editor.selected.clone();
+                                let changed = this
+                                    .font_mut()
+                                    .and_then(|f| {
+                                        f.edit_glyph(index, |g| {
+                                            runebender_core::outline::glyph_ops::reverse_contours(
+                                                g, &selected,
+                                            )
                                         })
-                                        .unwrap_or(false);
-                                    if !changed {
-                                        this.discard_last_undo(index);
-                                    } else {
-                                        this.editor.selected.clear();
-                                    }
+                                    })
+                                    .unwrap_or(false);
+                                if !changed {
+                                    this.discard_last_undo(index);
+                                } else {
+                                    this.editor.selected.clear();
                                 }
-                                cx.notify();
-                            },
-                        ))),
-                )
-                // Slanter: shear the selection (or the whole glyph)
-                // by an angle typed in degrees. Enter applies;
-                // positive leans right, the italic convention.
-                // Stroke: expand the selected contours (or all) into
-                // stroked outlines of the typed width.
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().text_xs().text_color(t::text_muted()).child("Slant"))
-                        .child(
-                            div()
-                                .w(px(64.0))
-                                .child(widgets::input::Input::new(&self.inputs.slant)),
-                        )
-                        .child(div().text_xs().text_color(t::text_muted()).child("Stroke"))
-                        .child(
-                            div()
-                                .w(px(64.0))
-                                .child(widgets::input::Input::new(&self.inputs.stroke)),
-                        ),
-                )
-                // Offset: the whole glyph bolder (+) or lighter (−).
-                // Extrude sweeps a shadow ("offset,angle"); Roughen
-                // flattens and jitters ("segment,h,v").
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().text_xs().text_color(t::text_muted()).child("Offset"))
-                        .child(
-                            div()
-                                .w(px(64.0))
-                                .child(widgets::input::Input::new(&self.inputs.offset)),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().text_xs().text_color(t::text_muted()).child("Extrude"))
-                        .child(
-                            div()
-                                .w(px(64.0))
-                                .child(widgets::input::Input::new(&self.inputs.extrude)),
-                        )
-                        .child(div().text_xs().text_color(t::text_muted()).child("Roughen"))
-                        .child(
-                            div()
-                                .w(px(64.0))
-                                .child(widgets::input::Input::new(&self.inputs.roughen)),
-                        ),
-                ),
+                            }
+                            cx.notify();
+                        },
+                    ))),
+            );
+        // Typed effects: the label carries the unit and the format,
+        // the field holds only the value. Enter applies.
+        let effects = c::column()
+            .child(c::field(
+                "Slant °",
+                widgets::input::Input::new(&self.inputs.slant),
+            ))
+            .child(c::field(
+                "Stroke width",
+                widgets::input::Input::new(&self.inputs.stroke),
+            ))
+            .child(c::field(
+                "Offset ±",
+                widgets::input::Input::new(&self.inputs.offset),
+            ))
+            .child(c::field(
+                "Extrude d,°",
+                widgets::input::Input::new(&self.inputs.extrude),
+            ))
+            .child(c::field(
+                "Roughen s,h,v",
+                widgets::input::Input::new(&self.inputs.roughen),
+            ));
+        self.section(
+            cx,
+            "Transformations",
+            c::column()
+                .child(icons)
+                .child(booleans)
+                .child(curves)
+                .child(effects),
         )
     }
 
     /// Curves section: the comb and continuity toggles. This is the
     /// web editor's `CurvePanel`.
     pub(crate) fn curves_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
-        let toggle = |id: &'static str,
-                      label: &'static str,
-                      active: bool,
-                      cx: &mut Context<'_, Self>,
-                      on: fn(&mut Self)| {
-            div()
-                .id(id)
-                .px_2()
-                .py_0p5()
-                .rounded(t::radius())
-                .text_sm()
-                .cursor_pointer()
-                .border(t::stroke())
-                .when(active, |el| {
-                    el.border_color(t::accent()).text_color(t::accent())
-                })
-                .when(!active, |el| {
-                    el.border_color(t::cell_border()).text_color(t::text())
-                })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    on(this);
-                    cx.notify();
-                }))
-        };
-        let body = div()
-            .flex()
-            .gap_1()
-            .child(toggle(
-                "curve-comb",
-                "Curvature comb",
-                self.curve_comb,
-                cx,
-                |this| this.curve_comb = !this.curve_comb,
-            ))
-            .child(toggle(
-                "curve-continuity",
-                "Continuity G0–G3",
-                self.curve_continuity,
-                cx,
-                |this| this.curve_continuity = !this.curve_continuity,
-            ));
-        // Fit Curve: type a percentage, Enter sets the selected
+        let toggles = c::row()
+            .child(
+                c::toggle("curve-comb", "Curvature comb", self.curve_comb).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.curve_comb = !this.curve_comb;
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                c::toggle("curve-continuity", "Continuity", self.curve_continuity).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.curve_continuity = !this.curve_continuity;
+                        cx.notify();
+                    }),
+                ),
+            );
+        // Fit curve: type a percentage, Enter sets the selected
         // segments' handles to that fraction of their maximum (100 =
         // handles at the tangent intersection), Glyphs' scale.
-        let body = div().flex().flex_col().gap_2().child(body).child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(t::text_muted())
-                        .child("Fit Curve"),
-                )
-                .child(
-                    div()
-                        .w(px(64.0))
-                        .child(widgets::input::Input::new(&self.inputs.fit)),
-                ),
-        );
+        let body = c::column().child(toggles).child(c::field(
+            "Fit curve %",
+            widgets::input::Input::new(&self.inputs.fit),
+        ));
         self.section(cx, "Curves", body)
     }
 
     /// Background section: show/send/swap/clear plus the reference
     /// glyph. This is the web editor's Background block.
     pub(crate) fn background_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
-        let button = |id: &'static str,
-                      label: &'static str,
-                      active: bool,
-                      cx: &mut Context<'_, Self>,
-                      on: fn(&mut Self)| {
-            div()
-                .id(id)
-                .px_2()
-                .py_0p5()
-                .rounded(t::radius())
-                .text_sm()
-                .cursor_pointer()
-                .border(t::stroke())
-                .when(active, |el| {
-                    el.border_color(t::accent()).text_color(t::accent())
-                })
-                .when(!active, |el| {
-                    el.border_color(t::cell_border()).text_color(t::text())
-                })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    on(this);
-                    cx.notify();
-                }))
-        };
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_1()
-                    .child(button(
-                        "bg-show",
-                        "Show background",
-                        self.show_background,
-                        cx,
-                        |this| this.show_background = !this.show_background,
-                    ))
-                    .child(button(
-                        "mark-cloud",
-                        "Mark cloud",
-                        self.show_mark_cloud,
-                        cx,
-                        |this| this.show_mark_cloud = !this.show_mark_cloud,
-                    ))
-                    .child(button("bg-send", "Send to background", false, cx, |this| {
-                        this.command_send_to_background();
-                    }))
-                    .child(button("bg-swap", "Swap", false, cx, |this| {
-                        this.command_swap_background();
-                    }))
-                    .child(button("bg-clear", "Clear", false, cx, |this| {
-                        this.command_clear_background();
-                    })),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(t::text_muted())
-                            .child("Reference"),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(widgets::input::Input::new(&self.inputs.reference_glyph)),
-                    ),
-            );
+        let body =
+            c::column()
+                .child(
+                    c::row()
+                        .child(
+                            c::toggle("bg-show", "Show background", self.show_background).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.show_background = !this.show_background;
+                                    cx.notify();
+                                }),
+                            ),
+                        )
+                        .child(
+                            c::toggle("mark-cloud", "Mark cloud", self.show_mark_cloud).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.show_mark_cloud = !this.show_mark_cloud;
+                                    cx.notify();
+                                }),
+                            ),
+                        ),
+                )
+                .child(
+                    c::row().child(c::button("bg-send", "Send to background").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.command_send_to_background();
+                            cx.notify();
+                        }),
+                    )),
+                )
+                .child(
+                    c::row()
+                        .child(c::button("bg-swap", "Swap").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.command_swap_background();
+                                cx.notify();
+                            },
+                        )))
+                        .child(c::button("bg-clear", "Clear").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.command_clear_background();
+                                cx.notify();
+                            },
+                        ))),
+                )
+                .child(c::field(
+                    "Reference",
+                    widgets::input::Input::new(&self.inputs.reference_glyph),
+                ));
         self.section(cx, "Background", body)
     }
 
