@@ -748,8 +748,9 @@ impl Workspace {
                 strength: 1.0,
                 dir: None,
                 summary: None,
-                loaded: None,
                 score: None,
+                busy: None,
+                proposal: None,
                 strength_slider: None,
             },
             inputs: InputFields {

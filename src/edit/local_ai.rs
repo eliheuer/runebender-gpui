@@ -3,15 +3,29 @@
 
 //! The local models panel: finding models on disk and running one.
 //!
-//! Model discovery under the models directory, loading, learning a
-//! weight delta from the font's own reference pairs, and applying the
-//! bolden model to a glyph.
+//! The model runtime is `font-ml`, a separate program. This shell
+//! never links it: it finds the binary, runs it over the UFO on disk,
+//! and reads the proposal layer it leaves behind. That keeps candle
+//! and its build out of the editor, and it means the command line,
+//! an agent, and this panel all get the same answer from the same
+//! tool. What the shell owns is the seam: save first, run, pull the
+//! proposal layer into the open font, and hand it to core to install
+//! or discard.
+
+use crate::PathBuf;
+use crate::Workspace;
+use gpui::SharedString;
+use runebender_core::document::proposal::{self, ProposalSummary};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::CONFIG;
-use crate::PathBuf;
-use crate::Workspace;
-use runebender_core::outline::effects::bolden_contours;
+#[cfg(not(target_family = "wasm"))]
+use gpui::Context;
+
+/// The task the panel runs. One for now; the list comes from
+/// `font-ml tasks` once there is more than one.
+pub(crate) const TASK: &str = "bolden";
+
 impl Workspace {
     /// Where a model is looked for when nobody points at one.
     ///
@@ -58,215 +72,325 @@ impl Workspace {
         found
     }
 
-    /// Load the outline model from a checkpoint directory into `models`, reporting failure in the status bar.
+    /// Where the font-ml binary is: `$RUNEBENDER_FONT_ML`, then PATH,
+    /// then `~/.cargo/bin`. None means it is not installed.
+    pub(crate) fn font_ml_binary() -> Option<PathBuf> {
+        if let Some(t) = std::env::var_os("RUNEBENDER_FONT_ML").filter(|t| !t.is_empty()) {
+            return Some(PathBuf::from(t));
+        }
+        if let Some(found) = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("font-ml"))
+                .find(|c| c.is_file())
+        }) {
+            return Some(found);
+        }
+        let home = std::env::var_os("HOME")?;
+        let cargo_bin = PathBuf::from(home).join(".cargo/bin/font-ml");
+        cargo_bin.is_file().then_some(cargo_bin)
+    }
+
+    /// Remember a model directory and describe it from its
+    /// `config.json`, without loading the weights. Loading is
+    /// font-ml's job, at run time.
     pub(crate) fn load_model(&mut self, dir: &std::path::Path) {
-        let checkpoint = match font_ml::Checkpoint::open(dir) {
-            Ok(c) => c,
+        let config = match std::fs::read_to_string(dir.join("config.json")) {
+            Ok(text) => text,
             Err(e) => {
                 self.status_note = Some(format!("Model: {e}").into());
                 return;
             }
         };
-        match font_ml::outline::OutlineModel::load(&checkpoint) {
-            Ok(model) => {
-                self.models.summary = Some(checkpoint.summary().into());
-                self.models.loaded = Some(std::rc::Rc::new(model));
-                self.models.dir = Some(dir.to_path_buf());
-                self.models.score = None;
-                self.status_note = Some("Model loaded".into());
-            }
-            Err(e) => self.status_note = Some(format!("Model: {e}").into()),
-        }
-    }
-
-    /// How much weight the other master adds, learned from glyphs
-    /// drawn in both, and the height it was measured at.
-    ///
-    /// This is the "draw the key glyphs and let them carry the rest"
-    /// workflow: draw n, o, H and O in the heavier master, and every
-    /// other glyph is asked to add what those added, from wherever it
-    /// already sits. A delta rather than one shared target, because
-    /// caps and lowercase are drawn to different weights and a single
-    /// target would flatten the difference.
-    ///
-    /// Returns `None` with one master, or when none of the reference
-    /// glyphs is drawn in both yet.
-    pub(crate) fn model_weight_delta(&self) -> Option<(f64, f64)> {
-        let project = self.project.as_ref()?;
-        if project.masters.len() < 2 {
-            return None;
-        }
-        let other = if project.active == 0 {
-            project.masters.len() - 1
-        } else {
-            0
-        };
-        let here = &project.active_font().font;
-        let there = &project.masters[other].font;
-        let height = there
-            .font_info
-            .x_height
-            .map(|v| v / 2.0)
-            .or_else(|| there.font_info.units_per_em.map(|v| *v * 0.25))
-            .unwrap_or(256.0);
-        let pairs: Vec<_> = ["n", "o", "H", "O", "i", "l", "h", "m", "u", "I", "E"]
-            .iter()
-            .filter_map(|name| {
-                let a = font_ml::ufo::glyph_ops(here.get_glyph(name)?)?;
-                let b = font_ml::ufo::glyph_ops(there.get_glyph(name)?)?;
-                Some((
-                    font_ml::stems::ops_to_path(&a),
-                    font_ml::stems::ops_to_path(&b),
-                ))
-            })
-            .collect();
-        font_ml::stems::reference_delta(&pairs, height).map(|d| (d, height))
-    }
-
-    /// Bolden the glyph at `index` with the model from `dir`, loading it first if needed, under one undo step.
-    pub(crate) fn apply_bolden(&mut self, index: usize, dir: &std::path::Path) {
-        let checkpoint = match font_ml::Checkpoint::open(dir) {
-            Ok(c) => c,
+        let parsed: serde_json::Value = match serde_json::from_str(&config) {
+            Ok(v) => v,
             Err(e) => {
-                self.status_note = Some(format!("Model: {e}").into());
+                self.status_note = Some(format!("Model: config.json: {e}").into());
                 return;
             }
         };
-        if self.models.loaded.is_none() {
-            self.load_model(dir);
-        }
-        let Some(model) = self.models.loaded.clone() else {
-            return;
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "model".into());
+        let kind = parsed
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .unwrap_or("outline");
+        let shape = match (parsed.get("layers"), parsed.get("dims")) {
+            (Some(l), Some(d)) => format!(", {l} layers × {d}"),
+            _ => String::new(),
         };
-        let Some(font) = self.font() else { return };
-        let Some(entry) = font.glyphs.get(index) else {
-            return;
-        };
-        let name = entry.name.to_string();
-        let advance = entry.advance;
-        let unicode = entry.codepoint.map(|c| c as u32);
-        let Some(glyph) = font.font.get_glyph(name.as_str()) else {
-            return;
-        };
-        let Some(ops) = font_ml::ufo::glyph_ops(glyph) else {
-            self.status_note =
-                Some("Nothing to bolden: this glyph is built from components".into());
-            return;
-        };
+        self.models.summary = Some(format!("{name}: {kind}{shape}").into());
+        self.models.dir = Some(dir.to_path_buf());
+        self.models.score = None;
+        self.status_note = Some("Model chosen".into());
+    }
 
-        let center = checkpoint
-            .config
-            .delta_center
-            .map(|c| (c[0], c[1]))
-            .unwrap_or((0, 0));
-        let mut result_override = None;
-        let predict = |strength: f64| {
-            font_ml::bolden::bolden(
-                model.as_ref(),
-                &name,
-                unicode,
-                advance,
-                &ops,
-                center,
-                checkpoint.config.trim_close,
-                strength,
-            )
-        };
-        let result = match predict(self.models.strength) {
-            Ok(r) => r,
-            Err(e) => {
-                self.status_note = Some(format!("Bolden: {e}").into());
-                return;
-            }
-        };
-        // The model is better at shape than at weight, so where the
-        // other master is drawn far enough to say what weight it
-        // carries, land on that instead of on the slider. Measured on
-        // Virtua this took stems from 46 units out to 40, and glyphs
-        // at the right weight from 1 in 11 to 5.
-        let mut fitted_to: Option<f64> = None;
-        if let Some((delta, height)) = self.model_weight_delta() {
-            let from_path = font_ml::stems::ops_to_path(&result.from);
-            let want =
-                font_ml::stems::target_from_delta(&from_path, delta, height).and_then(|target| {
-                    font_ml::stems::fit_strength(
-                        &from_path,
-                        &font_ml::stems::ops_to_path(&result.to),
-                        target,
-                        height,
+    /// What the active master has waiting from the panel's task.
+    pub(crate) fn refresh_proposal(&mut self) {
+        self.models.proposal = self
+            .font()
+            .and_then(|f| proposal::find(&f.font, TASK).ok())
+            .filter(|p| !p.glyphs.is_empty());
+    }
+
+    /// Pull a proposal layer from the UFO on disk into the open font,
+    /// replacing any earlier proposal for the task. font-ml wrote it;
+    /// the in-memory font has not seen it yet.
+    fn adopt_proposal_from_disk(
+        &mut self,
+        source: &std::path::Path,
+    ) -> Result<ProposalSummary, String> {
+        let on_disk = norad::Font::load(source).map_err(|e| e.to_string())?;
+        let layer_name = proposal::layer_name(TASK);
+        let glyphs: Vec<norad::Glyph> = on_disk
+            .layers
+            .get(&layer_name)
+            .map(|l| l.iter().cloned().collect())
+            .unwrap_or_default();
+        if glyphs.is_empty() {
+            return Err(format!("font-ml left no {layer_name} layer"));
+        }
+        let font = self.font_mut().ok_or("no font open")?;
+        font.font.layers.remove(&layer_name);
+        let summary = proposal::write(&mut font.font, TASK, glyphs).map_err(|e| e.to_string())?;
+        font.dirty = true;
+        Ok(summary)
+    }
+
+    /// Install the waiting proposal: one undo step per glyph.
+    pub(crate) fn install_proposal(&mut self, only: Option<Vec<String>>) {
+        let result = self
+            .font_mut()
+            .map(|f| f.install_proposal(TASK, only.as_deref(), true));
+        match result {
+            Some(Ok(done)) => {
+                self.journal(
+                    "install proposal",
+                    None,
+                    Some(format!(
+                        "{}: {} installed, {} skipped",
+                        done.task,
+                        done.installed.len(),
+                        done.skipped.len()
+                    )),
+                );
+                self.status_note = Some(
+                    format!(
+                        "Installed {} glyphs from {}{}. Undo takes them back one at a time.",
+                        done.installed.len(),
+                        done.task,
+                        if done.skipped.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", {} skipped", done.skipped.len())
+                        }
                     )
-                });
-            if let Some(want) = want.filter(|s| s.is_finite() && *s > 0.25 && *s < 4.0)
-                && let Ok(refit) = predict(want)
-                && refit.is_compatible()
-            {
-                fitted_to = Some(want);
-                result_override = Some(refit);
+                    .into(),
+                );
+                if let (Some(index), Some(font)) = (self.selected, self.font_mut()) {
+                    font.rebuild_entry(index);
+                }
             }
+            Some(Err(e)) => self.status_note = Some(format!("{e}").into()),
+            None => {}
         }
-        let result = result_override.unwrap_or(result);
-        // The encoding guarantees this; assert it before writing to a
-        // font rather than take it on trust.
-        if !result.is_compatible() {
-            self.status_note = Some("Refused: the prediction changed the point structure".into());
-            return;
-        }
+        self.refresh_proposal();
+    }
 
-        let expected = glyph
-            .contours
-            .iter()
-            .map(|c| c.points.len() + 1)
-            .sum::<usize>();
-        if result.deltas.len() != expected {
+    /// Drop the waiting proposal without installing it.
+    pub(crate) fn discard_proposal(&mut self) {
+        let result = self.font_mut().map(|f| f.discard_proposal(TASK));
+        match result {
+            Some(Ok(n)) => self.status_note = Some(format!("Discarded {n} proposed glyphs").into()),
+            Some(Err(e)) => self.status_note = Some(format!("{e}").into()),
+            None => {}
+        }
+        self.refresh_proposal();
+    }
+
+    /// Run the task with font-ml over the open master. `glyph` names
+    /// one glyph, which is installed as soon as it arrives (undo to
+    /// reject); None runs every drawn glyph and leaves the result
+    /// waiting in the panel to install or discard.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn run_task(&mut self, glyph: Option<usize>, cx: &mut Context<'_, Self>) {
+        let Some(model) = self.models.dir.clone() else {
+            self.status_note = Some("Choose a model first".into());
+            return;
+        };
+        let Some(font_ml) = Self::font_ml_binary() else {
             self.status_note = Some(
-                format!(
-                    "Refused: model returned {} offsets for {expected} points",
-                    result.deltas.len()
-                )
-                .into(),
+                "font-ml not found: cargo install --git https://github.com/eliheuer/font-ml, \
+                 or set RUNEBENDER_FONT_ML"
+                    .into(),
             );
             return;
+        };
+        if self.models.busy.is_some() {
+            self.status_note = Some("A model is already running".into());
+            return;
         }
-        let contours = bolden_contours(glyph, &result.deltas, center);
-        let moved = result
-            .deltas
-            .iter()
-            .filter(|(x, y)| *x != 0 || *y != 0)
-            .count();
-        self.push_undo_snapshot(index);
-        self.font_mut().and_then(|f| {
-            f.edit_glyph(index, |g| {
-                g.contours = contours.clone();
-            })
+        // font-ml reads the UFO on disk, so what is on disk has to be
+        // what is on screen.
+        if self.font().is_some_and(|f| f.dirty) {
+            self.command_save(cx);
+        }
+        let Some(project) = self.project.as_ref() else {
+            return;
+        };
+        let active = project.active_font();
+        let source = active.source_path.clone();
+        if !source.is_dir() {
+            self.status_note = Some("Save the font before running a model".into());
+            return;
+        }
+        let glyph_name = glyph.and_then(|i| active.glyphs.get(i).map(|g| g.name.to_string()));
+        if glyph.is_some() && glyph_name.is_none() {
+            return;
+        }
+        // The other master, where it says what weight it carries.
+        let reference = (project.masters.len() > 1).then(|| {
+            let other = if project.active == 0 {
+                project.masters.len() - 1
+            } else {
+                0
+            };
+            project.masters[other].source_path.clone()
         });
-        self.editor.selected.clear();
-        // A model's output is the edit most worth having a record of:
-        // it is the one nobody watched being made.
-        self.journal(
-            "bolden with model",
-            Some(index),
-            Some(format!(
-                "{moved}/{} points moved, advance {:+}{}",
-                result.deltas.len(),
-                result.advance_delta,
-                match fitted_to {
-                    Some(s) => format!(", strength fitted to {s:.2}"),
-                    None => String::new(),
+        let strength = self.models.strength;
+        let label: SharedString = match &glyph_name {
+            Some(name) => format!("Boldening {name}…").into(),
+            None => "Proposing a Bold master… this takes a while".into(),
+        };
+        self.models.busy = Some(label.clone());
+        self.status_note = Some(label);
+        cx.spawn(async move |this, cx| {
+            let result: Result<serde_json::Value, String> = cx
+                .background_executor()
+                .spawn({
+                    let source = source.clone();
+                    async move {
+                        let mut cmd = std::process::Command::new(&font_ml);
+                        cmd.arg("run")
+                            .arg(TASK)
+                            .arg("--model")
+                            .arg(&model)
+                            .arg("--source")
+                            .arg(&source)
+                            .arg("--strength")
+                            .arg(format!("{strength}"))
+                            .arg("--write")
+                            .arg("--json");
+                        match &glyph_name {
+                            Some(name) => {
+                                cmd.arg("--glyph").arg(name);
+                            }
+                            None => {
+                                cmd.arg("--all");
+                            }
+                        }
+                        if let Some(reference) = &reference {
+                            cmd.arg("--reference").arg(reference);
+                        }
+                        let output = cmd.output().map_err(|e| format!("{e}"))?;
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let report: serde_json::Value = stdout
+                            .lines()
+                            .rev()
+                            .find_map(|l| serde_json::from_str(l).ok())
+                            .unwrap_or(serde_json::Value::Null);
+                        if output.status.success() {
+                            Ok(report)
+                        } else {
+                            Err(report
+                                .get("error")
+                                .and_then(|e| e.as_str())
+                                .map(str::to_string)
+                                .unwrap_or_else(|| {
+                                    String::from_utf8_lossy(&output.stderr).trim().to_string()
+                                }))
+                        }
+                    }
+                })
+                .await;
+            this.update(cx, |workspace, cx| {
+                workspace.models.busy = None;
+                match result {
+                    Ok(report) => workspace.task_finished(&source, glyph, &report),
+                    Err(e) => workspace.status_note = Some(format!("font-ml: {e}").into()),
                 }
-            )),
-        );
-        self.status_note = Some(
-            format!(
-                "Boldened {name}: {moved}/{} points moved, advance {:+}{}. \
-                 Undo to reject.",
-                result.deltas.len(),
-                result.advance_delta,
-                match fitted_to {
-                    Some(s) => format!(", fitted to {s:.2}x"),
-                    None => String::new(),
-                }
-            )
-            .into(),
-        );
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// What happens when font-ml comes back: the proposal layer is
+    /// adopted from disk, and a single glyph is installed at once.
+    #[cfg(not(target_family = "wasm"))]
+    fn task_finished(
+        &mut self,
+        source: &std::path::Path,
+        glyph: Option<usize>,
+        report: &serde_json::Value,
+    ) {
+        let summary = match self.adopt_proposal_from_disk(source) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status_note = Some(format!("font-ml: {e}").into());
+                return;
+            }
+        };
+        match glyph {
+            Some(index) => {
+                let name = self
+                    .font()
+                    .and_then(|f| f.glyphs.get(index).map(|g| g.name.to_string()));
+                let moved = report.get("moved").and_then(|v| v.as_u64()).unwrap_or(0);
+                let points = report.get("points").and_then(|v| v.as_u64()).unwrap_or(0);
+                let advance = report
+                    .get("advance_delta")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                self.install_proposal(name.clone().map(|n| vec![n]));
+                self.editor.selected.clear();
+                // A model's output is the edit most worth having a
+                // record of: it is the one nobody watched being made.
+                self.journal(
+                    "bolden with model",
+                    Some(index),
+                    Some(format!(
+                        "{moved}/{points} points moved, advance {advance:+}"
+                    )),
+                );
+                self.status_note = Some(
+                    format!(
+                        "Boldened {}: {moved}/{points} points moved, advance {advance:+}. \
+                         Undo to reject.",
+                        name.unwrap_or_default()
+                    )
+                    .into(),
+                );
+            }
+            None => {
+                self.status_note = Some(
+                    format!(
+                        "{} glyphs proposed ({} keep structure). Install or discard in the panel.",
+                        summary.glyphs.len(),
+                        summary.compatible.len()
+                    )
+                    .into(),
+                );
+                self.refresh_proposal();
+            }
+        }
+    }
+
+    /// In the browser there is no process to run.
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn run_task(&mut self, _glyph: Option<usize>, _cx: &mut gpui::Context<'_, Self>) {
+        self.status_note = Some("Local models run in the desktop app".into());
     }
 }

@@ -136,14 +136,88 @@ impl Workspace {
                 })
                 .on_click(cx.listener(|this, _, _, cx| {
                     if let Mode::Editor(index) = this.mode {
-                        let dir = this.models.dir.clone();
-                        if let Some(dir) = dir {
-                            this.apply_bolden(index, &dir);
-                            cx.notify();
-                        }
+                        this.run_task(Some(index), cx);
+                        cx.notify();
                     }
                 })),
         );
+
+        // The whole master at once. The result waits as a proposal
+        // layer until it is installed or discarded, because a font's
+        // worth of edits is not something to land unasked.
+        let has_font = self.project.is_some();
+        let body = body.child(
+            div()
+                .id("ai-run-all")
+                .px_1()
+                .py_0p5()
+                .border(t::stroke())
+                .border_color(t::panel_outline())
+                .cursor_pointer()
+                .text_xs()
+                .text_color(if has_font { t::text() } else { t::text_muted() })
+                .child("Propose Bold master")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.run_task(None, cx);
+                    cx.notify();
+                })),
+        );
+
+        let body = match &self.models.busy {
+            Some(note) => body.child(div().text_xs().text_color(t::accent()).child(note.clone())),
+            None => body,
+        };
+
+        // A proposal waiting: what it holds, and the two answers.
+        let body = match &self.models.proposal {
+            Some(p) => body
+                .child(div().text_xs().text_color(t::text()).child(format!(
+                    "{} proposed: {} glyphs, {} keep structure",
+                    p.task,
+                    p.glyphs.len(),
+                    p.compatible.len()
+                )))
+                .child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .id("ai-install")
+                                .flex_1()
+                                .px_1()
+                                .py_0p5()
+                                .border(t::stroke())
+                                .border_color(t::accent())
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(t::accent())
+                                .child("Install")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.install_proposal(None);
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("ai-discard")
+                                .flex_1()
+                                .px_1()
+                                .py_0p5()
+                                .border(t::stroke())
+                                .border_color(t::panel_outline())
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(t::text_muted())
+                                .child("Discard")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.discard_proposal();
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+            None => body,
+        };
 
         // The judgement, when there is another master to judge against.
         let body = body.child(
@@ -158,7 +232,7 @@ impl Workspace {
                 .text_color(t::text_muted())
                 .child("Score against the other master")
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.command_score_model();
+                    this.command_score_model(cx);
                     cx.notify();
                 })),
         );

@@ -56,6 +56,7 @@ impl Workspace {
         self.sessions.clear();
         self.active_session = 0;
         self.project = Some(Project::new_font(path));
+        self.refresh_proposal();
         self.mode = Mode::Grid;
         self.selected = None;
         self.grid.multi_selected.clear();

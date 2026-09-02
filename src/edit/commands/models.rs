@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Local models: choosing, scoring, and running the bolden model.
+//!
+//! Every model call goes through the `font-ml` binary; see
+//! `edit/local_ai.rs` for why.
 
 use crate::Mode;
 use crate::Workspace;
@@ -33,15 +36,17 @@ impl Workspace {
 
     /// Score the model on the open glyph against the master furthest
     /// from the active one, which is the one it is trying to predict.
-    pub(crate) fn command_score_model(&mut self) {
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn command_score_model(&mut self, cx: &mut Context<'_, Self>) {
         let Mode::Editor(index) = self.mode else {
             self.status_note = Some("Open a glyph first".into());
             return;
         };
-        let Some(dir) = self.models.dir.clone() else {
+        let Some(model) = self.models.dir.clone() else {
             return;
         };
-        let Ok(checkpoint) = font_ml::Checkpoint::open(&dir) else {
+        let Some(font_ml) = Self::font_ml_binary() else {
+            self.status_note = Some("font-ml not found".into());
             return;
         };
         let Some(project) = self.project.as_ref() else {
@@ -60,64 +65,97 @@ impl Workspace {
             return;
         };
         let name = entry.name.to_string();
-        let advance = entry.advance;
-        let unicode = entry.codepoint.map(|c| c as u32);
-        let (Some(from), Some(actual)) = (
-            project.active_font().font.get_glyph(name.as_str()),
-            project.masters[target].font.get_glyph(name.as_str()),
-        ) else {
-            return;
-        };
-        let (Some(from_ops), Some(actual_ops)) = (
-            font_ml::ufo::glyph_ops(from),
-            font_ml::ufo::glyph_ops(actual),
-        ) else {
-            self.status_note = Some("No outline to score".into());
-            return;
-        };
-        let Some(model) = self.models.loaded.clone() else {
-            return;
-        };
-        let center = checkpoint
-            .config
-            .delta_center
-            .map(|c| (c[0], c[1]))
-            .unwrap_or((0, 0));
-        let Ok(result) = font_ml::bolden::bolden(
-            &model,
-            &name,
-            unicode,
-            advance,
-            &from_ops,
-            center,
-            checkpoint.config.trim_close,
-            self.models.strength,
-        ) else {
-            return;
-        };
-        let score = font_ml::eval::score(
-            &name,
-            &result.to,
-            &actual_ops,
-            &result.from,
-            (center.0 as f64, center.1 as f64),
-        );
-        if score.model.is_nan() {
-            self.status_note = Some("Masters are not point-compatible here".into());
-            return;
-        }
-        self.status_note = Some(
-            format!(
-                "{name}: model {:.1}, mean-shift {:.1}",
-                score.model, score.baseline
-            )
-            .into(),
-        );
-        self.models.score = Some((name.into(), score.model, score.baseline));
+        let regular = project.active_font().source_path.clone();
+        let bold = project.masters[target].source_path.clone();
+        let strength = self.models.strength;
+        self.status_note = Some(format!("Scoring {name}…").into());
+        cx.spawn(async move |this, cx| {
+            let result: Result<serde_json::Value, String> = cx
+                .background_executor()
+                .spawn({
+                    let name = name.clone();
+                    async move {
+                        let output = std::process::Command::new(&font_ml)
+                            .arg("eval")
+                            .arg("--model")
+                            .arg(&model)
+                            .arg("--regular")
+                            .arg(&regular)
+                            .arg("--bold")
+                            .arg(&bold)
+                            .arg("--glyphs")
+                            .arg(&name)
+                            .arg("--strength")
+                            .arg(format!("{strength}"))
+                            .arg("--json")
+                            .output()
+                            .map_err(|e| format!("{e}"))?;
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let report: serde_json::Value = stdout
+                            .lines()
+                            .rev()
+                            .find_map(|l| serde_json::from_str(l).ok())
+                            .unwrap_or(serde_json::Value::Null);
+                        if output.status.success() {
+                            Ok(report)
+                        } else {
+                            Err(report
+                                .get("error")
+                                .and_then(|e| e.as_str())
+                                .unwrap_or("eval failed")
+                                .to_string())
+                        }
+                    }
+                })
+                .await;
+            this.update(cx, |workspace, cx| {
+                match result {
+                    Ok(report) => {
+                        let row = report
+                            .get("per_glyph")
+                            .and_then(|g| g.as_array())
+                            .and_then(|g| g.first())
+                            .cloned();
+                        let model = row
+                            .as_ref()
+                            .and_then(|r| r.get("model"))
+                            .and_then(|v| v.as_f64());
+                        let baseline = row
+                            .as_ref()
+                            .and_then(|r| r.get("baseline"))
+                            .and_then(|v| v.as_f64());
+                        match (model, baseline) {
+                            (Some(model), Some(baseline)) => {
+                                workspace.status_note = Some(
+                                    format!("{name}: model {model:.1}, mean-shift {baseline:.1}")
+                                        .into(),
+                                );
+                                workspace.models.score =
+                                    Some((name.clone().into(), model, baseline));
+                            }
+                            _ => {
+                                workspace.status_note =
+                                    Some("Masters are not point-compatible here".into());
+                            }
+                        }
+                    }
+                    Err(e) => workspace.status_note = Some(format!("font-ml: {e}").into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// In the browser there is no process to run.
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn command_score_model(&mut self, _cx: &mut Context<'_, Self>) {
+        self.status_note = Some("Local models run in the desktop app".into());
     }
 
     /// Glyph > Bolden With Model…: pick a model directory, predict a
-    /// heavier version of the open glyph, and install it as a proposal.
+    /// heavier version of the open glyph, and install it.
     ///
     /// The prediction is structure-forced: the model may only move the
     /// points that are already there, so the result stays
@@ -143,7 +181,8 @@ impl Workspace {
                 return;
             };
             this.update(cx, |workspace, cx| {
-                workspace.apply_bolden(index, &dir);
+                workspace.load_model(&dir);
+                workspace.run_task(Some(index), cx);
                 cx.notify();
             })
             .ok();

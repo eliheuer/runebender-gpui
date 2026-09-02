@@ -705,10 +705,12 @@ pub(crate) struct ModelsState {
     pub(crate) dir: Option<PathBuf>,
     /// What the directory says it is, for the panel.
     pub(crate) summary: Option<SharedString>,
-    /// Loaded weights. Cached: reading them is the slow part.
-    pub(crate) loaded: Option<std::rc::Rc<font_ml::outline::OutlineModel>>,
     /// Last judgement: glyph, model error, baseline error.
     pub(crate) score: Option<(SharedString, f64, f64)>,
+    /// What font-ml is doing right now, while it runs.
+    pub(crate) busy: Option<SharedString>,
+    /// The proposal waiting in the active master, if any.
+    pub(crate) proposal: Option<runebender_core::document::proposal::ProposalSummary>,
     /// The strength slider, built lazily in render.
     pub(crate) strength_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
 }

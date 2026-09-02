@@ -128,6 +128,7 @@ impl Workspace {
                         workspace.active_session = 0;
                         workspace.last_editor = None;
                         workspace.project = Some(project);
+                        workspace.refresh_proposal();
                         workspace.sidebar.counts = None;
                         workspace.load_error = None;
                         workspace.mode = Mode::Grid;
@@ -289,6 +290,7 @@ impl Workspace {
                         workspace.active_session = 0;
                         workspace.last_editor = None;
                         workspace.project = Some(project);
+                        workspace.refresh_proposal();
                         workspace.sidebar.counts = None;
                         workspace.load_error = None;
                         workspace.mode = Mode::Grid;
