@@ -111,113 +111,155 @@ impl Workspace {
         };
 
         let in_editor = matches!(self.mode, Mode::Editor(_));
-        let body = body.child(
-            div()
-                .id("ai-run")
-                .px_1()
-                .py_0p5()
-                .border(t::stroke())
-                .border_color(if in_editor {
-                    t::accent()
-                } else {
-                    t::panel_outline()
-                })
-                .cursor_pointer()
-                .text_xs()
-                .text_color(if in_editor {
-                    t::text()
-                } else {
-                    t::text_muted()
-                })
-                .child(if in_editor {
-                    "Bolden this glyph"
-                } else {
-                    "Open a glyph to run"
-                })
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Mode::Editor(index) = this.mode {
-                        this.run_task(Some(index), cx);
-                        cx.notify();
-                    }
-                })),
-        );
-
-        // The whole master at once. The result waits as a proposal
-        // layer until it is installed or discarded, because a font's
-        // worth of edits is not something to land unasked.
         let has_font = self.project.is_some();
-        let body = body.child(
-            div()
-                .id("ai-run-all")
-                .px_1()
-                .py_0p5()
-                .border(t::stroke())
-                .border_color(t::panel_outline())
-                .cursor_pointer()
-                .text_xs()
-                .text_color(if has_font { t::text() } else { t::text_muted() })
-                .child("Propose Bold master")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.run_task(None, cx);
-                    cx.notify();
-                })),
-        );
+
+        // One row per task font-ml says it runs. The list comes from
+        // the tool, so a task it gains appears here with no change to
+        // this file. "This glyph" installs at once, undo to reject;
+        // "every glyph" leaves a proposal waiting below.
+        let tasks: Vec<crate::edit::local_ai::TaskRow> = self
+            .models
+            .tasks
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| t.implemented)
+            .collect();
+        let body = if self.models.tasks.is_none() {
+            body.child(div().text_xs().text_color(t::text_muted()).child(
+                if Self::font_ml_binary().is_some() {
+                    "Asking font-ml what it can do…"
+                } else {
+                    "font-ml not found. cargo install --git \
+                         https://github.com/eliheuer/font-ml, or set RUNEBENDER_FONT_ML."
+                },
+            ))
+        } else if tasks.is_empty() {
+            body.child(
+                div()
+                    .text_xs()
+                    .text_color(t::text_muted())
+                    .child("font-ml has no task built yet"),
+            )
+        } else {
+            tasks.into_iter().fold(body, |el, task| {
+                let name = task.name.clone();
+                let one = task.takes_glyph();
+                let all = task.takes_glyphs();
+                let row = div().flex().gap_1();
+                let row = if one {
+                    let name = name.clone();
+                    row.child(
+                        div()
+                            .id(SharedString::from(format!("ai-run-{}", task.name)))
+                            .flex_1()
+                            .px_1()
+                            .py_0p5()
+                            .border(t::stroke())
+                            .border_color(if in_editor {
+                                t::accent()
+                            } else {
+                                t::panel_outline()
+                            })
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(if in_editor {
+                                t::text()
+                            } else {
+                                t::text_muted()
+                            })
+                            .child(format!("{}: this glyph", task.title))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Mode::Editor(index) = this.mode {
+                                    this.run_task(&name, Some(index), cx);
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                } else {
+                    row
+                };
+                let row = if all {
+                    let name = name.clone();
+                    row.child(
+                        div()
+                            .id(SharedString::from(format!("ai-run-all-{}", task.name)))
+                            .flex_1()
+                            .px_1()
+                            .py_0p5()
+                            .border(t::stroke())
+                            .border_color(t::panel_outline())
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(if has_font { t::text() } else { t::text_muted() })
+                            .child(format!("{}: every glyph", task.title))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.run_task(&name, None, cx);
+                                cx.notify();
+                            })),
+                    )
+                } else {
+                    row
+                };
+                el.child(row)
+            })
+        };
 
         let body = match &self.models.busy {
             Some(note) => body.child(div().text_xs().text_color(t::accent()).child(note.clone())),
             None => body,
         };
 
-        // A proposal waiting: what it holds, and the two answers.
-        let body = match &self.models.proposal {
-            Some(p) => body
-                .child(div().text_xs().text_color(t::text()).child(format!(
-                    "{} proposed: {} glyphs, {} keep structure",
-                    p.task,
-                    p.glyphs.len(),
-                    p.compatible.len()
-                )))
-                .child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .id("ai-install")
-                                .flex_1()
-                                .px_1()
-                                .py_0p5()
-                                .border(t::stroke())
-                                .border_color(t::accent())
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(t::accent())
-                                .child("Install")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.install_proposal(None);
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id("ai-discard")
-                                .flex_1()
-                                .px_1()
-                                .py_0p5()
-                                .border(t::stroke())
-                                .border_color(t::panel_outline())
-                                .cursor_pointer()
-                                .text_xs()
-                                .text_color(t::text_muted())
-                                .child("Discard")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.discard_proposal();
-                                    cx.notify();
-                                })),
-                        ),
-                ),
-            None => body,
-        };
+        // Proposals waiting: what each holds, and the two answers.
+        let body = self.models.proposals.iter().fold(body, |el, p| {
+            let install_task = p.task.clone();
+            let discard_task = p.task.clone();
+            el.child(div().text_xs().text_color(t::text()).child(format!(
+                "{} proposed: {} glyphs, {} keep structure",
+                p.task,
+                p.glyphs.len(),
+                p.compatible.len()
+            )))
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("ai-install-{}", p.task)))
+                            .flex_1()
+                            .px_1()
+                            .py_0p5()
+                            .border(t::stroke())
+                            .border_color(t::accent())
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(t::accent())
+                            .child("Install")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.install_proposal(&install_task, None);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("ai-discard-{}", p.task)))
+                            .flex_1()
+                            .px_1()
+                            .py_0p5()
+                            .border(t::stroke())
+                            .border_color(t::panel_outline())
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(t::text_muted())
+                            .child("Discard")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.discard_proposal(&discard_task);
+                                cx.notify();
+                            })),
+                    ),
+            )
+        });
 
         // The judgement, when there is another master to judge against.
         let body = body.child(

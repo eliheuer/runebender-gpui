@@ -22,9 +22,64 @@ use crate::CONFIG;
 #[cfg(not(target_family = "wasm"))]
 use gpui::Context;
 
-/// The task the panel runs. One for now; the list comes from
-/// `font-ml tasks` once there is more than one.
-pub(crate) const TASK: &str = "bolden";
+/// One task as `font-ml tasks --json` describes it. The shell keeps
+/// only what a row needs; the full spec and its schema stay with the
+/// tool. No task name is written in this crate: a task font-ml adds
+/// shows up here without a shell change.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub(crate) struct TaskRow {
+    /// The name `font-ml run` takes.
+    pub(crate) name: String,
+    /// One line for the button.
+    pub(crate) title: String,
+    /// A few lines for a tooltip.
+    #[serde(default)]
+    pub(crate) help: String,
+    /// Whether the installed font-ml runs it.
+    #[serde(default)]
+    pub(crate) implemented: bool,
+    /// What it takes, by name and kind.
+    #[serde(default)]
+    pub(crate) inputs: Vec<TaskInput>,
+}
+
+/// One input of a task, by name and kind.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub(crate) struct TaskInput {
+    /// The flag name.
+    pub(crate) name: String,
+    /// The kind, as font-ml names it: source, model, glyph, glyphs,
+    /// number, flag, text.
+    pub(crate) kind: String,
+}
+
+impl TaskRow {
+    /// The rows in a `font-ml tasks --json` answer, in the tool's
+    /// order. A malformed answer is an empty list, not a crash.
+    pub(crate) fn parse(json: &str) -> Vec<TaskRow> {
+        let value: serde_json::Value = match serde_json::from_str(json) {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+        value
+            .get("tasks")
+            .and_then(|t| serde_json::from_value(t.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    /// Whether the task takes a set of glyphs, so "every drawn glyph"
+    /// is a call it understands.
+    pub(crate) fn takes_glyphs(&self) -> bool {
+        self.inputs.iter().any(|i| i.kind == "glyphs")
+    }
+
+    /// Whether the task takes one glyph, so "this glyph" is a call.
+    pub(crate) fn takes_glyph(&self) -> bool {
+        self.inputs
+            .iter()
+            .any(|i| i.kind == "glyph" || i.kind == "glyphs")
+    }
+}
 
 impl Workspace {
     /// Where a model is looked for when nobody points at one.
@@ -126,12 +181,55 @@ impl Workspace {
         self.status_note = Some("Model chosen".into());
     }
 
-    /// What the active master has waiting from the panel's task.
+    /// Ask font-ml what it can do, once. The rows arrive later and the
+    /// panel redraws with them.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn load_tasks(&mut self, cx: &mut Context<'_, Self>) {
+        if self.models.tasks_asked {
+            return;
+        }
+        self.models.tasks_asked = true;
+        let Some(font_ml) = Self::font_ml_binary() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let rows: Vec<TaskRow> = cx
+                .background_executor()
+                .spawn(async move {
+                    std::process::Command::new(&font_ml)
+                        .arg("tasks")
+                        .arg("--json")
+                        .output()
+                        .ok()
+                        .map(|o| TaskRow::parse(&String::from_utf8_lossy(&o.stdout)))
+                        .unwrap_or_default()
+                })
+                .await;
+            this.update(cx, |workspace, cx| {
+                workspace.models.tasks = Some(rows);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// In the browser there is no process to ask.
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn load_tasks(&mut self, _cx: &mut gpui::Context<'_, Self>) {
+        self.models.tasks_asked = true;
+        self.models.tasks = Some(Vec::new());
+    }
+
+    /// What the active master has waiting, from any task.
     pub(crate) fn refresh_proposal(&mut self) {
-        self.models.proposal = self
+        self.models.proposals = self
             .font()
-            .and_then(|f| proposal::find(&f.font, TASK).ok())
-            .filter(|p| !p.glyphs.is_empty());
+            .map(|f| proposal::list(&f.font))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| !p.glyphs.is_empty())
+            .collect();
     }
 
     /// Pull a proposal layer from the UFO on disk into the open font,
@@ -139,10 +237,11 @@ impl Workspace {
     /// the in-memory font has not seen it yet.
     fn adopt_proposal_from_disk(
         &mut self,
+        task: &str,
         source: &std::path::Path,
     ) -> Result<ProposalSummary, String> {
         let on_disk = norad::Font::load(source).map_err(|e| e.to_string())?;
-        let layer_name = proposal::layer_name(TASK);
+        let layer_name = proposal::layer_name(task);
         let glyphs: Vec<norad::Glyph> = on_disk
             .layers
             .get(&layer_name)
@@ -153,16 +252,16 @@ impl Workspace {
         }
         let font = self.font_mut().ok_or("no font open")?;
         font.font.layers.remove(&layer_name);
-        let summary = proposal::write(&mut font.font, TASK, glyphs).map_err(|e| e.to_string())?;
+        let summary = proposal::write(&mut font.font, task, glyphs).map_err(|e| e.to_string())?;
         font.dirty = true;
         Ok(summary)
     }
 
-    /// Install the waiting proposal: one undo step per glyph.
-    pub(crate) fn install_proposal(&mut self, only: Option<Vec<String>>) {
+    /// Install a waiting proposal: one undo step per glyph.
+    pub(crate) fn install_proposal(&mut self, task: &str, only: Option<Vec<String>>) {
         let result = self
             .font_mut()
-            .map(|f| f.install_proposal(TASK, only.as_deref(), true));
+            .map(|f| f.install_proposal(task, only.as_deref(), true));
         match result {
             Some(Ok(done)) => {
                 self.journal(
@@ -198,9 +297,9 @@ impl Workspace {
         self.refresh_proposal();
     }
 
-    /// Drop the waiting proposal without installing it.
-    pub(crate) fn discard_proposal(&mut self) {
-        let result = self.font_mut().map(|f| f.discard_proposal(TASK));
+    /// Drop a waiting proposal without installing it.
+    pub(crate) fn discard_proposal(&mut self, task: &str) {
+        let result = self.font_mut().map(|f| f.discard_proposal(task));
         match result {
             Some(Ok(n)) => self.status_note = Some(format!("Discarded {n} proposed glyphs").into()),
             Some(Err(e)) => self.status_note = Some(format!("{e}").into()),
@@ -214,7 +313,13 @@ impl Workspace {
     /// reject); None runs every drawn glyph and leaves the result
     /// waiting in the panel to install or discard.
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn run_task(&mut self, glyph: Option<usize>, cx: &mut Context<'_, Self>) {
+    pub(crate) fn run_task(
+        &mut self,
+        task: &str,
+        glyph: Option<usize>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let task = task.to_string();
         let Some(model) = self.models.dir.clone() else {
             self.status_note = Some("Choose a model first".into());
             return;
@@ -260,8 +365,8 @@ impl Workspace {
         });
         let strength = self.models.strength;
         let label: SharedString = match &glyph_name {
-            Some(name) => format!("Boldening {name}…").into(),
-            None => "Proposing a Bold master… this takes a while".into(),
+            Some(name) => format!("Running {task} on {name}…").into(),
+            None => format!("Running {task} on every glyph… this takes a while").into(),
         };
         self.models.busy = Some(label.clone());
         self.status_note = Some(label);
@@ -270,10 +375,11 @@ impl Workspace {
                 .background_executor()
                 .spawn({
                     let source = source.clone();
+                    let task = task.clone();
                     async move {
                         let mut cmd = std::process::Command::new(&font_ml);
                         cmd.arg("run")
-                            .arg(TASK)
+                            .arg(&task)
                             .arg("--model")
                             .arg(&model)
                             .arg("--source")
@@ -317,7 +423,7 @@ impl Workspace {
             this.update(cx, |workspace, cx| {
                 workspace.models.busy = None;
                 match result {
-                    Ok(report) => workspace.task_finished(&source, glyph, &report),
+                    Ok(report) => workspace.task_finished(&task, &source, glyph, &report),
                     Err(e) => workspace.status_note = Some(format!("font-ml: {e}").into()),
                 }
                 cx.notify();
@@ -332,11 +438,12 @@ impl Workspace {
     #[cfg(not(target_family = "wasm"))]
     fn task_finished(
         &mut self,
+        task: &str,
         source: &std::path::Path,
         glyph: Option<usize>,
         report: &serde_json::Value,
     ) {
-        let summary = match self.adopt_proposal_from_disk(source) {
+        let summary = match self.adopt_proposal_from_disk(task, source) {
             Ok(s) => s,
             Err(e) => {
                 self.status_note = Some(format!("font-ml: {e}").into());
@@ -354,12 +461,12 @@ impl Workspace {
                     .get("advance_delta")
                     .and_then(|v| v.as_i64())
                     .unwrap_or(0);
-                self.install_proposal(name.clone().map(|n| vec![n]));
+                self.install_proposal(task, name.clone().map(|n| vec![n]));
                 self.editor.selected.clear();
                 // A model's output is the edit most worth having a
                 // record of: it is the one nobody watched being made.
                 self.journal(
-                    "bolden with model",
+                    "run model task",
                     Some(index),
                     Some(format!(
                         "{moved}/{points} points moved, advance {advance:+}"
@@ -367,7 +474,7 @@ impl Workspace {
                 );
                 self.status_note = Some(
                     format!(
-                        "Boldened {}: {moved}/{points} points moved, advance {advance:+}. \
+                        "{task} on {}: {moved}/{points} points moved, advance {advance:+}. \
                          Undo to reject.",
                         name.unwrap_or_default()
                     )
@@ -390,7 +497,12 @@ impl Workspace {
 
     /// In the browser there is no process to run.
     #[cfg(target_family = "wasm")]
-    pub(crate) fn run_task(&mut self, _glyph: Option<usize>, _cx: &mut gpui::Context<'_, Self>) {
+    pub(crate) fn run_task(
+        &mut self,
+        _task: &str,
+        _glyph: Option<usize>,
+        _cx: &mut gpui::Context<'_, Self>,
+    ) {
         self.status_note = Some("Local models run in the desktop app".into());
     }
 }

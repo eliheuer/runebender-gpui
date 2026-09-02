@@ -569,4 +569,39 @@ mod model_discovery_tests {
         unsafe { std::env::remove_var("RUNEBENDER_MODELS") };
         assert!(found.is_empty());
     }
+
+    /// The panel's rows come from `font-ml tasks --json`. A task the
+    /// tool adds is a row here with no change to this crate, which is
+    /// the whole point of asking instead of knowing.
+    #[test]
+    fn task_rows_come_from_the_tool_not_the_shell() {
+        use crate::edit::local_ai::TaskRow;
+        let answer = r#"{"tasks":[
+            {"name":"bolden","title":"Bolden","implemented":true,
+             "inputs":[{"name":"source","kind":"source"},{"name":"glyph","kind":"glyphs"}]},
+            {"name":"kerning","title":"Propose kerning","implemented":false,
+             "inputs":[{"name":"left","kind":"glyph"}]},
+            {"name":"harmonize","title":"Harmonize","implemented":true,
+             "inputs":[{"name":"glyph","kind":"glyph"}]}
+        ],"schema":{}}"#;
+        let rows = TaskRow::parse(answer);
+        assert_eq!(rows.len(), 3);
+        let built: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.implemented)
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(
+            built,
+            ["bolden", "harmonize"],
+            "a stub task appears once it is built"
+        );
+        assert!(rows[0].takes_glyphs(), "bolden offers every glyph");
+        assert!(
+            rows[2].takes_glyph() && !rows[2].takes_glyphs(),
+            "harmonize offers one glyph only"
+        );
+        assert!(TaskRow::parse("not json").is_empty());
+        assert!(TaskRow::parse(r#"{"tasks":"?"}"#).is_empty());
+    }
 }

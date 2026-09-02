@@ -750,7 +750,9 @@ impl Workspace {
                 summary: None,
                 score: None,
                 busy: None,
-                proposal: None,
+                proposals: Vec::new(),
+                tasks: None,
+                tasks_asked: false,
                 strength_slider: None,
             },
             inputs: InputFields {

@@ -191,6 +191,8 @@ impl Render for Workspace {
         self.ensure_sidebar_slider(window, cx);
         self.ensure_preview_slider(window, cx);
         self.ensure_model_strength_slider(window, cx);
+        // Ask font-ml what it can do, once; the panel fills in when it answers.
+        self.load_tasks(cx);
         if self.sidebar.counts.is_none() && self.project.is_some() {
             self.rebuild_sidebar_cache();
         }

@@ -155,7 +155,9 @@ impl Workspace {
     }
 
     /// Glyph > Bolden With Model…: pick a model directory, predict a
-    /// heavier version of the open glyph, and install it.
+    /// heavier version of the open glyph, and install it. The one
+    /// menu item that names a task, because a menu item has to say
+    /// something; the panel names none.
     ///
     /// The prediction is structure-forced: the model may only move the
     /// points that are already there, so the result stays
@@ -182,7 +184,7 @@ impl Workspace {
             };
             this.update(cx, |workspace, cx| {
                 workspace.load_model(&dir);
-                workspace.run_task(Some(index), cx);
+                workspace.run_task("bolden", Some(index), cx);
                 cx.notify();
             })
             .ok();

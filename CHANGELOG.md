@@ -21,6 +21,10 @@ Until then, `main` is the only line and this section stays open.
   New: "Propose Bold master" runs every drawn glyph and leaves the
   result waiting in the panel with Install and Discard. Scoring runs
   `font-ml eval` the same way.
+- The panel's task rows come from `font-ml tasks --json`. Each task
+  the tool reports as built gets "this glyph" and, when it takes a
+  glyph set, "every glyph". No task name lives in the panel; the one
+  left in the crate is the Glyph > Bolden With Model… menu item.
 - Undo lives in core. `EditorState` no longer holds snapshot stacks;
   `push_undo_snapshot`, `undo`, and `redo` call `Master::record_undo`,
   `undo`, and `redo`, and an edit that changed nothing calls

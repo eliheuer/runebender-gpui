@@ -709,8 +709,12 @@ pub(crate) struct ModelsState {
     pub(crate) score: Option<(SharedString, f64, f64)>,
     /// What font-ml is doing right now, while it runs.
     pub(crate) busy: Option<SharedString>,
-    /// The proposal waiting in the active master, if any.
-    pub(crate) proposal: Option<runebender_core::document::proposal::ProposalSummary>,
+    /// Proposals waiting in the active master, one per task.
+    pub(crate) proposals: Vec<runebender_core::document::proposal::ProposalSummary>,
+    /// What font-ml says it can do. None until it has answered.
+    pub(crate) tasks: Option<Vec<crate::edit::local_ai::TaskRow>>,
+    /// Whether it has been asked, so it is asked once.
+    pub(crate) tasks_asked: bool,
     /// The strength slider, built lazily in render.
     pub(crate) strength_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
 }
