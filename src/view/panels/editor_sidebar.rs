@@ -246,7 +246,11 @@ impl Workspace {
                             .left_0()
                             .size_full()
                         })
-                        .child(
+                        .child({
+                            let cell_bounds: std::rc::Rc<
+                                std::cell::RefCell<Vec<Bounds<gpui::Pixels>>>,
+                            > = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                            let report = cell_bounds.clone();
                             div()
                                 .id("editor-sidebar-grid")
                                 .size_full()
@@ -267,10 +271,13 @@ impl Workspace {
                                                 .flex()
                                                 .flex_wrap()
                                                 .gap(px(GRID_GAP))
+                                                .on_children_prepainted(move |bounds, _, _| {
+                                                    *report.borrow_mut() = bounds;
+                                                })
                                                 .children(cells),
                                         ),
                                 )
-                                .children(self.glyph_overlay(visible_rows, fit, cx))
+                                .children(self.glyph_overlay(visible_rows, fit, cell_bounds, cx))
                                 .on_scroll_wheel(cx.listener(
                                     move |this, ev: &gpui::ScrollWheelEvent, _, cx| {
                                         let dy = match ev.delta {
@@ -287,8 +294,8 @@ impl Workspace {
                                             cx.notify();
                                         }
                                     },
-                                )),
-                        ),
+                                ))
+                        }),
                 )
                 .child(
                     // Same bar the main grid has, and the same height, so

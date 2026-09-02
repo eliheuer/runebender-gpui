@@ -21,6 +21,16 @@ Until then, `main` is the only line and this section stays open.
 - A bare `runebender-gpui` opens with no font and File → Open, instead
   of a Virtua Grotesk checkout beside the repository. Nothing on one
   machine is a default for everyone else's.
+- The glyph grid's outlines no longer trail the cells through a
+  resize. The cells' container reports where each cell landed after
+  layout and the outline overlay paints from that list, instead of
+  solving the layout a second time against a viewport measured one
+  frame earlier. Same fix in the editor sidebar's mini grid.
+- The Local AI panel no longer scans the models directory and walks
+  PATH on every frame; both are cached and refreshed when a model is
+  chosen.
+- `RB_FRAME_LOG=1` prints how long each frame's render tree took to
+  build, for finding slow frames without a profiler.
 - A selected glyph-grid cell follows the theme's `cellSelectedFill`
   and `cellSelectedInk` tokens: Gray and Light invert to the ink, Dark
   keeps its lift. The HUD card headers no longer borrow the selected

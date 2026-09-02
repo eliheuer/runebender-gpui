@@ -243,66 +243,6 @@ impl Workspace {
 
 // ---- cell placement, shared by the grid and the sidebar's mini grid ----
 
-/// One cell placed by the packer: which glyph, and the rectangle it
-/// occupies inside the grid's viewport.
-#[derive(Clone, Copy)]
-pub(crate) struct PlacedCell {
-    /// The glyph's index in the font's glyph list.
-    pub(crate) glyph: usize,
-    /// The cell's left edge, in viewport-local pixels.
-    pub(crate) x: f32,
-    /// The cell's top edge, in viewport-local pixels.
-    pub(crate) y: f32,
-    /// The cell's width in pixels, spans included.
-    pub(crate) w: f32,
-    /// The cell's height in pixels, label block included.
-    pub(crate) h: f32,
-}
-
-/// Lay the packed rows out exactly as the wrapping flex will: the
-/// block is centred, cells run left to right with one gap between,
-/// and rows stack by the cell height.
-///
-/// `viewport` has to be the box the cells are actually being laid out
-/// in, measured this frame, not the probe's stored size. The probe
-/// lags the layout by a frame, longer if the browser coalesces the
-/// redraw. A viewport a column narrower than the real one puts every
-/// outline a column away from its cell.
-pub(crate) fn place_cells(
-    packed: &[Vec<(usize, usize)>],
-    fit: GridFit,
-    viewport: gpui::Size<gpui::Pixels>,
-    start_row: usize,
-) -> Vec<PlacedCell> {
-    let rows: Vec<&Vec<(usize, usize)>> = packed.iter().skip(start_row).take(fit.rows).collect();
-    if rows.is_empty() {
-        return Vec::new();
-    }
-    let content_w = fit.content_w();
-    let block_h = fit.cell_h * rows.len() as f32 + GRID_GAP * (rows.len() - 1) as f32;
-    let vw: f32 = viewport.width.into();
-    let vh: f32 = viewport.height.into();
-    let x0 = ((vw - content_w) / 2.0).max(0.0);
-    let y0 = ((vh - block_h) / 2.0).max(0.0);
-    let mut out = Vec::new();
-    for (r, row) in rows.iter().enumerate() {
-        let mut x = x0;
-        let y = y0 + r as f32 * (fit.cell_h + GRID_GAP);
-        for &(glyph, span) in row.iter() {
-            let w = fit.cell_w * span as f32 + GRID_GAP * (span - 1) as f32;
-            out.push(PlacedCell {
-                glyph,
-                x,
-                y,
-                w,
-                h: fit.cell_h,
-            });
-            x += w + GRID_GAP;
-        }
-    }
-    out
-}
-
 /// Where a glyph's outline sits inside a cell, as an affine from
 /// design space to the cell's local pixels.
 ///

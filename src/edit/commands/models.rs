@@ -45,7 +45,7 @@ impl Workspace {
         let Some(model) = self.models.dir.clone() else {
             return;
         };
-        let Some(font_ml) = Self::font_ml_binary() else {
+        let Some(font_ml) = self.models.binary.clone() else {
             self.status_note = Some("font-ml not found".into());
             return;
         };

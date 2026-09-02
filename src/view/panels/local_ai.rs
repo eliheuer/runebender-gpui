@@ -43,7 +43,7 @@ impl Workspace {
         // Anything installed, listed without a file picker. A model is
         // a directory with a config.json in it, so installing one is
         // dropping it in the folder.
-        let installed = Self::installed_models();
+        let installed = self.models.installed.clone();
         let body = if installed.is_empty() {
             body
         } else {
@@ -104,7 +104,7 @@ impl Workspace {
             .collect();
         let body = if self.models.tasks.is_none() {
             body.child(div().text_xs().text_color(t::text_muted()).child(
-                if Self::font_ml_binary().is_some() {
+                if self.models.binary.is_some() {
                     "Asking font-ml what it can do…"
                 } else {
                     "font-ml not found. cargo install --git \

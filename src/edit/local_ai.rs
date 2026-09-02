@@ -87,7 +87,10 @@ impl TaskRow {
 /// progress lines into `progress` and parking the child in `job` so
 /// it can be killed. Returns the JSON object font-ml printed last.
 #[cfg(not(target_family = "wasm"))]
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call, one process; a struct would only rename the arguments"
+)]
 fn run_font_ml(
     font_ml: &std::path::Path,
     task: &str,
@@ -280,6 +283,7 @@ impl Workspace {
         };
         self.models.summary = Some(format!("{name}: {kind}{shape}").into());
         self.models.dir = Some(dir.to_path_buf());
+        self.rescan_models();
         self.models.score = None;
         self.status_note = Some("Model chosen".into());
     }
@@ -292,7 +296,10 @@ impl Workspace {
             return;
         }
         self.models.tasks_asked = true;
-        let Some(font_ml) = Self::font_ml_binary() else {
+        // The directory scan and the PATH walk happen here, once, and
+        // again when a model is chosen; never in a render.
+        self.rescan_models();
+        let Some(font_ml) = self.models.binary.clone() else {
             return;
         };
         cx.spawn(async move |this, cx| {
@@ -322,6 +329,13 @@ impl Workspace {
     pub(crate) fn load_tasks(&mut self, _cx: &mut gpui::Context<'_, Self>) {
         self.models.tasks_asked = true;
         self.models.tasks = Some(Vec::new());
+        self.rescan_models();
+    }
+
+    /// Look at the disk again: the models directory and the binary.
+    pub(crate) fn rescan_models(&mut self) {
+        self.models.installed = Self::installed_models();
+        self.models.binary = Self::font_ml_binary();
     }
 
     /// What the active master has waiting, from any task.
@@ -427,7 +441,7 @@ impl Workspace {
             self.status_note = Some("Choose a model first".into());
             return;
         };
-        let Some(font_ml) = Self::font_ml_binary() else {
+        let Some(font_ml) = self.models.binary.clone() else {
             self.status_note = Some(
                 "font-ml not found: cargo install --git https://github.com/eliheuer/font-ml, \
                  or set RUNEBENDER_FONT_ML"

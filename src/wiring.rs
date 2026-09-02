@@ -755,6 +755,8 @@ impl Workspace {
                 busy: None,
                 job: None,
                 proposals: Vec::new(),
+                installed: Vec::new(),
+                binary: None,
                 tasks: None,
                 tasks_asked: false,
                 strength_slider: None,

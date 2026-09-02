@@ -179,6 +179,23 @@ impl Render for TabTooltip {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        // RB_FRAME_LOG=1 prints how long each render tree took to
+        // build, so a slow frame can be found without a profiler.
+        let started = std::env::var_os("RB_FRAME_LOG").map(|_| std::time::Instant::now());
+        let tree = self.render_tree(window, cx);
+        if let Some(started) = started {
+            eprintln!(
+                "frame build {:.2} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        tree
+    }
+}
+
+impl Workspace {
+    /// The render tree proper. `render` wraps it to time it.
+    fn render_tree(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         // Claim focus only when nothing else has it, so text inputs
         // (the search box) keep theirs while focused.
         if window.focused(cx).is_none() {
@@ -322,6 +339,11 @@ impl Render for Workspace {
                 .top_0()
                 .left_0()
                 .size_full();
+                // The cells report where they landed after layout;
+                // the outline overlay paints from that list.
+                let cell_bounds: std::rc::Rc<std::cell::RefCell<Vec<Bounds<gpui::Pixels>>>> =
+                    std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                let report = cell_bounds.clone();
                 (
                     self.category_sidebar(cx).into_any_element(),
                     div()
@@ -355,10 +377,13 @@ impl Render for Workspace {
                                                 .flex()
                                                 .flex_wrap()
                                                 .gap(px(GRID_GAP))
+                                                .on_children_prepainted(move |bounds, _, _| {
+                                                    *report.borrow_mut() = bounds;
+                                                })
                                                 .children(grid),
                                         ),
                                 )
-                                .children(self.glyph_overlay(visible_rows, fit, cx))
+                                .children(self.glyph_overlay(visible_rows, fit, cell_bounds, cx))
                                 .on_scroll_wheel(cx.listener(
                                     move |this, ev: &gpui::ScrollWheelEvent, _, cx| {
                                         let dy = match ev.delta {

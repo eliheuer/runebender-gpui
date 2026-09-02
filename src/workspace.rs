@@ -713,6 +713,11 @@ pub(crate) struct ModelsState {
     pub(crate) job: Option<Arc<Mutex<Option<std::process::Child>>>>,
     /// Proposals waiting in the active master, one per task.
     pub(crate) proposals: Vec<runebender_core::document::proposal::ProposalSummary>,
+    /// The model directories found on disk, scanned once per change,
+    /// not once per frame.
+    pub(crate) installed: Vec<(String, PathBuf)>,
+    /// Where the font-ml binary is, looked up once.
+    pub(crate) binary: Option<PathBuf>,
     /// What font-ml says it can do. None until it has answered.
     pub(crate) tasks: Option<Vec<crate::edit::local_ai::TaskRow>>,
     /// Whether it has been asked, so it is asked once.

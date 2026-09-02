@@ -8,7 +8,6 @@ use crate::Mode;
 use crate::Workspace;
 use crate::view::grid::cell_glyph_transform;
 use crate::view::grid::cell_label_metrics;
-use crate::view::grid::place_cells;
 use crate::view::paint::IconMark;
 use crate::view::paint::build_fill_path;
 use crate::view::paint::build_path;
@@ -52,9 +51,10 @@ impl Workspace {
         &self,
         rows: Vec<Vec<(usize, usize)>>,
         fit: GridFit,
+        cell_bounds: std::rc::Rc<std::cell::RefCell<Vec<Bounds<gpui::Pixels>>>>,
         cx: &mut Context<'_, Self>,
     ) -> Option<impl IntoElement + use<>> {
-        let _ = cx;
+        let _ = (cx, fit);
         let font = self.font()?;
         let upm = font.units_per_em;
         // Everything the paint closure needs about a glyph, pulled out
@@ -84,28 +84,39 @@ impl Workspace {
         Some(
             canvas(
                 move |bounds, _, _| bounds,
-                move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+                move |_, _bounds: Bounds<gpui::Pixels>, window, _| {
                     // One path per ink colour, so the whole grid is a
                     // handful of draws however many cells are on screen.
                     let mut batches: std::collections::BTreeMap<u32, (gpui::Rgba, Vec<BezPath>)> =
                         std::collections::BTreeMap::new();
-                    for cell in place_cells(&rows, fit, bounds.size, 0) {
-                        let Some((path, bbox, advance, color)) = ink.get(&cell.glyph) else {
+                    // Where each cell actually landed this frame, in
+                    // window coordinates, reported by the cells' own
+                    // container after layout. Painting from that, and
+                    // not from a solve of our own, is what keeps the
+                    // outlines on the cells while the window resizes.
+                    let placed = cell_bounds.borrow();
+                    let glyphs = rows.iter().flatten().map(|&(glyph, _)| glyph);
+                    for (glyph, cell) in glyphs.zip(placed.iter()) {
+                        let Some((path, bbox, advance, color)) = ink.get(&glyph) else {
                             continue;
                         };
+                        let cell_w: f32 = cell.size.width.into();
+                        let cell_h: f32 = cell.size.height.into();
                         // The cell sizes its own label block from its
                         // own width, so a cell spanning two columns
                         // gets a taller one: ask the same question.
-                        let label_h = cell_label_metrics(cell.w).height;
+                        let label_h = cell_label_metrics(cell_w).height;
                         let transform = cell_glyph_transform(
                             *bbox,
                             false,
                             *advance,
                             upm,
-                            cell.w as f64,
-                            (cell.h - label_h) as f64,
+                            cell_w as f64,
+                            (cell_h - label_h) as f64,
                         );
-                        let place = Affine::translate((cell.x as f64, cell.y as f64)) * transform;
+                        let x: f32 = cell.origin.x.into();
+                        let y: f32 = cell.origin.y.into();
+                        let place = Affine::translate((x as f64, y as f64)) * transform;
                         let key = u32::from_be_bytes([
                             to_byte(color.r * 255.0),
                             to_byte(color.g * 255.0),
@@ -119,7 +130,7 @@ impl Workspace {
                             .push(place * path.as_ref().clone());
                     }
                     for (color, paths) in batches.values() {
-                        paint_batched(window, bounds.origin, *color, paths, None);
+                        paint_batched(window, gpui::point(px(0.0), px(0.0)), *color, paths, None);
                     }
                 },
             )
