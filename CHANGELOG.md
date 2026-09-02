@@ -21,6 +21,10 @@ Until then, `main` is the only line and this section stays open.
 - A bare `runebender-gpui` opens with no font and File → Open, instead
   of a Virtua Grotesk checkout beside the repository. Nothing on one
   machine is a default for everyone else's.
+- The glyph grid's side padding equals the gap between cells, so the
+  margin is the same on all four sides and the cells take the width.
+- Text fields sit in the panel colour with a quiet `fieldOutline`
+  rule, instead of a darker box with the panel's outline.
 - Glyph-grid cells fill with the mark colour in every theme, not only
   Gray, from the shared token file.
 - Words: sentence case in Font info, "Saved" in the muted text colour

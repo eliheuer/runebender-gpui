@@ -165,6 +165,11 @@ pub(crate) fn panel_bg() -> Rgba {
 pub(crate) fn panel_outline() -> Rgba {
     c(theme().surface("outline"))
 }
+/// The rule around a text field: quieter than a panel's, so a column
+/// of fields reads as values, not as boxes.
+pub(crate) fn field_outline() -> Rgba {
+    c(theme().surface("fieldOutline"))
+}
 /// The fill of an unselected grid cell; the panel fill.
 pub(crate) fn cell_bg() -> Rgba {
     panel_bg()

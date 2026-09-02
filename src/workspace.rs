@@ -1055,8 +1055,10 @@ pub(crate) const TAB_H: f32 = 24.0;
 /// Gap between grid cells, and the grid's inner padding.
 pub(crate) const GRID_GAP: f32 = 8.0;
 
-/// The grid's horizontal inner padding, in pixels.
-pub(crate) const GRID_PAD: f32 = 12.0;
+/// The grid's horizontal inner padding, in pixels. The same as the
+/// gap between cells, so the margin reads as one more gap and the
+/// cells take the width.
+pub(crate) const GRID_PAD: f32 = GRID_GAP;
 
 /// The grid's vertical inner padding, in pixels.
 pub(crate) const GRID_PAD_Y: f32 = 8.0;

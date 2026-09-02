@@ -716,9 +716,11 @@ impl gpui::RenderOnce for Input {
             .border_color(if focused {
                 t::accent()
             } else {
-                t::panel_outline()
+                t::field_outline()
             })
-            .bg(t::window_bg())
+            // The panel's own fill: a field is a place to type, not a
+            // darker box sitting on the panel.
+            .bg(t::panel_bg())
             .cursor_text()
             .track_focus(&focus_handle);
 
