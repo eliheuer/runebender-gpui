@@ -12,6 +12,11 @@ Until then, `main` is the only line and this section stays open.
 
 ### Changed
 
+- The canvas reads in every theme. The glyph gets a mid-tone fill from
+  the new `outlineFill` token instead of a 16% wash of the ink, and
+  metric lines draw in the quiet `metricsLine` neutral instead of the
+  green accent, so the outline is the loudest thing on the canvas.
+- Themes: Midnight removed. Dark, Gray (default), Light.
 - Local models run through the `font-ml` binary as a separate process.
   The crate no longer links `font-ml` or candle, which takes them out
   of every build, the browser build included. The panel finds the

@@ -30,7 +30,7 @@ use serde::Deserialize;
 #[derive(Debug, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Config {
-    /// Theme id, as View → Theme names them: dark, midnight, gray, light.
+    /// Theme id, as View → Theme names them: dark, gray, light.
     pub theme: Option<String>,
     /// Where to look for local models.
     pub models: Option<PathBuf>,

@@ -16,12 +16,8 @@ use runebender_core::ui::color::ColorRgba;
 use runebender_core::ui::theme::{self, Theme};
 
 /// The themes in the shared token file, in menu order.
-pub(crate) const THEMES: [(&str, &str); 4] = [
-    ("dark", "Dark"),
-    ("midnight", "Midnight"),
-    ("gray", "Gray"),
-    ("light", "Light"),
-];
+pub(crate) const THEMES: [(&str, &str); 3] =
+    [("dark", "Dark"), ("gray", "Gray"), ("light", "Light")];
 
 /// The live theme.
 ///
@@ -231,9 +227,17 @@ pub(crate) fn glyph_fill() -> Rgba {
 pub(crate) fn path_stroke() -> Rgba {
     c(theme().role("pathStroke"))
 }
-/// Metric lines such as baseline and x-height; the accent hue.
+/// The glyph's fill in the editing view: a mid tone under the
+/// outline, so the shape reads at a glance without covering the
+/// points. Its own token, because the cell fill (`glyph_fill`) is
+/// ink and this is not.
+pub(crate) fn outline_fill() -> Rgba {
+    c(theme().role("outlineFill"))
+}
+/// Metric lines such as baseline and x-height: a quiet neutral rule.
+/// The outline is what the canvas is for; the metrics sit under it.
 pub(crate) fn metrics_line() -> Rgba {
-    accent()
+    c(theme().role("metricsLine"))
 }
 /// The preview-mode glyph fill; the status yellow.
 pub(crate) fn preview_glyph() -> Rgba {

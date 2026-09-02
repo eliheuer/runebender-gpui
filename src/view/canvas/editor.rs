@@ -1809,9 +1809,7 @@ fn paint_outline(scene: &EditorScene, s: &Screen, window: &mut Window) {
         let mut combined = scene.outline.as_ref().clone();
         combined.extend(scene.component_path.elements().iter().cloned());
         if let Some(p) = build_fill_path(&combined, transform, origin) {
-            let mut fill = t::glyph_fill();
-            fill.a *= 0.16;
-            window.paint_path(p, fill);
+            window.paint_path(p, t::outline_fill());
         }
     }
     if !scene.preview_mode

@@ -67,7 +67,6 @@ gpui::actions!(
         MeasureAllOn,
         MeasureAllOff,
         SetThemeDark,
-        SetThemeMidnight,
         SetThemeGray,
         SetThemeLight,
         RemoveOverlap,

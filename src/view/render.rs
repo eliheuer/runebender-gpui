@@ -72,7 +72,6 @@ use crate::SetStartPoint;
 use crate::SetThemeDark;
 use crate::SetThemeGray;
 use crate::SetThemeLight;
-use crate::SetThemeMidnight;
 use crate::ShowAllMasters;
 use crate::SortByName;
 use crate::SortByUnicode;
@@ -567,9 +566,6 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &SetThemeDark, window, cx| {
                 this.command_set_theme("dark", window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &SetThemeMidnight, window, cx| {
-                this.command_set_theme("midnight", window, cx);
             }))
             .on_action(cx.listener(|this, _: &SetThemeGray, window, cx| {
                 this.command_set_theme("gray", window, cx);

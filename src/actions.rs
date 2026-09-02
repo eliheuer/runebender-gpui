@@ -77,7 +77,6 @@ use crate::SetStartPoint;
 use crate::SetThemeDark;
 use crate::SetThemeGray;
 use crate::SetThemeLight;
-use crate::SetThemeMidnight;
 use crate::ShowAllMasters;
 use crate::SortByName;
 use crate::SortByUnicode;
@@ -97,7 +96,6 @@ use crate::workspace::MEASURE_MENU;
 pub(crate) fn theme_action(id: &str) -> Option<Box<dyn gpui::Action>> {
     Some(match id {
         "dark" => Box::new(SetThemeDark),
-        "midnight" => Box::new(SetThemeMidnight),
         "gray" => Box::new(SetThemeGray),
         "light" => Box::new(SetThemeLight),
         _ => return None,
