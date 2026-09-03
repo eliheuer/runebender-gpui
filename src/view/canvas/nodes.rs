@@ -526,7 +526,7 @@ fn paint_nodes(
         let c1 = inverse * kurbo::Point::new(bw, bh);
         let (x0, x1) = (c0.x.min(c1.x), c0.x.max(c1.x));
         let (y0, y1) = (c0.y.min(c1.y), c0.y.max(c1.y));
-        let r = 2.5;
+        let r = 1.75;
         let mut rings = BezPath::new();
         let mut y = (y0 / pitch).floor() * pitch;
         while y <= y1 {
@@ -537,12 +537,18 @@ fn paint_nodes(
             }
             y += pitch;
         }
-        draw(
-            window,
-            &rings,
-            PathBuilder::stroke(px(stroke)),
-            t::cell_border(),
-        );
+        // Quiet: the keyline mixed most of the way into the ground,
+        // so the grid reads and still sits behind the boxes. Mixed,
+        // not alpha, because a path's alpha is not reliable here.
+        let (bg, line) = (t::window_bg(), t::cell_border());
+        let mix = |a: f32, b: f32| a + (b - a) * 0.4;
+        let faint = gpui::Rgba {
+            r: mix(bg.r, line.r),
+            g: mix(bg.g, line.g),
+            b: mix(bg.b, line.b),
+            a: 1.0,
+        };
+        draw(window, &rings, PathBuilder::stroke(px(stroke)), faint);
     }
 
     // A wire takes the mark colour of what it carries; a value with
