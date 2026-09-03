@@ -14,6 +14,7 @@
 use crate::Workspace;
 use crate::edit::nodes::{NodeBox, NodesView, RowState, to_screen};
 use crate::view::controls as c;
+use crate::view::paint::build_path;
 use crate::view::render::px32;
 use crate::view::theme as t;
 use gpui::App;
@@ -32,6 +33,8 @@ use gpui::Window;
 use gpui::canvas;
 use gpui::div;
 use gpui::px;
+use kurbo::Affine;
+use kurbo::BezPath;
 use runebender_core::document::nodes_run::Status;
 use runebender_core::ui::editing::viewport::ViewPort;
 
@@ -384,64 +387,30 @@ impl Workspace {
     }
 }
 
-/// A cubic between two ports with horizontal tangents: the shape a
-/// node editor reader expects.
-fn wire(
-    a: Point<gpui::Pixels>,
-    b: Point<gpui::Pixels>,
-    width: f32,
-) -> Option<gpui::Path<gpui::Pixels>> {
-    let (ax, ay) = (f32::from(a.x), f32::from(a.y));
-    let (bx, by) = (f32::from(b.x), f32::from(b.y));
-    let dx = ((bx - ax).abs() * 0.5).clamp(24.0, 120.0);
-    let mut pb = PathBuilder::stroke(px(width));
-    pb.move_to(a);
-    pb.cubic_bezier_to(
+/// A cubic between two ports with horizontal tangents, in canvas
+/// units: the shape a node editor reader expects.
+fn wire_path(a: kurbo::Point, b: kurbo::Point) -> BezPath {
+    let dx = ((b.x - a.x).abs() * 0.5).clamp(24.0, 120.0);
+    let mut path = BezPath::new();
+    path.move_to(a);
+    path.curve_to(
+        kurbo::Point::new(a.x + dx, a.y),
+        kurbo::Point::new(b.x - dx, b.y),
         b,
-        gpui::point(px(ax + dx), px(ay)),
-        gpui::point(px(bx - dx), px(by)),
     );
-    pb.build().ok()
+    path
 }
 
-/// A rectangle path, for a fill or a stroke.
-fn rect_path(
-    origin: Point<gpui::Pixels>,
-    w: f32,
-    h: f32,
-    builder: PathBuilder,
-) -> Option<gpui::Path<gpui::Pixels>> {
-    let (x, y) = (f32::from(origin.x), f32::from(origin.y));
-    let mut pb = builder;
-    pb.move_to(gpui::point(px(x), px(y)));
-    pb.line_to(gpui::point(px(x + w), px(y)));
-    pb.line_to(gpui::point(px(x + w), px(y + h)));
-    pb.line_to(gpui::point(px(x), px(y + h)));
-    pb.close();
-    pb.build().ok()
+/// A circle as a path, in canvas units.
+fn circle(center: kurbo::Point, r: f64) -> BezPath {
+    use kurbo::Shape as _;
+    kurbo::Circle::new(center, r).to_path(0.05)
 }
 
-/// A circle path from a polygon, enough sides that it reads round at
-/// port size.
-fn circle_path(
-    center: Point<gpui::Pixels>,
-    r: f32,
-    builder: PathBuilder,
-) -> Option<gpui::Path<gpui::Pixels>> {
-    let (cx, cy) = (f32::from(center.x), f32::from(center.y));
-    let mut pb = builder;
-    let n = 20;
-    for i in 0..n {
-        let a = i as f32 / n as f32 * std::f32::consts::TAU;
-        let p = gpui::point(px(cx + r * a.cos()), px(cy + r * a.sin()));
-        if i == 0 {
-            pb.move_to(p);
-        } else {
-            pb.line_to(p);
-        }
-    }
-    pb.close();
-    pb.build().ok()
+/// A rectangle as a path, in canvas units.
+fn rect(r: kurbo::Rect) -> BezPath {
+    use kurbo::Shape as _;
+    r.to_path(0.1)
 }
 
 /// Shortens text until it fits `max_w` pixels at `size`, with an
@@ -515,6 +484,11 @@ fn paint_text(
 }
 
 /// Everything, bottom to top: wires, boxes, ports, text.
+///
+/// Geometry is kurbo in canvas units and goes through the same
+/// `build_path` and affine the editing view uses for an outline, so
+/// a wire and a glyph contour rasterize the same way. Text is placed
+/// in pixels through the same mapping.
 fn paint_nodes(
     scene: &NodesScene,
     bounds: Bounds<gpui::Pixels>,
@@ -524,76 +498,87 @@ fn paint_nodes(
     let origin = bounds.origin;
     let vp = &scene.viewport;
     let zoom = px32(vp.zoom);
+    // Canvas units (Y down) to canvas pixels: the viewport's affine,
+    // which flips Y, after a flip that puts the file's Y-down space
+    // into the viewport's Y-up one.
+    let tf = vp.affine() * Affine::FLIP_Y;
     let sp = |p: kurbo::Point| to_screen(vp, origin, p);
     let stroke = f32::from(t::stroke()).max(1.0);
     let wire_w = (1.5 * zoom).max(1.0);
+    let draw = |window: &mut Window, path: &BezPath, builder: PathBuilder, color: gpui::Rgba| {
+        if let Some(p) = build_path(path, tf, origin, builder) {
+            window.paint_path(p, color);
+        }
+    };
 
     // The dot grid: a dot at every pitch, nodes snap their edges to
     // them. Skipped when the pitch is too small to read.
-    let pitch = px32(crate::edit::nodes::GRID) * zoom;
-    if pitch >= 6.0 {
-        let (bx, by) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
-        let (bw, bh) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-        // The canvas point at the top-left corner, then the first dot
-        // at or past it.
-        let top_left = kurbo::Point::new(0.0, 0.0);
-        let first = sp(top_left);
-        let (ox, oy) = (f32::from(first.x), f32::from(first.y));
-        let start_x = ox + ((bx - ox) / pitch).floor() * pitch;
-        let start_y = oy + ((by - oy) / pitch).floor() * pitch;
-        let r = (1.25 * zoom).clamp(1.0, 3.0);
-        let mut pb = PathBuilder::fill();
-        let mut y = start_y;
-        while y <= by + bh {
-            let mut x = start_x;
-            while x <= bx + bw {
-                let n = 8;
-                for i in 0..n {
-                    let a = i as f32 / n as f32 * std::f32::consts::TAU;
-                    let p = gpui::point(px(x + r * a.cos()), px(y + r * a.sin()));
-                    if i == 0 {
-                        pb.move_to(p);
-                    } else {
-                        pb.line_to(p);
-                    }
-                }
-                pb.close();
+    let pitch = crate::edit::nodes::GRID;
+    if px32(pitch) * zoom >= 6.0 {
+        // The visible canvas rectangle, from the corners.
+        let inverse = tf.inverse();
+        let (bw, bh) = (
+            f64::from(f32::from(bounds.size.width)),
+            f64::from(f32::from(bounds.size.height)),
+        );
+        let c0 = inverse * kurbo::Point::new(0.0, 0.0);
+        let c1 = inverse * kurbo::Point::new(bw, bh);
+        let (x0, x1) = (c0.x.min(c1.x), c0.x.max(c1.x));
+        let (y0, y1) = (c0.y.min(c1.y), c0.y.max(c1.y));
+        let r = (1.25 / f64::from(zoom)).clamp(0.5, 3.0);
+        let mut dots = BezPath::new();
+        let mut y = (y0 / pitch).floor() * pitch;
+        while y <= y1 {
+            let mut x = (x0 / pitch).floor() * pitch;
+            while x <= x1 {
+                dots.extend(circle(kurbo::Point::new(x, y), r));
                 x += pitch;
             }
             y += pitch;
         }
-        if let Ok(p) = pb.build() {
-            window.paint_path(p, t::cell_border());
-        }
+        draw(window, &dots, PathBuilder::fill(), t::cell_border());
     }
 
-    // Wires first, under the boxes they join.
     // A wire takes the mark colour of what it carries; a value with
-    // no colour is drawn in ink.
+    // no colour is drawn in ink. Each is drawn twice: a keyline the
+    // colour of a cell's outline, one stroke wider on each side, then
+    // the colour on top, so it reads on the grey the way a cell does.
     let wire_ink = |kind| {
         crate::edit::nodes::kind_mark(kind)
             .and_then(|m| t::mark_paint(Some(m)))
             .map_or_else(t::text_muted, |p| p.bg.unwrap_or(p.border))
     };
-    // Each wire is drawn twice: a keyline the colour of a cell's
-    // outline, one stroke wider on each side, then the colour on top,
-    // so it reads on the grey the way a cell does.
-    let mut draw_wire = |from, to, ink| {
-        if let Some(p) = wire(from, to, wire_w + 2.0 * stroke) {
-            window.paint_path(p, t::cell_border());
-        }
-        if let Some(p) = wire(from, to, wire_w) {
-            window.paint_path(p, ink);
-        }
+    let draw_wire = |window: &mut Window, path: &BezPath, ink| {
+        draw(
+            window,
+            path,
+            PathBuilder::stroke(px(wire_w + 2.0 * stroke)),
+            t::cell_border(),
+        );
+        draw(window, path, PathBuilder::stroke(px(wire_w)), ink);
     };
     for &(a, o, b, i) in &scene.wires {
         let port = &scene.boxes[a].outputs[o];
-        let from = sp(port.at);
-        let to = sp(scene.boxes[b].inputs[i].at);
-        draw_wire(from, to, wire_ink(port.kind));
+        let path = wire_path(port.at, scene.boxes[b].inputs[i].at);
+        draw_wire(window, &path, wire_ink(port.kind));
     }
     if let Some((from, to)) = scene.pending {
-        draw_wire(from, to, scene.pending_kind.map_or_else(t::text, wire_ink));
+        // The pending end is a window point; bring it into canvas
+        // units so the wire is one path like the others.
+        let inverse = tf.inverse();
+        let to_canvas = |p: Point<gpui::Pixels>| {
+            inverse
+                * kurbo::Point::new(
+                    f64::from(f32::from(p.x - origin.x)),
+                    f64::from(f32::from(p.y - origin.y)),
+                )
+        };
+        let path = wire_path(to_canvas(from), to_canvas(to));
+        draw_wire(
+            window,
+            &path,
+            scene.pending_kind.map_or_else(t::text, wire_ink),
+        );
     }
 
     let text_px = (crate::workspace::UI_TEXT_PX * zoom).clamp(6.0, 40.0);
@@ -610,56 +595,41 @@ fn paint_nodes(
         let h = px32(nb.rect.height()) * zoom;
         let header_h = px32(crate::edit::nodes::HEADER_H) * zoom;
         let selected = scene.selected == Some(nb.id);
-        // The body, then the header band, then the keyline.
-        if let Some(p) = rect_path(top_left, w, h, PathBuilder::fill()) {
-            window.paint_path(p, t::field_bg());
-        }
-        // The header wears the node's mark colour, the way a grid
-        // cell wears its glyph's, and inverts when selected.
+        let header_rect = kurbo::Rect::new(
+            nb.rect.x0,
+            nb.rect.y0,
+            nb.rect.x1,
+            nb.rect.y0 + crate::edit::nodes::HEADER_H,
+        );
+        let outline = if selected {
+            t::selected_bg()
+        } else {
+            mark.as_ref().map_or_else(t::cell_border, |m| m.border)
+        };
+        // The body, the header band in the node's mark colour (the way
+        // a grid cell wears its glyph's, inverted when selected), the
+        // rule between them, then the keyline.
+        draw(window, &rect(nb.rect), PathBuilder::fill(), t::field_bg());
         let header_bg = if selected {
             t::selected_bg()
         } else {
             mark.as_ref().and_then(|m| m.bg).unwrap_or_else(t::panel_bg)
         };
-        if let Some(p) = rect_path(top_left, w, header_h, PathBuilder::fill()) {
-            window.paint_path(p, header_bg);
-        }
-        // The rule between header and body.
-        {
-            let y = top_left.y + px(header_h);
-            let mut pb = PathBuilder::stroke(px(stroke));
-            pb.move_to(gpui::point(top_left.x, y));
-            pb.line_to(gpui::point(top_left.x + px(w), y));
-            if let Ok(p) = pb.build() {
-                window.paint_path(
-                    p,
-                    if selected {
-                        t::selected_bg()
-                    } else {
-                        mark.as_ref().map_or_else(t::cell_border, |m| m.border)
-                    },
-                );
-            }
-        }
-        if let Some(p) = rect_path(
-            top_left,
-            w,
-            h,
+        draw(window, &rect(header_rect), PathBuilder::fill(), header_bg);
+        let mut rule = BezPath::new();
+        rule.move_to(kurbo::Point::new(header_rect.x0, header_rect.y1));
+        rule.line_to(kurbo::Point::new(header_rect.x1, header_rect.y1));
+        draw(window, &rule, PathBuilder::stroke(px(stroke)), outline);
+        draw(
+            window,
+            &rect(nb.rect),
             PathBuilder::stroke(px(if selected {
                 f32::from(t::stroke_emphasis())
             } else {
                 stroke
             })),
-        ) {
-            window.paint_path(
-                p,
-                if selected {
-                    t::selected_bg()
-                } else {
-                    mark.as_ref().map_or_else(t::cell_border, |m| m.border)
-                },
-            );
-        }
+            outline,
+        );
         // Title left, status right, in the header.
         let pad = px32(crate::edit::nodes::PAD) * zoom;
         let title_ink = if selected {
@@ -765,22 +735,23 @@ fn paint_nodes(
             .map(|p| (p, true))
             .chain(nb.outputs.iter().map(|p| (p, false)))
         {
-            let at = sp(port.at);
             let (takes, fades) = match scene.pending_kind {
                 Some(k) if is_input => (port.kind == k, port.kind != k),
                 Some(_) => (false, true),
                 None => (false, false),
             };
             let ink = if fades { t::text_muted() } else { t::text() };
-            if let Some(p) = circle_path(at, port_r, PathBuilder::fill()) {
-                window.paint_path(p, if port.linked { ink } else { t::field_bg() });
-            }
-            if let Some(p) = circle_path(at, port_r, PathBuilder::stroke(px(stroke))) {
-                window.paint_path(p, ink);
-            }
-            if takes && let Some(p) = circle_path(at, port_r * 2.0, PathBuilder::stroke(px(stroke)))
-            {
-                window.paint_path(p, t::text());
+            let dot = circle(port.at, crate::edit::nodes::PORT_R);
+            draw(
+                window,
+                &dot,
+                PathBuilder::fill(),
+                if port.linked { ink } else { t::field_bg() },
+            );
+            draw(window, &dot, PathBuilder::stroke(px(stroke)), ink);
+            if takes {
+                let ring = circle(port.at, crate::edit::nodes::PORT_R * 2.0);
+                draw(window, &ring, PathBuilder::stroke(px(stroke)), t::text());
             }
         }
         // A result line under the box, when the node has one.
