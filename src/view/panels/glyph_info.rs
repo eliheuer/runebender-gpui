@@ -510,50 +510,69 @@ impl Workspace {
             .selected
             .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))
             .and_then(|e| e.mark.clone());
-        // A swatch is a small round cell: the keyline the mark cells
-        // carry and the same selection ring, on a circle, which sits
-        // with the window's own corners better than a square does.
-        // They sit at the left with one gap between them and the same
-        // gap to the bar's edges, whatever the panel's width.
-        const SWATCH: f32 = 16.0;
-        const INSET: f32 = (BOTTOM_BAR_H - SWATCH) / 2.0;
-        let swatch =
-            |id: gpui::ElementId, fill: gpui::Rgba, keyline: gpui::Rgba, selected: bool| {
-                div()
-                    .id(id)
-                    .w(px(SWATCH))
-                    .h(px(SWATCH))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .bg(fill)
-                    .border(if selected {
-                        t::stroke_emphasis()
-                    } else {
-                        t::stroke()
-                    })
-                    .border_color(if selected {
-                        t::cell_selected_ring()
-                    } else {
-                        keyline
-                    })
-                    .cursor_pointer()
-            };
-        let mut swatches = div().flex().items_center().gap(px(INSET));
+        // A swatch is a small round cell carrying the keyline the
+        // mark cells carry. The selected one is not drawn heavier: it
+        // gets a second ring of the same width outside the circle, so
+        // the swatch itself never changes weight.
+        const SWATCH: f32 = 14.0;
+        const RING_GAP: f32 = 2.0;
+        let ring = f32::from(t::stroke());
+        let outer = SWATCH + 2.0 * (RING_GAP + ring);
+        let inset = (BOTTOM_BAR_H - outer) / 2.0;
+        let swatch = |id: gpui::ElementId,
+                      fill: gpui::Rgba,
+                      keyline: gpui::Rgba,
+                      selected: bool,
+                      inner: Option<gpui::AnyElement>| {
+            div()
+                .id(id)
+                .w(px(outer))
+                .h(px(outer))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(RING_GAP))
+                .rounded_full()
+                .border(t::stroke())
+                .border_color(if selected {
+                    t::cell_selected_ring()
+                } else {
+                    gpui::rgba(0x00000000)
+                })
+                .cursor_pointer()
+                .child(
+                    div()
+                        .w(px(SWATCH))
+                        .h(px(SWATCH))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(fill)
+                        .border(t::stroke())
+                        .border_color(keyline)
+                        .children(inner),
+                )
+        };
+        let mut swatches = div().flex().items_center().gap(px(inset));
         for (index, (label, color)) in t::mark_palette().into_iter().enumerate() {
             let is_current = current.as_deref() == Some(label.as_str());
             let keyline = t::mark_paint(Some(&label))
                 .map(|p| p.border)
                 .unwrap_or_else(t::cell_border);
             swatches = swatches.child(
-                swatch(("mark-swatch", index).into(), color, keyline, is_current).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.set_selected_mark(Some(label.clone()));
-                        cx.notify();
-                    }),
-                ),
+                swatch(
+                    ("mark-swatch", index).into(),
+                    color,
+                    keyline,
+                    is_current,
+                    None,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_selected_mark(Some(label.clone()));
+                    cx.notify();
+                })),
             );
         }
         // "No colour" is a swatch like the others: the cell's own
@@ -564,8 +583,8 @@ impl Workspace {
                 t::cell_bg(),
                 t::cell_border(),
                 current.is_none(),
+                Some(cross_mark(t::text(), SWATCH - 2.0 * ring).into_any_element()),
             )
-            .child(cross_mark(t::text(), SWATCH))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.set_selected_mark(None);
                 cx.notify();
@@ -580,7 +599,7 @@ impl Workspace {
             .items_center()
             .border_t_1()
             .border_color(t::panel_outline())
-            .px(px(INSET))
+            .px(px(inset))
             .child(swatches)
     }
 }
@@ -595,7 +614,7 @@ fn cross_mark(color: gpui::Rgba, size: f32) -> impl IntoElement {
             let h = f32::from(bounds.size.height);
             let o = bounds.origin;
             let (cx_, cy_) = (w / 2.0, h / 2.0);
-            let d = size * 0.22;
+            let d = size * 0.28;
             let pt = |x: f32, y: f32| gpui::point(o.x + px(x), o.y + px(y));
             let mut pb = PathBuilder::stroke(px(1.5));
             pb.move_to(pt(cx_ - d, cy_ - d));
