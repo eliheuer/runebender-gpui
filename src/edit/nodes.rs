@@ -417,11 +417,15 @@ fn summary_line(n: &runebender_core::document::nodes_run::NodeResult) -> String 
             _ => {}
         }
     }
-    if let (Some(model), Some(unchanged)) = (
+    if let (Some(model), Some(shift)) = (
         n.report.get("model").and_then(|v| v.as_f64()),
-        n.report.get("unchanged").and_then(|v| v.as_f64()),
+        n.report.get("shift").and_then(|v| v.as_f64()),
     ) {
-        parts.push(format!("model {model:.1} vs unchanged {unchanged:.1}"));
+        let wins = n.report.get("wins").and_then(|v| v.as_u64()).unwrap_or(0);
+        let glyphs = n.report.get("glyphs").and_then(|v| v.as_u64()).unwrap_or(0);
+        parts.push(format!(
+            "model {model:.1} vs shift {shift:.1}, {wins}/{glyphs} closer"
+        ));
     }
     if parts.is_empty() {
         format!("{:.1}s", n.seconds)
