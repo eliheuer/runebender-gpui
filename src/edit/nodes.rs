@@ -470,59 +470,9 @@ impl Workspace {
     }
 }
 
-// ---- the canvas: layout, hit-testing, and the drag ----
+// ---- the canvas: the drag, on core's layout ----
 
-/// The dot grid pitch, in canvas units. Node edges sit on it: the
-/// width, the header, the padding and a row are all multiples, so a
-/// box's every edge lands on a dot.
-pub(crate) const GRID: f64 = 16.0;
-/// Box width, in canvas units.
-pub(crate) const NODE_W: f64 = 176.0;
-/// Header band height.
-pub(crate) const HEADER_H: f64 = 24.0;
-/// One port row.
-pub(crate) const ROW_H: f64 = 16.0;
-/// Port dot radius.
-pub(crate) const PORT_R: f64 = 4.5;
-/// Inner padding.
-pub(crate) const PAD: f64 = 8.0;
-
-/// A canvas coordinate moved to the nearest dot.
-pub(crate) fn snap(v: f64) -> f32 {
-    crate::view::render::px32((v / GRID).round() * GRID)
-}
-
-/// One port as laid out: where its dot sits, in canvas units.
-#[derive(Debug, Clone)]
-pub(crate) struct PortBox {
-    /// The port name.
-    pub(crate) name: String,
-    /// What it carries.
-    pub(crate) kind: runebender_core::document::nodes::Kind,
-    /// The dot's centre.
-    pub(crate) at: kurbo::Point,
-    /// Which row of the box it sits on, from the top.
-    pub(crate) row: usize,
-    /// A wire is on it.
-    pub(crate) linked: bool,
-    /// What was typed into it, shown beside the name.
-    pub(crate) value: Option<String>,
-}
-
-/// One node as laid out.
-#[derive(Debug, Clone)]
-pub(crate) struct NodeBox {
-    /// The node.
-    pub(crate) id: u32,
-    /// The type's title, in the header.
-    pub(crate) title: String,
-    /// The box, in canvas units.
-    pub(crate) rect: kurbo::Rect,
-    /// Ports down the left edge.
-    pub(crate) inputs: Vec<PortBox>,
-    /// Ports down the right edge.
-    pub(crate) outputs: Vec<PortBox>,
-}
+pub(crate) use runebender_core::ui::nodes::{Hit, NodeBox, snap, value_text};
 
 /// The canvas state that is not the file: where the view is, what is
 /// selected, what the mouse is doing.
@@ -577,45 +527,13 @@ pub(crate) enum NodeDrag {
     },
 }
 
-/// The grid mark colour a port kind carries, so a wire says what it
-/// holds the way a cell says its mark. Values typed by hand carry no
-/// colour.
-pub(crate) fn kind_mark(kind: runebender_core::document::nodes::Kind) -> Option<&'static str> {
-    use runebender_core::document::nodes::Kind;
-    Some(match kind {
-        Kind::Source => "green",
-        Kind::Layer => "yellow",
-        Kind::Model => "blue",
-        Kind::Adapter => "purple",
-        Kind::Glyph | Kind::Glyphs => "orange",
-        Kind::Rows => "pink",
-        Kind::Path => "yellow",
-        Kind::Number | Kind::Flag | Kind::Text => return None,
-    })
-}
-
-/// The grid mark colour a node type's header carries: what the node
-/// mostly gives, or what it does to the font.
-pub(crate) fn type_mark(type_name: &str) -> Option<&'static str> {
-    Some(match type_name {
-        "core.source" | "core.master" => "green",
-        "core.layer" | "core.proof" => "yellow",
-        "core.model" => "blue",
-        "core.adapter" => "purple",
-        "core.install" => "red",
-        "core.compare" => "pink",
-        "core.note" => return None,
-        _ => "orange",
-    })
-}
-
 /// A canvas point to window pixels.
 pub(crate) fn to_screen(
     vp: &runebender_core::ui::editing::viewport::ViewPort,
     origin: gpui::Point<gpui::Pixels>,
     p: kurbo::Point,
 ) -> gpui::Point<gpui::Pixels> {
-    let s = vp.to_screen(kurbo::Point::new(p.x, -p.y));
+    let s = runebender_core::ui::nodes::canvas_affine(vp) * p;
     gpui::point(
         origin.x + gpui::px(crate::view::render::px32(s.x)),
         origin.y + gpui::px(crate::view::render::px32(s.y)),
@@ -628,95 +546,13 @@ fn to_canvas(
     origin: gpui::Point<gpui::Pixels>,
     p: gpui::Point<gpui::Pixels>,
 ) -> kurbo::Point {
-    let local = kurbo::Point::new(
-        f64::from(f32::from(p.x - origin.x)),
-        f64::from(f32::from(p.y - origin.y)),
-    );
-    let d = vp.screen_to_design(local);
-    kurbo::Point::new(d.x, -d.y)
-}
-
-/// A typed value as the box shows it: a whole number without its
-/// `.0`, a string bare.
-pub(crate) fn value_text(v: &serde_json::Value) -> String {
-    match v {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => match n.as_f64() {
-            Some(f) if f.fract() == 0.0 && f.abs() < 1e15 => format!("{f:.0}"),
-            _ => n.to_string(),
-        },
-        other => other.to_string(),
-    }
-}
-
-/// Lays out one node: header, one row per port on either side, the
-/// dots on the edges.
-pub(crate) fn node_box(
-    state: &GraphState,
-    node: &runebender_core::document::nodes::Node,
-) -> NodeBox {
-    let ty = state.registry.get(&node.type_name);
-    let title = ty
-        .map(|t| t.title.clone())
-        .unwrap_or_else(|| node.type_name.clone());
-    let inputs: Vec<_> = ty.map(|t| t.inputs.clone()).unwrap_or_default();
-    let outputs: Vec<_> = ty.map(|t| t.outputs.clone()).unwrap_or_default();
-    // Outputs take the top rows, inputs the rows under them, so a
-    // long typed value never runs into an output's name.
-    let rows = (inputs.len() + outputs.len()).max(1);
-    let x = f64::from(node.pos[0]);
-    let y = f64::from(node.pos[1]);
-    let h = HEADER_H + PAD + ROW_H * rows as f64;
-    let rect = kurbo::Rect::new(x, y, x + NODE_W, y + h);
-    let row_y = |i: usize| y + HEADER_H + PAD / 2.0 + ROW_H * (i as f64 + 0.5);
-    let first_input = outputs.len();
-    let inputs = inputs
-        .iter()
-        .enumerate()
-        .map(|(i, p)| PortBox {
-            name: p.name.clone(),
-            kind: p.kind,
-            at: kurbo::Point::new(x, row_y(first_input + i)),
-            row: first_input + i,
-            linked: state.graph.link_into(node.id, &p.name).is_some(),
-            value: node.values.get(&p.name).map(value_text),
-        })
-        .collect();
-    let outputs = outputs
-        .iter()
-        .enumerate()
-        .map(|(i, p)| PortBox {
-            name: p.name.clone(),
-            kind: p.kind,
-            at: kurbo::Point::new(x + NODE_W, row_y(i)),
-            row: i,
-            linked: state
-                .graph
-                .links
-                .iter()
-                .any(|l| l.from() == node.id && l.output() == p.name),
-            value: None,
-        })
-        .collect();
-    NodeBox {
-        id: node.id,
-        title,
-        rect,
-        inputs,
-        outputs,
-    }
-}
-
-/// What is under a canvas point.
-enum Hit {
-    /// A node's box.
-    Node(u32),
-    /// An input dot: node, port, kind.
-    Input(u32, String, runebender_core::document::nodes::Kind),
-    /// An output dot: node, port, kind.
-    Output(u32, String, runebender_core::document::nodes::Kind),
-    /// Nothing.
-    Empty,
+    runebender_core::ui::nodes::to_canvas(
+        vp,
+        kurbo::Point::new(
+            f64::from(f32::from(p.x - origin.x)),
+            f64::from(f32::from(p.y - origin.y)),
+        ),
+    )
 }
 
 impl Workspace {
@@ -735,25 +571,8 @@ impl Workspace {
         let Some(state) = self.models.graph.as_ref() else {
             return Hit::Empty;
         };
-        let reach = PORT_R * 2.0;
-        // Later nodes draw on top, so they are hit first.
-        for node in state.graph.nodes.iter().rev() {
-            let nb = node_box(state, node);
-            for p in &nb.outputs {
-                if (p.at - at).hypot() <= reach {
-                    return Hit::Output(node.id, p.name.clone(), p.kind);
-                }
-            }
-            for p in &nb.inputs {
-                if (p.at - at).hypot() <= reach {
-                    return Hit::Input(node.id, p.name.clone(), p.kind);
-                }
-            }
-            if nb.rect.contains(at) {
-                return Hit::Node(node.id);
-            }
-        }
-        Hit::Empty
+        let boxes = runebender_core::ui::nodes::layout(&state.graph, &state.registry);
+        runebender_core::ui::nodes::hit(&boxes, at)
     }
 
     /// Opens the canvas. With no file open, the first one beside the
@@ -971,8 +790,8 @@ impl Workspace {
                     .and_then(|s| s.graph.node_mut(id))
                 {
                     node.pos = [
-                        snap(f64::from(from[0]) + (at.x - start.x)),
-                        snap(f64::from(from[1]) + (at.y - start.y)),
+                        crate::view::render::px32(snap(f64::from(from[0]) + (at.x - start.x))),
+                        crate::view::render::px32(snap(f64::from(from[1]) + (at.y - start.y))),
                     ];
                 }
                 true

@@ -33,10 +33,10 @@ use gpui::Window;
 use gpui::canvas;
 use gpui::div;
 use gpui::px;
-use kurbo::Affine;
 use kurbo::BezPath;
 use runebender_core::document::nodes_run::Status;
 use runebender_core::ui::editing::viewport::ViewPort;
+use runebender_core::ui::nodes as nl;
 
 /// What one paint of the canvas needs, gathered while `self` is
 /// borrowed and handed to the paint closure.
@@ -326,32 +326,10 @@ impl Workspace {
                 bounds_slot: view.bounds.clone(),
             };
         };
-        let boxes: Vec<NodeBox> = state
-            .graph
-            .nodes
-            .iter()
-            .map(|n| crate::edit::nodes::node_box(state, n))
-            .collect();
-        let marks: Vec<Option<&'static str>> = state
-            .graph
-            .nodes
-            .iter()
-            .map(|n| crate::edit::nodes::type_mark(&n.type_name))
-            .collect();
+        let boxes: Vec<NodeBox> = nl::layout(&state.graph, &state.registry);
+        let marks: Vec<Option<&'static str>> = boxes.iter().map(NodeBox::mark).collect();
         let index_of = |id: u32| boxes.iter().position(|b| b.id == id);
-        let mut wires = Vec::new();
-        for l in &state.graph.links {
-            let (Some(a), Some(b)) = (index_of(l.from()), index_of(l.to())) else {
-                continue;
-            };
-            let (Some(o), Some(i)) = (
-                boxes[a].outputs.iter().position(|p| p.name == l.output()),
-                boxes[b].inputs.iter().position(|p| p.name == l.input()),
-            ) else {
-                continue;
-            };
-            wires.push((a, o, b, i));
-        }
+        let wires = nl::wires(&state.graph, &boxes);
         let origin = view.bounds.lock().unwrap_or_else(|e| e.into_inner()).origin;
         let pending_kind = match &view.drag {
             Some(crate::edit::nodes::NodeDrag::Wire { kind, .. }) => Some(*kind),
@@ -387,25 +365,7 @@ impl Workspace {
     }
 }
 
-/// A cubic between two ports with horizontal tangents, in canvas
-/// units: the shape a node editor reader expects.
-fn wire_path(a: kurbo::Point, b: kurbo::Point) -> BezPath {
-    let dx = ((b.x - a.x).abs() * 0.5).clamp(24.0, 120.0);
-    let mut path = BezPath::new();
-    path.move_to(a);
-    path.curve_to(
-        kurbo::Point::new(a.x + dx, a.y),
-        kurbo::Point::new(b.x - dx, b.y),
-        b,
-    );
-    path
-}
-
-/// A circle as a path, in canvas units.
-fn circle(center: kurbo::Point, r: f64) -> BezPath {
-    use kurbo::Shape as _;
-    kurbo::Circle::new(center, r).to_path(0.05)
-}
+use runebender_core::ui::nodes::{circle, wire_path};
 
 /// A rectangle as a path, in canvas units.
 fn rect(r: kurbo::Rect) -> BezPath {
@@ -501,7 +461,7 @@ fn paint_nodes(
     // Canvas units (Y down) to canvas pixels: the viewport's affine,
     // which flips Y, after a flip that puts the file's Y-down space
     // into the viewport's Y-up one.
-    let tf = vp.affine() * Affine::FLIP_Y;
+    let tf = nl::canvas_affine(vp);
     let sp = |p: kurbo::Point| to_screen(vp, origin, p);
     let stroke = f32::from(t::stroke()).max(1.0);
     let wire_w = (1.5 * zoom).max(1.0);
@@ -515,28 +475,14 @@ fn paint_nodes(
     // zooms with the boxes. Node edges run through the ring centres,
     // since the box sizes are multiples of the pitch and positions
     // snap to it. Skipped when the pitch is too small to read.
-    let pitch = crate::edit::nodes::GRID;
-    if px32(pitch) * zoom >= 8.0 {
-        let inverse = tf.inverse();
-        let (bw, bh) = (
+    if px32(nl::GRID) * zoom >= 8.0 {
+        let local = kurbo::Rect::new(
+            0.0,
+            0.0,
             f64::from(f32::from(bounds.size.width)),
             f64::from(f32::from(bounds.size.height)),
         );
-        let c0 = inverse * kurbo::Point::new(0.0, 0.0);
-        let c1 = inverse * kurbo::Point::new(bw, bh);
-        let (x0, x1) = (c0.x.min(c1.x), c0.x.max(c1.x));
-        let (y0, y1) = (c0.y.min(c1.y), c0.y.max(c1.y));
-        let r = 1.75;
-        let mut rings = BezPath::new();
-        let mut y = (y0 / pitch).floor() * pitch;
-        while y <= y1 {
-            let mut x = (x0 / pitch).floor() * pitch;
-            while x <= x1 {
-                rings.extend(circle(kurbo::Point::new(x, y), r));
-                x += pitch;
-            }
-            y += pitch;
-        }
+        let rings = nl::grid_rings(nl::visible_canvas(vp, local));
         // Quiet: the keyline mixed most of the way into the ground,
         // so the grid reads and still sits behind the boxes. Mixed,
         // not alpha, because a path's alpha is not reliable here.
@@ -556,7 +502,7 @@ fn paint_nodes(
     // colour of a cell's outline, one stroke wider on each side, then
     // the colour on top, so it reads on the grey the way a cell does.
     let wire_ink = |kind| {
-        crate::edit::nodes::kind_mark(kind)
+        nl::kind_mark(kind)
             .and_then(|m| t::mark_paint(Some(m)))
             .map_or_else(t::text_muted, |p| p.bg.unwrap_or(p.border))
     };
@@ -594,7 +540,7 @@ fn paint_nodes(
     }
 
     let text_px = (crate::workspace::UI_TEXT_PX * zoom).clamp(6.0, 40.0);
-    let port_r = (px32(crate::edit::nodes::PORT_R) * zoom).max(2.0);
+    let port_r = (px32(nl::PORT_R) * zoom).max(2.0);
     for (index, nb) in scene.boxes.iter().enumerate() {
         let mark = scene
             .marks
@@ -605,14 +551,9 @@ fn paint_nodes(
         let top_left = sp(nb.rect.origin());
         let w = px32(nb.rect.width()) * zoom;
         let h = px32(nb.rect.height()) * zoom;
-        let header_h = px32(crate::edit::nodes::HEADER_H) * zoom;
+        let header_h = px32(nl::HEADER_H) * zoom;
         let selected = scene.selected == Some(nb.id);
-        let header_rect = kurbo::Rect::new(
-            nb.rect.x0,
-            nb.rect.y0,
-            nb.rect.x1,
-            nb.rect.y0 + crate::edit::nodes::HEADER_H,
-        );
+        let header_rect = nb.header();
         let outline = if selected {
             t::selected_bg()
         } else {
@@ -643,7 +584,7 @@ fn paint_nodes(
             outline,
         );
         // Title left, status right, in the header.
-        let pad = px32(crate::edit::nodes::PAD) * zoom;
+        let pad = px32(nl::PAD) * zoom;
         let title_ink = if selected {
             t::selected_ink()
         } else {
@@ -680,7 +621,7 @@ fn paint_nodes(
             title_ink,
         );
         // Rows: an input's name at the left, an output's at the right.
-        let row_h = px32(crate::edit::nodes::ROW_H) * zoom;
+        let row_h = px32(nl::ROW_H) * zoom;
         let inner_w = w - 2.0 * pad - 2.0 * port_r;
         for port in &nb.inputs {
             let y = top_left.y
@@ -753,7 +694,7 @@ fn paint_nodes(
                 None => (false, false),
             };
             let ink = if fades { t::text_muted() } else { t::text() };
-            let dot = circle(port.at, crate::edit::nodes::PORT_R);
+            let dot = circle(port.at, nl::PORT_R);
             draw(
                 window,
                 &dot,
@@ -762,7 +703,7 @@ fn paint_nodes(
             );
             draw(window, &dot, PathBuilder::stroke(px(stroke)), ink);
             if takes {
-                let ring = circle(port.at, crate::edit::nodes::PORT_R * 2.0);
+                let ring = circle(port.at, nl::PORT_R * 2.0);
                 draw(window, &ring, PathBuilder::stroke(px(stroke)), t::text());
             }
         }
