@@ -213,10 +213,6 @@ pub(crate) fn selected_ink() -> Rgba {
 
 // ---- accents and text ----
 
-/// The accent hue, used for selection and emphasis.
-pub(crate) fn accent() -> Rgba {
-    c(theme().role("accent"))
-}
 /// The primary text ink.
 pub(crate) fn text() -> Rgba {
     c(theme().text("primary"))
@@ -563,7 +559,7 @@ mod colour_tests {
         for (name, c) in [
             ("text", super::text()),
             ("text_muted", super::text_muted()),
-            ("accent", super::accent()),
+            ("danger", super::status_yellow()),
         ] {
             println!("{name}: r={} g={} b={} a={}", c.r, c.g, c.b, c.a);
             assert!(c.a > 0.0, "{name} is fully transparent");
@@ -583,7 +579,7 @@ mod perf {
         let start = std::time::Instant::now();
         let mut sink = 0_f32;
         for _ in 0..n {
-            sink += super::text().r + super::accent().g;
+            sink += super::text().r + super::text_muted().g;
         }
         let each = start.elapsed().as_nanos() as f64 / n as f64;
         println!("{each:.0} ns per lookup (sink {sink})");
