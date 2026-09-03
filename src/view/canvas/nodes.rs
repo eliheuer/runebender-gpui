@@ -511,11 +511,12 @@ fn paint_nodes(
         }
     };
 
-    // The dot grid: a dot at every pitch, nodes snap their edges to
-    // them. Skipped when the pitch is too small to read.
+    // The dot grid: a small ring at every pitch, in canvas units so it
+    // zooms with the boxes. Node edges run through the ring centres,
+    // since the box sizes are multiples of the pitch and positions
+    // snap to it. Skipped when the pitch is too small to read.
     let pitch = crate::edit::nodes::GRID;
-    if px32(pitch) * zoom >= 6.0 {
-        // The visible canvas rectangle, from the corners.
+    if px32(pitch) * zoom >= 8.0 {
         let inverse = tf.inverse();
         let (bw, bh) = (
             f64::from(f32::from(bounds.size.width)),
@@ -525,18 +526,23 @@ fn paint_nodes(
         let c1 = inverse * kurbo::Point::new(bw, bh);
         let (x0, x1) = (c0.x.min(c1.x), c0.x.max(c1.x));
         let (y0, y1) = (c0.y.min(c1.y), c0.y.max(c1.y));
-        let r = (1.25 / f64::from(zoom)).clamp(0.5, 3.0);
-        let mut dots = BezPath::new();
+        let r = 2.5;
+        let mut rings = BezPath::new();
         let mut y = (y0 / pitch).floor() * pitch;
         while y <= y1 {
             let mut x = (x0 / pitch).floor() * pitch;
             while x <= x1 {
-                dots.extend(circle(kurbo::Point::new(x, y), r));
+                rings.extend(circle(kurbo::Point::new(x, y), r));
                 x += pitch;
             }
             y += pitch;
         }
-        draw(window, &dots, PathBuilder::fill(), t::cell_border());
+        draw(
+            window,
+            &rings,
+            PathBuilder::stroke(px(stroke)),
+            t::cell_border(),
+        );
     }
 
     // A wire takes the mark colour of what it carries; a value with
