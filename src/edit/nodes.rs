@@ -102,10 +102,7 @@ impl GraphState {
         let parts: Vec<String> = node
             .values
             .iter()
-            .map(|(k, v)| match v {
-                serde_json::Value::String(s) => format!("{k} {s}"),
-                other => format!("{k} {other}"),
-            })
+            .map(|(k, v)| format!("{k} {}", value_text(v)))
             .collect();
         Some(parts.join(" · ").into())
     }
@@ -563,6 +560,19 @@ fn to_canvas(
     kurbo::Point::new(d.x, -d.y)
 }
 
+/// A typed value as the box shows it: a whole number without its
+/// `.0`, a string bare.
+pub(crate) fn value_text(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => match n.as_f64() {
+            Some(f) if f.fract() == 0.0 && f.abs() < 1e15 => format!("{f:.0}"),
+            _ => n.to_string(),
+        },
+        other => other.to_string(),
+    }
+}
+
 /// Lays out one node: header, one row per port on either side, the
 /// dots on the edges.
 pub(crate) fn node_box(
@@ -593,10 +603,7 @@ pub(crate) fn node_box(
             at: kurbo::Point::new(x, row_y(first_input + i)),
             row: first_input + i,
             linked: state.graph.link_into(node.id, &p.name).is_some(),
-            value: node.values.get(&p.name).map(|v| match v {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            }),
+            value: node.values.get(&p.name).map(value_text),
         })
         .collect();
     let outputs = outputs
