@@ -31,18 +31,14 @@ use std::collections::{HashMap, HashSet};
 
 /// How the font overview presents the glyph set.
 ///
-/// Grid, detail, and list are Font View's three modes in Glyphs 4.
+/// Two modes. Glyphs 4 also has a detail grid, but the zoom slider
+/// already covers what it showed.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum FontViewMode {
     /// The classic grid of glyph cells.
     Grid,
-    /// The detail grid: info columns beside every cell.
-    Detail,
     /// The property table: one row per glyph.
     List,
-    /// The positional-forms matrix for Arabic review: isol, init,
-    /// medi, and fina as columns per base letter.
-    Matrix,
 }
 
 /// Built-in sample strings: spacing control strings and kern words.
@@ -635,8 +631,11 @@ pub(crate) struct GridState {
     /// Multi-selected glyph names (grid cmd/shift-click); `selected`
     /// stays the primary.
     pub(crate) multi_selected: HashSet<String>,
-    /// The font view mode: grid, detail, list, or matrix.
+    /// The font view mode: grid or list.
     pub(crate) view_mode: FontViewMode,
+    /// The list view's scroll position, kept here so the list starts
+    /// at the top and keeps its place across frames.
+    pub(crate) list_scroll: gpui::ScrollHandle,
 }
 
 /// The left sidebar: filter, search, expansion, scroll, and its inputs.

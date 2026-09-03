@@ -9,7 +9,6 @@
 use crate::Arc;
 use crate::Workspace;
 use crate::view::render::to_count;
-use crate::workspace::FontViewMode;
 use crate::workspace::GRID_GAP;
 use crate::workspace::GRID_PAD;
 use crate::workspace::GRID_PAD_SM;
@@ -26,14 +25,7 @@ impl Workspace {
     /// visible height evenly, so no row is left sliced in half at the
     /// bottom edge. This is how the web editor sizes its grid.
     pub(crate) fn grid_cell_metrics(&self) -> GridFit {
-        // Detail mode needs room for the info lines: the cell floor
-        // rises, whatever the zoom slider says.
-        let size = if self.grid.view_mode == FontViewMode::Detail {
-            self.grid.cell_size.max(148.0)
-        } else {
-            self.grid.cell_size
-        };
-        Self::solve_grid(self.grid.viewport, size, GRID_PAD)
+        Self::solve_grid(self.grid.viewport, self.grid.cell_size, GRID_PAD)
     }
 
     /// Same solve for the editor sidebar's mini grid, against its own

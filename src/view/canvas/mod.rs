@@ -12,10 +12,7 @@
 use crate::Mode;
 use crate::Workspace;
 use crate::view::grid::cell_label_metrics;
-use crate::view::paint::build_fill_path;
 use crate::view::theme as t;
-use crate::workspace::FontViewMode;
-use gpui::Bounds;
 use gpui::Context;
 use gpui::InteractiveElement;
 use gpui::IntoElement;
@@ -23,11 +20,9 @@ use gpui::ParentElement;
 use gpui::SharedString;
 use gpui::StatefulInteractiveElement;
 use gpui::Styled;
-use gpui::canvas;
 use gpui::div;
 use gpui::prelude::FluentBuilder;
 use gpui::px;
-use kurbo::Affine;
 
 /// The glyph editing canvas: the scene it gathers and the layers it
 /// paints.
@@ -55,17 +50,6 @@ impl Workspace {
         let unicode_label: Option<SharedString> = entry
             .codepoint
             .map(|c| format!("U+{:04X}", c as u32).into());
-        let detail_info: Option<SharedString> =
-            (self.grid.view_mode == FontViewMode::Detail && !jump_on_click).then(|| {
-                let category = entry
-                    .codepoint
-                    .map(|c| {
-                        runebender_core::analysis::category::GlyphCategory::from_codepoint(c)
-                            .display_name()
-                    })
-                    .unwrap_or("Unencoded");
-                format!("{category} · {:.0}", entry.advance).into()
-            });
         let selected = if jump_on_click {
             matches!(self.mode, Mode::Editor(i) if i == index)
         } else {
@@ -177,15 +161,6 @@ impl Workspace {
                                     })
                                     .child(unicode_label.unwrap_or_else(|| "".into())),
                             )
-                        })
-                        // Detail mode's extra line: category and advance,
-                        // the Glyphs 4 detail-grid info.
-                        .when(detail_info.is_some(), |el| {
-                            el.child(
-                                div()
-                                    .text_color(t::text_muted())
-                                    .child(detail_info.clone().unwrap_or_default()),
-                            )
                         }),
                 )
             })
@@ -248,6 +223,7 @@ impl Workspace {
             .flex_1()
             .min_h(px(0.0))
             .overflow_y_scroll()
+            .track_scroll(&self.grid.list_scroll)
             .flex()
             .flex_col();
         for &index in order.iter() {
@@ -255,7 +231,7 @@ impl Workspace {
             let name = entry.name.clone();
             let selected =
                 self.selected == Some(index) || self.grid.multi_selected.contains(name.as_ref());
-            let mark = t::mark_paint(entry.mark.as_deref()).map(|p| p.ink);
+            let mark = t::mark_paint(entry.mark.as_deref());
             let ink = font.ink_bounds(index);
             let (lsb, rsb) = match ink {
                 Some(r) => (
@@ -317,18 +293,19 @@ impl Workspace {
                         }
                         cx.notify();
                     }))
+                    // The mark, painted the way the grid paints it: the
+                    // same fill and the same keyline, on a small cell.
                     .child(
                         div().w(px(14.0)).flex_shrink_0().child(
                             div()
-                                .w(px(9.0))
-                                .h(px(9.0))
-                                .rounded_full()
-                                .bg(mark.unwrap_or(gpui::Rgba {
-                                    r: 0.0,
-                                    g: 0.0,
-                                    b: 0.0,
-                                    a: 0.0,
-                                })),
+                                .w(px(12.0))
+                                .h(px(12.0))
+                                .rounded(t::radius())
+                                .when_some(mark.as_ref(), |el, p| {
+                                    el.bg(p.bg.unwrap_or(p.ink))
+                                        .border(t::stroke())
+                                        .border_color(p.border)
+                                }),
                         ),
                     )
                     .child(
@@ -359,163 +336,5 @@ impl Workspace {
             );
         }
         list.child(rows).into_any_element()
-    }
-
-    /// The positional-forms matrix, the Arabic review surface.
-    ///
-    /// One row per base letter that carries positional variants, with
-    /// isol/init/medi/fina as columns, each a live thumbnail. Click a
-    /// form to open it. A dash marks a missing form. This is Matrix
-    /// Mode in Counterpunch.
-    pub(crate) fn glyph_matrix_view(&self, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
-        let Some(font) = self.font() else {
-            return div().into_any_element();
-        };
-        // Families: base name → indices of [isol, init, medi, fina].
-        let mut families: std::collections::BTreeMap<String, [Option<usize>; 4]> =
-            std::collections::BTreeMap::new();
-        for (i, entry) in font.glyphs.iter().enumerate() {
-            let name = entry.name.as_ref();
-            let (base, slot) = if let Some(b) = name.strip_suffix(".init") {
-                (b, 1)
-            } else if let Some(b) = name.strip_suffix(".medi") {
-                (b, 2)
-            } else if let Some(b) = name.strip_suffix(".fina") {
-                (b, 3)
-            } else {
-                (name, 0)
-            };
-            let family = families.entry(base.to_string()).or_default();
-            family[slot] = Some(i);
-        }
-        families.retain(|_, forms| forms[1..].iter().any(Option::is_some));
-        if families.is_empty() {
-            return div()
-                .p_4()
-                .text_color(t::text_muted())
-                .child("No positional forms (.init/.medi/.fina) in this font")
-                .into_any_element();
-        }
-        const THUMB: f32 = 56.0;
-        let header = |label: &'static str| {
-            div()
-                .w(px(THUMB))
-                .flex_shrink_0()
-                .text_color(t::text_muted())
-                .child(label)
-        };
-        let mut rows = div()
-            .id("glyph-matrix")
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .px_2();
-        rows = rows.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .py_1()
-                .border_b_1()
-                .border_color(t::panel_outline())
-                .child(
-                    div()
-                        .w(px(140.0))
-                        .flex_shrink_0()
-                        .text_color(t::text_muted())
-                        .child("Base"),
-                )
-                // RTL reading order: isolated at the right end would
-                // be truer, but columns read left-to-right here with
-                // the joining flow explicit in the labels.
-                .child(header("isol"))
-                .child(header("init"))
-                .child(header("medi"))
-                .child(header("fina")),
-        );
-        for (base, forms) in &families {
-            let mut row = div().flex().items_center().gap_2().py_0p5().child(
-                div()
-                    .w(px(140.0))
-                    .flex_shrink_0()
-                    .text_color(t::text())
-                    .overflow_hidden()
-                    .child(base.clone()),
-            );
-            for (slot, form) in forms.iter().enumerate() {
-                row = row.child(match *form {
-                    Some(index) => {
-                        let entry = &font.glyphs[index];
-                        let (path, advance, asc, desc) = (
-                            entry.path.clone(),
-                            entry.advance,
-                            font.ascender,
-                            font.descender,
-                        );
-                        let selected = self.selected == Some(index);
-                        div()
-                            .id(("matrix-cell", index * 4 + slot))
-                            .w(px(THUMB))
-                            .h(px(THUMB))
-                            .flex_shrink_0()
-                            .rounded(t::radius())
-                            .border(t::stroke())
-                            .border_color(if selected {
-                                t::cell_selected_ring()
-                            } else {
-                                t::cell_border()
-                            })
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
-                                this.selected = Some(index);
-                                this.grid.multi_selected.clear();
-                                if ev.click_count() >= 2 {
-                                    this.open_editor(index);
-                                }
-                                cx.notify();
-                            }))
-                            .child(
-                                canvas(
-                                    move |bounds, _, _| bounds,
-                                    move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                                        let h: f32 = bounds.size.height.into();
-                                        let w: f32 = bounds.size.width.into();
-                                        let em = (asc - desc).max(1.0);
-                                        let scale =
-                                            (h as f64 / em).min(w as f64 / advance.max(1.0));
-                                        let ox = (w as f64 - advance * scale) / 2.0;
-                                        let baseline = h as f64 + desc * scale;
-                                        let view = Affine::translate((ox, baseline))
-                                            * Affine::scale_non_uniform(scale, -scale);
-                                        if let Some(p) = build_fill_path(&path, view, bounds.origin)
-                                        {
-                                            window.paint_path(p, t::glyph_fill());
-                                        }
-                                    },
-                                )
-                                .size_full(),
-                            )
-                            .into_any_element()
-                    }
-                    None => div()
-                        .w(px(THUMB))
-                        .h(px(THUMB))
-                        .flex_shrink_0()
-                        .rounded(t::radius())
-                        .border(t::stroke())
-                        .border_color(t::panel_outline())
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(t::text_muted())
-                        .child("–")
-                        .into_any_element(),
-                });
-            }
-            rows = rows.child(row);
-        }
-        rows.into_any_element()
     }
 }

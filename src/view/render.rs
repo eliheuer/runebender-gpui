@@ -402,12 +402,10 @@ impl Workspace {
                                     },
                                 ));
                             // List swaps the whole grid for the
-                            // property table; Grid and Detail share
-                            // the cell pipeline.
+                            // property table.
                             match self.grid.view_mode {
                                 FontViewMode::List => self.glyph_list_view(cx),
-                                FontViewMode::Matrix => self.glyph_matrix_view(cx),
-                                _ => grid_block.into_any_element(),
+                                FontViewMode::Grid => grid_block.into_any_element(),
                             }
                         })
                         // One bar per column bottom: the grid's lives

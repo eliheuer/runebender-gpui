@@ -426,13 +426,17 @@ impl Workspace {
             // The same list the grid draws, already filtered: counting
             // it again meant another pass over the whole font per frame.
             let shown = self.glyph_order().len();
+            // The primary plus the multi-selection, counted once
+            // when the primary is in both.
+            let primary_name = self
+                .selected
+                .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))
+                .map(|e| e.name.as_ref());
+            let selected = self.grid.multi_selected.len()
+                + usize::from(primary_name.is_some_and(|n| !self.grid.multi_selected.contains(n)));
             let center: SharedString = match &self.status_note {
                 Some(note) => note.clone(),
-                None => format!(
-                    "{} selected · {shown}/{total} glyphs",
-                    usize::from(self.selected.is_some())
-                )
-                .into(),
+                None => format!("{selected} selected · {shown}/{total} glyphs").into(),
             };
             let bar_button = |id: &'static str, mark: IconMark| {
                 div()
@@ -481,25 +485,41 @@ impl Workspace {
                         .child(center),
                 )
                 .child({
-                    // Grid · Detail · List, the Glyphs 4 view modes,
-                    // beside the cell zoom.
+                    // Grid and List, as marks in the same boxes the
+                    // add/remove buttons use; the current one is
+                    // inverted, the way everything selected is.
                     let mode_button =
                         |id: &'static str,
-                         label: &'static str,
+                         mark: IconMark,
                          mode: FontViewMode,
                          current: FontViewMode,
                          cx: &mut Context<'_, Self>| {
+                            let on = mode == current;
                             div()
                                 .id(id)
-                                .px_1p5()
+                                .w(px(BAR_BUTTON))
+                                .h(px(BAR_BUTTON))
                                 .rounded(t::radius())
-                                .cursor_pointer()
-                                .text_color(if mode == current {
-                                    t::text()
+                                .border(t::stroke())
+                                .border_color(if on {
+                                    t::selected_bg()
                                 } else {
-                                    t::text_muted()
+                                    t::cell_border()
                                 })
-                                .child(label)
+                                .when(on, |el| el.bg(t::selected_bg()))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .child(glyph_free_icon(
+                                    if on {
+                                        t::selected_ink()
+                                    } else {
+                                        t::cell_border()
+                                    },
+                                    t::stroke(),
+                                    mark,
+                                ))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.grid.view_mode = mode;
                                     cx.notify();
@@ -509,33 +529,19 @@ impl Workspace {
                     div()
                         .flex()
                         .items_center()
-                        .gap_0p5()
+                        .gap_1()
                         .mr_2()
                         .child(mode_button(
                             "view-grid",
-                            "Grid",
+                            IconMark::Grid,
                             FontViewMode::Grid,
                             current,
                             cx,
                         ))
                         .child(mode_button(
-                            "view-detail",
-                            "Detail",
-                            FontViewMode::Detail,
-                            current,
-                            cx,
-                        ))
-                        .child(mode_button(
                             "view-list",
-                            "List",
+                            IconMark::List,
                             FontViewMode::List,
-                            current,
-                            cx,
-                        ))
-                        .child(mode_button(
-                            "view-matrix",
-                            "Forms",
-                            FontViewMode::Matrix,
                             current,
                             cx,
                         ))

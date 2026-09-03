@@ -240,7 +240,7 @@ pub(crate) fn eye_icon(color: gpui::Rgba, open: bool) -> impl IntoElement {
     .h(px(16.0))
 }
 
-/// A drawn plus, minus or cross.
+/// A drawn plus, minus, grid or list mark.
 ///
 /// Set as text these sit visibly off-centre: a "×" carries its own
 /// side bearings and a "−" rides above the middle. So they are
@@ -269,6 +269,27 @@ pub(crate) fn glyph_free_icon(
                         pb.line_to(pt(cx_, cy_ + r));
                     }
                 }
+                // Four small cells: the grid view.
+                IconMark::Grid => {
+                    let gap = r * 0.35;
+                    let s = r - gap / 2.0;
+                    for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                        let (x0, y0) = (cx_ + sx * gap / 2.0, cy_ + sy * gap / 2.0);
+                        let (x1, y1) = (x0 + sx * s, y0 + sy * s);
+                        pb.move_to(pt(x0, y0));
+                        pb.line_to(pt(x1, y0));
+                        pb.line_to(pt(x1, y1));
+                        pb.line_to(pt(x0, y1));
+                        pb.close();
+                    }
+                }
+                // Three rules: the list view.
+                IconMark::List => {
+                    for dy in [-r * 0.8, 0.0, r * 0.8] {
+                        pb.move_to(pt(cx_ - r, cy_ + dy));
+                        pb.line_to(pt(cx_ + r, cy_ + dy));
+                    }
+                }
             }
             if let Ok(p) = pb.build() {
                 window.paint_path(p, color);
@@ -285,6 +306,10 @@ pub(crate) enum IconMark {
     Plus,
     /// A horizontal minus stroke.
     Minus,
+    /// Four cells: the grid view.
+    Grid,
+    /// Three rules: the list view.
+    List,
 }
 
 /// A circle filled on one half: the ink/ground flip.

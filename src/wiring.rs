@@ -712,7 +712,14 @@ impl Workspace {
                 scroll_row: 0,
                 cell_slider: None,
                 multi_selected: HashSet::new(),
-                view_mode: FontViewMode::Grid,
+                // QA hook, like RB_OPEN_GLYPH: RB_VIEW_MODE=list starts
+                // in the list view.
+                view_mode: if std::env::var("RB_VIEW_MODE").as_deref() == Ok("list") {
+                    FontViewMode::List
+                } else {
+                    FontViewMode::Grid
+                },
+                list_scroll: gpui::ScrollHandle::new(),
             },
             sidebar: SidebarState {
                 filter: SidebarFilter::All,
