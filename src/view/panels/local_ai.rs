@@ -65,6 +65,12 @@ impl Workspace {
             })
         };
 
+        // Nodes: the files beside the font, and the open one as rows
+        // in run order. A file names its own model, so this sits
+        // above the model check. The canvas comes later; the rows run
+        // now.
+        let body = self.nodes_rows(body, cx);
+
         if self.models.dir.is_none() {
             let where_to_put_them = Self::models_dir()
                 .map(|p| p.display().to_string())
@@ -248,4 +254,141 @@ impl Workspace {
             None => body,
         }
     }
+
+    /// The Nodes part of the panel: one button per file found, an
+    /// Open button, and the open file's rows.
+    fn nodes_rows(&self, body: gpui::Div, cx: &mut Context<'_, Self>) -> gpui::Div {
+        use crate::edit::nodes::{RowState, file_label};
+        use runebender_core::document::nodes_run::Status;
+        let mut body = body.child(div().text_color(t::text_muted()).child("Nodes"));
+        let open_path = self.models.graph.as_ref().map(|g| g.path.clone());
+        let files = self.models.graph_files.clone();
+        let mut row = c::row();
+        for file in files {
+            let current = open_path.as_deref() == Some(file.as_path());
+            let label = file_label(&file);
+            row = row.child(
+                c::toggle(
+                    SharedString::from(format!("nodes-file-{}", file.display())),
+                    label,
+                    current,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.models.graph.as_ref().is_some_and(|g| g.path == file) {
+                        this.close_nodes_file();
+                    } else {
+                        this.open_nodes_file(&file);
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        row = row.child(c::button("nodes-open", "Open…").on_click(cx.listener(
+            |this, _, _, cx| {
+                this.command_open_nodes_file(cx);
+            },
+        )));
+        body = body.child(row);
+        let Some(state) = self.models.graph.as_ref() else {
+            return body;
+        };
+        for p in &state.problems {
+            body = body.child(div().text_color(t::text()).child(format!("{p}")));
+        }
+        for &id in &state.order {
+            let title = state.title(id);
+            let values = state.values_line(id);
+            let (mark, note): (SharedString, Option<SharedString>) =
+                match state.rows.get(&id).cloned().unwrap_or(RowState::Waiting) {
+                    RowState::Waiting => ("·".into(), None),
+                    RowState::Running(note) => ("…".into(), note),
+                    RowState::Done(Status::Ran, note) => ("✓".into(), note),
+                    RowState::Done(Status::Skipped, note) => ("=".into(), note),
+                    RowState::Done(Status::Failed, note) => ("✗".into(), note),
+                    RowState::Done(Status::Blocked, note) => ("–".into(), note),
+                };
+            body = body.child(
+                c::row()
+                    .child(
+                        div()
+                            .w(px(16.0))
+                            .flex_none()
+                            .text_color(t::text_muted())
+                            .child(mark),
+                    )
+                    .child(
+                        div()
+                            .w(px(LABEL_W_NODES))
+                            .flex_none()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_color(t::text())
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_color(t::text_muted())
+                            .child(note.or(values).unwrap_or_default()),
+                    ),
+            );
+        }
+        let running = state.running;
+        body.child(
+            c::row()
+                .child(
+                    c::toggle(
+                        "nodes-run",
+                        if running { "Running…" } else { "Run" },
+                        !running,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.run_nodes(cx);
+                        cx.notify();
+                    })),
+                )
+                .child(c::button("nodes-close", "Close").on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.close_nodes_file();
+                        cx.notify();
+                    },
+                ))),
+        )
+    }
+
+    /// Open…: a file picker for a `.nodes.json`.
+    #[cfg(not(target_family = "wasm"))]
+    fn command_open_nodes_file(&mut self, cx: &mut Context<'_, Self>) {
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Open nodes".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(file) = paths.into_iter().next() else {
+                return;
+            };
+            this.update(cx, |workspace, cx| {
+                workspace.open_nodes_file(&file);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn command_open_nodes_file(&mut self, _cx: &mut Context<'_, Self>) {
+        self.status_note = Some("Nodes files open in the desktop app".into());
+    }
 }
+
+/// The title column in a nodes row.
+const LABEL_W_NODES: f32 = 72.0;

@@ -766,7 +766,10 @@ impl Workspace {
                 binary: None,
                 tasks: None,
                 tasks_asked: false,
+                tasks_json: None,
                 strength_slider: None,
+                graph: None,
+                graph_files: Vec::new(),
             },
             inputs: InputFields {
                 reference_glyph: reference_glyph_input.clone(),

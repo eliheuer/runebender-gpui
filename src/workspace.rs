@@ -721,8 +721,14 @@ pub(crate) struct ModelsState {
     pub(crate) tasks: Option<Vec<crate::edit::local_ai::TaskRow>>,
     /// Whether it has been asked, so it is asked once.
     pub(crate) tasks_asked: bool,
+    /// The answer as it came, for core's node registry.
+    pub(crate) tasks_json: Option<serde_json::Value>,
     /// The strength slider, built lazily in render.
     pub(crate) strength_slider: Option<gpui::Entity<widgets::slider::SliderState>>,
+    /// The `.nodes.json` open in the panel.
+    pub(crate) graph: Option<crate::edit::nodes::GraphState>,
+    /// The `.nodes.json` files found beside the font.
+    pub(crate) graph_files: Vec<PathBuf>,
 }
 
 /// Every input field the inspector owns. The widgets are built in

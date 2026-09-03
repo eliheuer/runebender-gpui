@@ -303,7 +303,7 @@ impl Workspace {
             return;
         };
         cx.spawn(async move |this, cx| {
-            let rows: Vec<TaskRow> = cx
+            let text: String = cx
                 .background_executor()
                 .spawn(async move {
                     std::process::Command::new(&font_ml)
@@ -311,12 +311,21 @@ impl Workspace {
                         .arg("--json")
                         .output()
                         .ok()
-                        .map(|o| TaskRow::parse(&String::from_utf8_lossy(&o.stdout)))
+                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                         .unwrap_or_default()
                 })
                 .await;
             this.update(cx, |workspace, cx| {
-                workspace.models.tasks = Some(rows);
+                workspace.models.tasks = Some(TaskRow::parse(&text));
+                // The raw answer feeds core's node registry, so a node
+                // file can name any task the tool declares.
+                workspace.models.tasks_json = serde_json::from_str(&text).ok();
+                workspace.scan_nodes_files();
+                // QA hook, like RB_OPEN_GLYPH: RB_NODES=<file> opens a
+                // nodes file in the panel at launch.
+                if let Some(file) = std::env::var_os("RB_NODES").filter(|f| !f.is_empty()) {
+                    workspace.open_nodes_file(std::path::Path::new(&file));
+                }
                 cx.notify();
             })
             .ok();
