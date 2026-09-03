@@ -208,29 +208,16 @@ impl Workspace {
         std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".runebender/models"))
     }
 
-    /// Every model directory under `models_dir`, by name.
-    ///
-    /// Sorted, so the list does not reshuffle between launches on
-    /// whatever order the filesystem hands back.
+    /// Every model directory under the model roots, by name. Core
+    /// reads the roots: the models directory, then
+    /// `~/.runebender/model_paths`.
     pub(crate) fn installed_models() -> Vec<(String, PathBuf)> {
-        let Some(root) = Self::models_dir() else {
-            return Vec::new();
-        };
-        let Ok(entries) = std::fs::read_dir(&root) else {
-            return Vec::new();
-        };
-        let mut found: Vec<(String, PathBuf)> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.join("config.json").is_file())
-            .filter_map(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| (n.to_string(), p.clone()))
-            })
-            .collect();
-        found.sort_by(|a, b| a.0.cmp(&b.0));
-        found
+        runebender_core::document::nodes_run::installed(Self::models_dir().as_deref(), false)
+    }
+
+    /// Every adapter directory under the model roots, by name.
+    pub(crate) fn installed_adapters() -> Vec<(String, PathBuf)> {
+        runebender_core::document::nodes_run::installed(Self::models_dir().as_deref(), true)
     }
 
     /// Where the font-ml binary is: `$RUNEBENDER_FONT_ML`, then PATH,

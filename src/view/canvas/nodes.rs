@@ -82,6 +82,10 @@ impl Workspace {
                 })),
             );
         }
+        // The selected node's choices, when it picks from a list: a
+        // master, a model, or an adapter. The value is typed into the
+        // file; these buttons type it.
+        let choices = self.nodes_choices(cx);
         c::column()
             .p_1()
             .border_b_1()
@@ -120,6 +124,65 @@ impl Workspace {
                     ),
             )
             .child(adds)
+            .children(choices)
+    }
+
+    /// One toggle per choice for the selected Master, Model or Adapter
+    /// node; None for any other node.
+    fn nodes_choices(&self, cx: &mut Context<'_, Self>) -> Option<gpui::Div> {
+        let state = self.models.graph.as_ref()?;
+        let id = self.models.graph_view.selected?;
+        let node = state.graph.node(id)?;
+        let current = node
+            .values
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let options: Vec<String> = match node.type_name.as_str() {
+            "core.master" => self
+                .project
+                .as_ref()
+                .map(|p| p.master_names.iter().map(|m| m.to_string()).collect())
+                .unwrap_or_default(),
+            "core.model" => Self::installed_models()
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect(),
+            "core.adapter" => Self::installed_adapters()
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect(),
+            _ => return None,
+        };
+        if options.is_empty() {
+            return Some(
+                c::row().child(
+                    div()
+                        .text_color(t::text_muted())
+                        .child("Nothing installed to choose from"),
+                ),
+            );
+        }
+        let mut row = c::row().flex_wrap();
+        for option in options {
+            let on = current.as_deref() == Some(option.as_str());
+            let value = option.clone();
+            row = row.child(
+                c::toggle(
+                    SharedString::from(format!("nodes-choice-{option}")),
+                    option.clone(),
+                    on,
+                )
+                .flex_none()
+                .px_2()
+                .w_auto()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.nodes_set_value(id, "name", serde_json::Value::String(value.clone()));
+                    cx.notify();
+                })),
+            );
+        }
+        Some(row)
     }
 
     /// The canvas itself.

@@ -751,6 +751,19 @@ impl Workspace {
         self.nodes_revalidate();
     }
 
+    /// Types a value into a node's input and re-checks the file.
+    pub(crate) fn nodes_set_value(&mut self, id: u32, input: &str, value: serde_json::Value) {
+        if let Some(node) = self
+            .models
+            .graph
+            .as_mut()
+            .and_then(|s| s.graph.node_mut(id))
+        {
+            node.values.insert(input.to_string(), value);
+        }
+        self.nodes_revalidate();
+    }
+
     /// Removes the selected node and its wires.
     pub(crate) fn nodes_delete_selected(&mut self) {
         let Some(id) = self.models.graph_view.selected.take() else {
