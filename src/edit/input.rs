@@ -1276,6 +1276,15 @@ impl Workspace {
             2.0
         };
         match (key, cmd) {
+            ("escape", _) if matches!(self.mode, Mode::Nodes) => {
+                self.mode = Mode::Grid;
+                self.status_note = None;
+                true
+            }
+            ("backspace" | "delete", false) if matches!(self.mode, Mode::Nodes) => {
+                self.nodes_delete_selected();
+                true
+            }
             ("escape", _) if in_editor => {
                 if self.context_menu.is_some() {
                     self.context_menu = None;

@@ -386,6 +386,8 @@ pub(crate) enum Mode {
     Grid,
     /// The edit view, open on the glyph at this index.
     Editor(usize),
+    /// The nodes canvas: the open `.nodes.json` as boxes and wires.
+    Nodes,
 }
 
 /// The category rows, in web order. Labels double as the keys for
@@ -729,6 +731,9 @@ pub(crate) struct ModelsState {
     pub(crate) graph: Option<crate::edit::nodes::GraphState>,
     /// The `.nodes.json` files found beside the font.
     pub(crate) graph_files: Vec<PathBuf>,
+    /// The nodes canvas: viewport, selection, and the drag in
+    /// progress.
+    pub(crate) graph_view: crate::edit::nodes::NodesView,
 }
 
 /// Every input field the inspector owns. The widgets are built in

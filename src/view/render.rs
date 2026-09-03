@@ -227,6 +227,18 @@ impl Workspace {
         // Glyphs-style docked layout: left sidebar | center | right
         // sidebar as flat resizable panels, no floating containers.
         let (left, center): (gpui::AnyElement, gpui::AnyElement) = match self.mode {
+            Mode::Nodes if self.project.is_some() => (
+                self.category_sidebar(cx).into_any_element(),
+                div()
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .min_h(px(0.0))
+                    .child(self.nodes_strip(cx))
+                    .child(self.nodes_view(cx))
+                    .child(self.status_bar(cx))
+                    .into_any_element(),
+            ),
             Mode::Editor(index) if self.project.is_some() => (
                 self.editor_sidebar(cx).into_any_element(),
                 div()

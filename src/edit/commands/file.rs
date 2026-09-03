@@ -23,7 +23,7 @@ impl Workspace {
     pub(crate) fn command_new_session(&mut self) {
         let glyph = match self.mode {
             Mode::Editor(i) => Some(i),
-            Mode::Grid => self.last_editor.or(self.selected),
+            Mode::Grid | Mode::Nodes => self.last_editor.or(self.selected),
         };
         let Some(glyph) = glyph else { return };
         let Some(name) = self
@@ -143,6 +143,10 @@ impl Workspace {
     /// Save every dirty master (native), or PUT modified files to the
     /// workspace server (web).
     pub(crate) fn command_save(&mut self, cx: &mut Context<'_, Self>) {
+        // On the nodes canvas, Save writes the graph file too.
+        if matches!(self.mode, Mode::Nodes) {
+            self.save_nodes_file();
+        }
         #[cfg(target_family = "wasm")]
         {
             self.save_to_web_host(cx);

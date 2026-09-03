@@ -91,7 +91,7 @@ impl Workspace {
             } else {
                 let Some(index) = (match self.mode {
                     Mode::Editor(index) => Some(index),
-                    Mode::Grid => self.selected,
+                    Mode::Grid | Mode::Nodes => self.selected,
                 }) else {
                     return;
                 };
@@ -1057,7 +1057,7 @@ impl Workspace {
         // both modes: in the grid they follow the selected cell.
         let Some(index) = (match self.mode {
             Mode::Editor(index) => Some(index),
-            Mode::Grid => self.selected,
+            Mode::Grid | Mode::Nodes => self.selected,
         }) else {
             return;
         };

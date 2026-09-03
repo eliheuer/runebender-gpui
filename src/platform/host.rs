@@ -74,7 +74,7 @@ impl Workspace {
         };
         let open_glyph_name = match self.mode {
             Mode::Editor(i) => Some(project.active_font().glyphs[i].name.clone()),
-            Mode::Grid => None,
+            Mode::Grid | Mode::Nodes => None,
         };
         let mut skipped_dirty = false;
         for master in project.masters.iter_mut() {

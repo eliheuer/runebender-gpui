@@ -376,6 +376,7 @@ impl Workspace {
             return div().into_any_element();
         }
         let in_editor = matches!(self.mode, Mode::Editor(_));
+        let in_nodes = matches!(self.mode, Mode::Nodes);
         let tab = |id: gpui::ElementId, label: SharedString, active: bool| {
             div()
                 .id(id)
@@ -451,7 +452,7 @@ impl Workspace {
                             .font()
                             .map(|f| f.glyphs[index].name.to_string())
                             .unwrap_or_default(),
-                        Mode::Grid => s.glyph_name.clone(),
+                        Mode::Grid | Mode::Nodes => s.glyph_name.clone(),
                     }
                 } else {
                     s.glyph_name.clone()
@@ -468,18 +469,28 @@ impl Workspace {
             .items_center()
             .gap_1()
             .child(
-                tab("tab-font".into(), "Font".into(), !in_editor).on_click(cx.listener(
-                    |this, _, _, cx| {
+                tab("tab-font".into(), "Font".into(), !in_editor && !in_nodes).on_click(
+                    cx.listener(|this, _, _, cx| {
                         if let Mode::Editor(index) = this.mode {
                             this.last_editor = Some(index);
                             let name = this.font().map(|f| f.glyphs[index].name.to_string());
                             if let (Some(name), Some(project)) = (name, this.project.as_mut()) {
                                 project.recheck_compat(&name);
                             }
-                            this.mode = Mode::Grid;
-                            this.status_note = None;
-                            cx.notify();
                         }
+                        this.mode = Mode::Grid;
+                        this.status_note = None;
+                        cx.notify();
+                    }),
+                ),
+            )
+            // Nodes sits beside Font: the workflow over the font, as
+            // boxes and wires.
+            .child(
+                tab("tab-nodes".into(), "Nodes".into(), in_nodes).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.enter_nodes_mode();
+                        cx.notify();
                     },
                 )),
             )

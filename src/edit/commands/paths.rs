@@ -312,7 +312,7 @@ impl Workspace {
         let in_editor = matches!(self.mode, Mode::Editor(_));
         let index = match self.mode {
             Mode::Editor(i) => Some(i),
-            Mode::Grid => self.selected,
+            Mode::Grid | Mode::Nodes => self.selected,
         };
         if let (Some(index), Some(font)) = (index, self.font()) {
             let selected = if in_editor {
@@ -329,7 +329,7 @@ impl Workspace {
     pub(crate) fn command_paste(&mut self) {
         let index = match self.mode {
             Mode::Editor(i) => Some(i),
-            Mode::Grid => self.selected,
+            Mode::Grid | Mode::Nodes => self.selected,
         };
         let Some(index) = index else { return };
         if self.clipboard.is_empty() {

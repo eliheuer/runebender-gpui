@@ -325,6 +325,10 @@ impl Workspace {
                 // nodes file in the panel at launch.
                 if let Some(file) = std::env::var_os("RB_NODES").filter(|f| !f.is_empty()) {
                     workspace.open_nodes_file(std::path::Path::new(&file));
+                    // RB_MODE=nodes starts on the canvas.
+                    if std::env::var("RB_MODE").as_deref() == Ok("nodes") {
+                        workspace.enter_nodes_mode();
+                    }
                 }
                 cx.notify();
             })

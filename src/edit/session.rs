@@ -37,7 +37,7 @@ impl Workspace {
         }
         let open_glyph_name = match self.mode {
             Mode::Editor(i) => Some(project.active_font().glyphs[i].name.clone()),
-            Mode::Grid => None,
+            Mode::Grid | Mode::Nodes => None,
         };
         project.active = master;
         project.snap_location_to_master(master);
@@ -60,7 +60,7 @@ impl Workspace {
     pub(crate) fn park_active_session(&mut self) {
         let glyph = match self.mode {
             Mode::Editor(i) => Some(i),
-            Mode::Grid => self.last_editor,
+            Mode::Grid | Mode::Nodes => self.last_editor,
         };
         let name = glyph
             .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))
@@ -193,7 +193,7 @@ impl Workspace {
     pub(crate) fn current_glyph_index(&self) -> Option<usize> {
         match self.mode {
             Mode::Editor(index) => Some(index),
-            Mode::Grid => self.selected,
+            Mode::Grid | Mode::Nodes => self.selected,
         }
     }
 

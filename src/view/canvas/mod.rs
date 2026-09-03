@@ -27,6 +27,8 @@ use gpui::px;
 /// The glyph editing canvas: the scene it gathers and the layers it
 /// paints.
 mod editor;
+/// The nodes canvas: boxes and wires over the same viewport.
+mod nodes;
 
 impl Workspace {
     /// Builds one grid cell for the glyph at `index`, `cell` by

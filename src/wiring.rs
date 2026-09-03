@@ -770,6 +770,7 @@ impl Workspace {
                 strength_slider: None,
                 graph: None,
                 graph_files: Vec::new(),
+                graph_view: crate::edit::nodes::NodesView::default(),
             },
             inputs: InputFields {
                 reference_glyph: reference_glyph_input.clone(),
