@@ -180,6 +180,34 @@ impl Workspace {
         }
     }
 
+    /// A new empty file beside the font, named so it does not collide,
+    /// open on the canvas. Written on Save.
+    pub(crate) fn new_nodes_file(&mut self) {
+        let dir = self
+            .project
+            .as_ref()
+            .and_then(|p| p.active_font().source_path.parent().map(Path::to_path_buf))
+            .unwrap_or_default()
+            .join("nodes");
+        let mut n = 1;
+        let mut path = dir.join("untitled.nodes.json");
+        while path.exists() || self.models.graph.as_ref().is_some_and(|g| g.path == path) {
+            n += 1;
+            path = dir.join(format!("untitled-{n}.nodes.json"));
+        }
+        self.models.graph = Some(GraphState {
+            path,
+            graph: NodeGraph::default(),
+            registry: self.node_registry(),
+            order: Vec::new(),
+            problems: Vec::new(),
+            rows: BTreeMap::new(),
+            running: false,
+        });
+        self.models.graph_view.selected = None;
+        self.mode = Mode::Nodes;
+    }
+
     /// Closes the file in the panel.
     pub(crate) fn close_nodes_file(&mut self) {
         self.models.graph = None;
@@ -794,10 +822,13 @@ impl Workspace {
         if let Some(dir) = state.path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        self.status_note = Some(match state.graph.save(&state.path) {
-            Ok(()) => format!("Saved {}", file_label(&state.path)).into(),
+        let result = state.graph.save(&state.path);
+        let label = file_label(&state.path);
+        self.status_note = Some(match result {
+            Ok(()) => format!("Saved {label}").into(),
             Err(e) => e.into(),
         });
+        self.scan_nodes_files();
     }
 
     /// A press: selects, or starts a move, a pan, or a wire.

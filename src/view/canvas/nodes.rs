@@ -44,6 +44,9 @@ struct NodesScene {
     wires: Vec<(usize, usize, usize, usize)>,
     /// A wire being dragged: from a port, to a window point.
     pending: Option<(Point<gpui::Pixels>, Point<gpui::Pixels>)>,
+    /// What the dragged wire carries, so the inputs that take it light
+    /// up.
+    pending_kind: Option<runebender_core::document::nodes::Kind>,
     /// The selected node.
     selected: Option<u32>,
     /// Each node's run state, for the header mark and the note.
@@ -63,8 +66,52 @@ impl Workspace {
         let Some(state) = self.models.graph.as_ref() else {
             return c::row();
         };
-        let label = crate::edit::nodes::file_label(&state.path);
         let running = state.running;
+        let open_path = state.path.clone();
+        // Every file beside the font, the open one inverted, and New.
+        let mut files = c::row().flex_wrap();
+        for file in self.models.graph_files.clone() {
+            let current = file == open_path;
+            files = files.child(
+                c::toggle(
+                    SharedString::from(format!("nodes-tab-{}", file.display())),
+                    crate::edit::nodes::file_label(&file),
+                    current,
+                )
+                .flex_none()
+                .px_2()
+                .w_auto()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.models.graph.as_ref().is_some_and(|g| g.path == file) {
+                        this.open_nodes_file(&file);
+                        this.models.graph_view.selected = None;
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        if !self.models.graph_files.contains(&open_path) {
+            files = files.child(
+                c::toggle(
+                    "nodes-tab-open",
+                    crate::edit::nodes::file_label(&open_path),
+                    true,
+                )
+                .flex_none()
+                .px_2()
+                .w_auto(),
+            );
+        }
+        files = files.child(
+            c::button("nodes-new", "New")
+                .flex_none()
+                .px_2()
+                .w_auto()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.new_nodes_file();
+                    cx.notify();
+                })),
+        );
         let mut adds = c::row().flex_wrap();
         for ty in state.registry.types.iter().filter(|t| t.implemented) {
             let name = ty.name.clone();
@@ -90,9 +137,9 @@ impl Workspace {
             .p_1()
             .border_b_1()
             .border_color(t::panel_outline())
+            .child(files)
             .child(
                 c::row()
-                    .child(div().flex_none().px_1().text_color(t::text()).child(label))
                     .child(
                         c::button("nodes-save", "Save")
                             .flex_none()
@@ -120,7 +167,7 @@ impl Workspace {
                         div()
                             .flex_none()
                             .text_color(t::text_muted())
-                            .child("Drag to pan · wheel to zoom · drag a port to wire"),
+                            .child("Drag an output dot to an input of the same kind · drag empty space to pan · wheel to zoom"),
                     ),
             )
             .child(adds)
@@ -248,6 +295,7 @@ impl Workspace {
                 boxes: Vec::new(),
                 wires: Vec::new(),
                 pending: None,
+                pending_kind: None,
                 selected: None,
                 rows: std::collections::BTreeMap::default(),
                 viewport: view.viewport.clone(),
@@ -276,6 +324,10 @@ impl Workspace {
             wires.push((a, o, b, i));
         }
         let origin = view.bounds.lock().unwrap_or_else(|e| e.into_inner()).origin;
+        let pending_kind = match &view.drag {
+            Some(crate::edit::nodes::NodeDrag::Wire { kind, .. }) => Some(*kind),
+            _ => None,
+        };
         let pending = match &view.drag {
             Some(crate::edit::nodes::NodeDrag::Wire {
                 from, output, to, ..
@@ -291,6 +343,7 @@ impl Workspace {
             boxes,
             wires,
             pending,
+            pending_kind,
             selected: view.selected,
             rows: state.rows.clone(),
             viewport: view.viewport.clone(),
@@ -599,20 +652,30 @@ fn paint_nodes(
                 cx,
             );
         }
-        // Ports: a filled dot when wired, a ring when not.
-        for port in nb.inputs.iter().chain(&nb.outputs) {
+        // Ports: a filled dot when wired, a ring when not. While a
+        // wire is being dragged, the inputs that take it grow a
+        // second ring and the rest fade, so the legal drops show.
+        for (port, is_input) in nb
+            .inputs
+            .iter()
+            .map(|p| (p, true))
+            .chain(nb.outputs.iter().map(|p| (p, false)))
+        {
             let at = sp(port.at);
+            let (takes, fades) = match scene.pending_kind {
+                Some(k) if is_input => (port.kind == k, port.kind != k),
+                Some(_) => (false, true),
+                None => (false, false),
+            };
+            let ink = if fades { t::text_muted() } else { t::text() };
             if let Some(p) = circle_path(at, port_r, PathBuilder::fill()) {
-                window.paint_path(
-                    p,
-                    if port.linked {
-                        t::text()
-                    } else {
-                        t::field_bg()
-                    },
-                );
+                window.paint_path(p, if port.linked { ink } else { t::field_bg() });
             }
             if let Some(p) = circle_path(at, port_r, PathBuilder::stroke(px(stroke))) {
+                window.paint_path(p, ink);
+            }
+            if takes && let Some(p) = circle_path(at, port_r * 2.0, PathBuilder::stroke(px(stroke)))
+            {
                 window.paint_path(p, t::text());
             }
         }
