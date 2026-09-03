@@ -21,6 +21,11 @@ Until then, `main` is the only line and this section stays open.
 - A bare `runebender-gpui` opens with no font and File → Open, instead
   of a Virtua Grotesk checkout beside the repository. Nothing on one
   machine is a default for everyone else's.
+- The mark colour swatches at the bottom of the left panel are small
+  grid cells: the same corner, the same keyline the mark cells carry,
+  the same selection ring, and "no colour" drawn the same way. They
+  sit at the left with one gap between them instead of stretching
+  across the bar.
 - One type size for the whole interface, `UI_TEXT_PX` (13). The 115
   places that set `text_xs` or `text_sm` set nothing now, grid cell
   captions use the same size, and a cell under 48px wide carries no

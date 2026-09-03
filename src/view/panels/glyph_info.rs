@@ -512,87 +512,71 @@ impl Workspace {
             .selected
             .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))
             .and_then(|e| e.mark.clone());
-        // One row, always: each swatch sits in an equal-width column,
-        // so the spacing between them and the margin at both ends stay
-        // the same at any panel width.
-        const SWATCH: f32 = 14.0;
-        // (bar height - swatch) / 2, so the ring of space around the
-        // row is the same on every side.
-        const INSET: f32 = (BOTTOM_BAR_H - (SWATCH + 6.0)) / 2.0;
-        let slot = |child: gpui::Stateful<gpui::Div>| child;
-        let mut swatches = div().flex().items_center().justify_between().w_full();
-        for (index, (label, color)) in t::mark_palette().into_iter().enumerate() {
-            let is_current = current.as_deref() == Some(label.as_str());
-            // Selected reads as a ring in the swatch's own colour with
-            // a dark gap inside it, rather than a white outline drawn
-            // over the colour: the colour stays the thing you see.
-            swatches = swatches.child(slot(
+        // A swatch is a small grid cell: the same corner, the same
+        // keyline the mark cells carry, and the same selection ring.
+        // They sit at the left with one gap between them and the same
+        // gap to the bar's edges, whatever the panel's width.
+        const SWATCH: f32 = 16.0;
+        const INSET: f32 = (BOTTOM_BAR_H - SWATCH) / 2.0;
+        let swatch =
+            |id: gpui::ElementId, fill: gpui::Rgba, keyline: gpui::Rgba, selected: bool| {
                 div()
-                    .id(("mark-swatch", index))
-                    .w(px(SWATCH + 6.0))
-                    .h(px(SWATCH + 6.0))
+                    .id(id)
+                    .w(px(SWATCH))
+                    .h(px(SWATCH))
                     .flex_shrink_0()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded_full()
-                    .border(t::stroke())
-                    .border_color(if is_current {
-                        color
+                    .rounded(t::radius_control())
+                    .bg(fill)
+                    .border(if selected {
+                        t::stroke_emphasis()
                     } else {
-                        gpui::Rgba {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 0.0,
-                        }
+                        t::stroke()
+                    })
+                    .border_color(if selected {
+                        t::cell_selected_ring()
+                    } else {
+                        keyline
                     })
                     .cursor_pointer()
-                    .child(div().w(px(SWATCH)).h(px(SWATCH)).rounded_full().bg(color))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+            };
+        let mut swatches = div().flex().items_center().gap(px(INSET));
+        for (index, (label, color)) in t::mark_palette().into_iter().enumerate() {
+            let is_current = current.as_deref() == Some(label.as_str());
+            let keyline = t::mark_paint(Some(&label))
+                .map(|p| p.border)
+                .unwrap_or_else(t::cell_border);
+            swatches = swatches.child(
+                swatch(("mark-swatch", index).into(), color, keyline, is_current).on_click(
+                    cx.listener(move |this, _, _, cx| {
                         this.set_selected_mark(Some(label.clone()));
                         cx.notify();
-                    })),
-            ));
+                    }),
+                ),
+            );
         }
-        // "No colour" is a swatch like the others: same ring when it is
-        // the one in force, drawn in the muted grey it stands for.
-        swatches = swatches.child(slot(
-            div()
-                .id("mark-clear")
-                .w(px(SWATCH + 6.0))
-                .h(px(SWATCH + 6.0))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .border(t::stroke())
-                .border_color(if current.is_none() {
-                    t::text_muted()
-                } else {
-                    gpui::Rgba {
-                        r: 0.0,
-                        g: 0.0,
-                        b: 0.0,
-                        a: 0.0,
-                    }
-                })
-                .cursor_pointer()
-                .child(
-                    div()
-                        .w(px(SWATCH))
-                        .h(px(SWATCH))
-                        .rounded_full()
-                        .border(t::stroke())
-                        .border_color(t::text_muted())
-                        .child(glyph_free_icon(t::text_muted(), IconMark::Cross)),
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.set_selected_mark(None);
-                    cx.notify();
-                })),
-        ));
+        // "No colour" is a swatch like the others: the cell's own
+        // ground with a cross on it, the same keyline, the same ring.
+        swatches = swatches.child(
+            swatch(
+                "mark-clear".into(),
+                t::cell_bg(),
+                t::cell_border(),
+                current.is_none(),
+            )
+            .child(
+                div()
+                    .w(px(SWATCH - 6.0))
+                    .h(px(SWATCH - 6.0))
+                    .child(glyph_free_icon(t::text_muted(), IconMark::Cross)),
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.set_selected_mark(None);
+                cx.notify();
+            })),
+        );
         // No header, no collapse: it is one row of swatches that is
         // always up. It carries its own top rule since it is the last
         // thing in the sidebar.
