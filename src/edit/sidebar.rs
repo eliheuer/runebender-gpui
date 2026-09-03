@@ -505,13 +505,14 @@ impl Workspace {
             // Fixed row height, no vertical padding: Glyphs' sidebar
             // packs its rows tight, and leading is what made ours look
             // twice as tall as it needed to be.
-            .h(px(20.0))
-            // The selected row is a filled block, so its margins have
-            // to read the same on all four sides: it sits 2px in from
-            // the panel on every edge, and the label keeps the inset
-            // it had by paying that 2px back in padding.
+            // 21px per row, the pitch Glyphs packs its sidebar at. The
+            // selected row is a filled block, so it sits a little in
+            // from the panel on every edge: 1px above and below, 2px
+            // at the sides, and the label keeps the inset it had by
+            // paying that back in padding.
+            .h(px(19.0))
             .mx(px(-6.0))
-            .my(px(2.0))
+            .my(px(1.0))
             .px(px(14.0))
             .when(indent, |el| el.ml(px(6.0)))
             .rounded(t::radius())
