@@ -141,7 +141,8 @@ impl Workspace {
                     .when(has_axes, |el| {
                         el.child(tab("sidebar-tab-axes", "Axes", "measure", 2, cx))
                     })
-                    .child(tab("sidebar-tab-ai", "Local AI", "preview", 3, cx)),
+                    .child(tab("sidebar-tab-ai", "Local AI", "preview", 3, cx))
+                    .child(tab("sidebar-tab-chat", "Chat", "text", 4, cx)),
             )
             .when(tab_now == 1, |el| {
                 el.child(
@@ -160,6 +161,15 @@ impl Workspace {
                         .min_h(px(0.0))
                         .p_2()
                         .children(self.axes_section(cx)),
+                )
+            })
+            .when(tab_now == 4, |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .p_2()
+                        .child(self.chat_panel(cx)),
                 )
             })
             .when(tab_now == 3, |el| {

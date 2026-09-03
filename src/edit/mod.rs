@@ -5,6 +5,7 @@
 //! and keyboard input, the inspector's fields, sessions and undo, the
 //! sidebar's filters, the text tool, and the local models.
 
+pub(crate) mod chat;
 pub(crate) mod commands;
 pub(crate) mod editing;
 pub(crate) mod input;

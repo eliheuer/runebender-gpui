@@ -61,6 +61,9 @@ impl Workspace {
         let app_menu_bar = cx.new(|cx| widgets::menu_bar::MenuBar::new(app_menus(), cx));
         let search =
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("Search glyphs"));
+        let chat_input = cx.new(|cx| {
+            widgets::input::InputState::new(window, cx).placeholder("Ask about the font…")
+        });
         let metric = |cx: &mut Context<'_, Self>, window: &mut Window| {
             cx.new(|cx| widgets::input::InputState::new(window, cx))
         };
@@ -735,7 +738,7 @@ impl Workspace {
                 tab: std::env::var("RB_SIDEBAR_TAB")
                     .ok()
                     .and_then(|v| v.parse().ok())
-                    .filter(|t: &u8| *t <= 3)
+                    .filter(|t: &u8| *t <= 4)
                     .unwrap_or(0),
                 cell_size: MINI_CELL,
                 slider: None,
@@ -754,6 +757,9 @@ impl Workspace {
                 blur_slider: None,
                 sample_index: 0,
             },
+            chat: crate::edit::chat::ChatState::default(),
+            chat_raw: String::new(),
+            chat_input,
             models: ModelsState {
                 strength: 1.0,
                 dir: None,

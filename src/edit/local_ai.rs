@@ -286,6 +286,7 @@ impl Workspace {
         // The directory scan and the PATH walk happen here, once, and
         // again when a model is chosen; never in a render.
         self.rescan_models();
+        self.scan_chat_models();
         let Some(font_ml) = self.models.binary.clone() else {
             return;
         };
@@ -352,7 +353,7 @@ impl Workspace {
     /// Pull a proposal layer from the UFO on disk into the open font,
     /// replacing any earlier proposal for the task. font-ml wrote it;
     /// the in-memory font has not seen it yet.
-    fn adopt_proposal_from_disk(
+    pub(crate) fn adopt_proposal_from_disk(
         &mut self,
         task: &str,
         source: &std::path::Path,

@@ -603,6 +603,13 @@ pub(crate) struct Workspace {
     pub(crate) preview: PreviewState,
     /// The Local AI panel's state.
     pub(crate) models: ModelsState,
+    /// The Chat pane: a local language model over the font.
+    pub(crate) chat: crate::edit::chat::ChatState,
+    /// The reply as it streams, tool blocks and all, so a delta can be
+    /// appended before the visible text is recomputed.
+    pub(crate) chat_raw: String,
+    /// The Chat pane's prompt field.
+    pub(crate) chat_input: gpui::Entity<widgets::input::InputState>,
     /// The inspector's input fields.
     pub(crate) inputs: InputFields,
 }
