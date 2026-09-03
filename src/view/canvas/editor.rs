@@ -1324,7 +1324,7 @@ fn paint_hoi_knobs(scene: &EditorScene, s: &Screen, window: &mut Window) {
                 }
             }
             if let Ok(line) = pb.build() {
-                window.paint_path(line, t::accent());
+                window.paint_path(line, t::tool_feedback());
             }
         }
         for (id, q) in &scene.hoi_knobs {
@@ -1344,7 +1344,7 @@ fn paint_hoi_knobs(scene: &EditorScene, s: &Screen, window: &mut Window) {
                 window.paint_path(
                     path,
                     if dragging {
-                        t::accent()
+                        t::tool_feedback()
                     } else {
                         t::text_muted()
                     },
@@ -2142,7 +2142,7 @@ fn paint_tool_preview(scene: &EditorScene, s: &Screen, window: &mut Window) {
             rect.to_path(0.1)
         };
         if let Some(p) = build_path(&shape, s.transform, s.origin, PathBuilder::stroke(px(1.0))) {
-            window.paint_path(p, t::accent());
+            window.paint_path(p, t::tool_feedback());
         }
     }
     // Measure-tool line.
@@ -2167,7 +2167,7 @@ fn paint_tool_preview(scene: &EditorScene, s: &Screen, window: &mut Window) {
             }
         }
         if let Ok(p) = pb.build() {
-            window.paint_path(p, t::accent());
+            window.paint_path(p, t::tool_feedback());
         }
     }
     if let Some(((lx, ly), (cx3, cy3), close)) = scene.pen_preview {
@@ -2175,10 +2175,10 @@ fn paint_tool_preview(scene: &EditorScene, s: &Screen, window: &mut Window) {
         pb.move_to(s.to_screen(lx, ly));
         pb.line_to(s.to_screen(cx3, cy3));
         if let Ok(p) = pb.build() {
-            window.paint_path(p, t::accent());
+            window.paint_path(p, t::tool_feedback());
         }
         if let Some((sx2, sy2)) = close {
-            paint_circle(window, s.to_screen(sx2, sy2), 6.0, t::accent());
+            paint_circle(window, s.to_screen(sx2, sy2), 6.0, t::tool_feedback());
         }
     }
     if let Some(((sx, sy), (cx2, cy2), hits)) = &scene.knife_line {
@@ -2202,7 +2202,7 @@ fn paint_tool_preview(scene: &EditorScene, s: &Screen, window: &mut Window) {
         pb.move_to(pa);
         pb.line_to(pbp);
         if let Ok(p) = pb.build() {
-            window.paint_path(p, t::accent());
+            window.paint_path(p, t::tool_feedback());
         }
     }
 }

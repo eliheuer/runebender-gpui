@@ -133,8 +133,9 @@ pub(crate) fn flat_slider(
         .h(px(TRACK))
         .rounded_full()
         // One colour end to end: this reports a value, it is not a
-        // progress bar.
-        .bg(t::accent())
+        // progress bar. The rule colour, so it sits with the panel's
+        // other lines.
+        .bg(t::cell_border())
         .child(
             div()
                 .absolute()
@@ -146,7 +147,7 @@ pub(crate) fn flat_slider(
                 .flex_shrink_0()
                 .rounded_full()
                 .border(t::stroke_emphasis())
-                .border_color(t::accent())
+                .border_color(t::text())
                 .bg(t::panel_bg()),
         );
     widgets::slider::track(state, px(THUMB), bar).into_any_element()

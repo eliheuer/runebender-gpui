@@ -239,7 +239,7 @@ impl Workspace {
                 let better = model < baseline;
                 body.child(
                     div()
-                        .text_color(if better { t::accent() } else { t::text_muted() })
+                        .text_color(if better { t::text() } else { t::text_muted() })
                         .child(format!(
                             "{glyph}: model {model:.1}, mean-shift {baseline:.1}"
                         )),

@@ -21,6 +21,14 @@ Until then, `main` is the only line and this section stays open.
 - A bare `runebender-gpui` opens with no font and File → Open, instead
   of a Virtua Grotesk checkout beside the repository. Nothing on one
   machine is a default for everyone else's.
+- The green accent is gone from the interface. Sliders draw their
+  track in the rule colour and their thumb ring in ink, selected text
+  sits on an ink wash, local guides and alignment zones are ink at
+  low alpha, the canvas's live tool feedback (pen preview, shape drag,
+  measure line, hovered segment, a knob being dragged) is ink, and a
+  list row's selected name uses the selected ink. Only the warning
+  yellow remains, for things that are wrong: not saved, edited,
+  exceptions, incompatible masters.
 - The mark colour swatches at the bottom of the left panel are small
   grid cells: the same corner, the same keyline the mark cells carry,
   the same selection ring, and "no colour" drawn the same way. They

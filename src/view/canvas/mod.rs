@@ -335,7 +335,11 @@ impl Workspace {
                         div()
                             .flex_1()
                             .min_w(px(80.0))
-                            .text_color(if selected { t::accent() } else { t::text() })
+                            .text_color(if selected {
+                                t::cell_selected_ink()
+                            } else {
+                                t::text()
+                            })
                             .overflow_hidden()
                             .child(SharedString::from(name.clone())),
                     )

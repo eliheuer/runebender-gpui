@@ -225,11 +225,11 @@ pub(crate) fn text() -> Rgba {
 pub(crate) fn text_muted() -> Rgba {
     c(theme().text("secondary"))
 }
-/// The accent behind selected text: the same hue, quiet enough that
-/// the glyphs on top stay readable.
+/// The wash behind selected text: the ink at a whisper, so the
+/// glyphs on top stay readable and no hue is spent on it.
 pub(crate) fn accent_soft() -> Rgba {
-    let a = accent();
-    Rgba { a: 0.28, ..a }
+    let a = text();
+    Rgba { a: 0.22, ..a }
 }
 /// The warning hue, used for status text and the preview glyph.
 pub(crate) fn status_yellow() -> Rgba {
@@ -373,19 +373,26 @@ pub(crate) fn guide_line() -> Rgba {
     color.a = 0.75;
     color
 }
-/// Local (per-glyph) guides: the accent hue, thinned the same way,
-/// so the two guide scopes read apart at a glance.
+/// Local (per-glyph) guides: the ink, thinned, so they read apart
+/// from the yellow global guides without a second hue.
 pub(crate) fn guide_local() -> Rgba {
-    let mut color = accent();
-    color.a = 0.75;
+    let mut color = text();
+    color.a = 0.6;
     color
 }
-/// Alignment-zone bands: the accent at a whisper. These are the
-/// beige zones in Glyphs, in this palette's terms.
+/// Alignment-zone bands: the ink at a whisper. These are the beige
+/// zones in Glyphs, in this palette's terms.
 pub(crate) fn zone_band() -> Rgba {
-    let mut color = accent();
-    color.a = 0.10;
+    let mut color = text();
+    color.a = 0.08;
     color
+}
+/// Live tool feedback on the canvas: the pen's next segment, a shape
+/// being dragged out, the measure line, the segment under the
+/// pointer. Ink, so it reads on every theme and never competes with
+/// the point colours for meaning.
+pub(crate) fn tool_feedback() -> Rgba {
+    text()
 }
 /// Annotation marks: arrows, circles, and notes in the kern-drag
 /// red, full strength. Working marks should shout a little.
