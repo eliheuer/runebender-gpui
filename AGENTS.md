@@ -44,8 +44,8 @@ comment that says what the file is for. Each directory has a
 | `actions.rs` | the action list and the menus |
 | `wiring.rs` | `Workspace::new`: every input widget and the subscription that writes it to the font |
 | `launch.rs` | the keymap, the keystroke router, argument handling, the interface font |
-| `view/` | what the window shows: `canvas/` (grid views; the editing view as a scene plus one paint function per layer), `grid`, `chrome`, `panels/` (one file per region), `render`, `paint`, `blur`, `theme` |
-| `edit/` | what the user does: `commands/` (one file per menu), `editing`, `input`, `inspector`, `session`, `sidebar`, `text_tool`, `local_ai` |
+| `view/` | what the window shows: `canvas/` (grid views; the editing view as a scene plus one paint function per layer; `nodes` for the nodes canvas), `grid`, `chrome`, `panels/` (one file per region), `render`, `paint`, `blur`, `theme` |
+| `edit/` | what the user does: `commands/` (one file per menu), `editing`, `input`, `inspector`, `session`, `sidebar`, `text_tool`, `local_ai`, `nodes` (the nodes file in the panel and on the canvas) |
 | `platform/` | the world outside the window: `config`, `journal`, `host`, `web_host` |
 | `widgets/` | text input, slider, resizable split, in-window menu bar |
 | `tests.rs` | tests of the shell itself |
