@@ -472,16 +472,25 @@ impl Workspace {
 
 // ---- the canvas: layout, hit-testing, and the drag ----
 
+/// The dot grid pitch, in canvas units. Node edges sit on it: the
+/// width, the header, the padding and a row are all multiples, so a
+/// box's every edge lands on a dot.
+pub(crate) const GRID: f64 = 16.0;
 /// Box width, in canvas units.
-pub(crate) const NODE_W: f64 = 168.0;
+pub(crate) const NODE_W: f64 = 176.0;
 /// Header band height.
-pub(crate) const HEADER_H: f64 = 22.0;
+pub(crate) const HEADER_H: f64 = 24.0;
 /// One port row.
-pub(crate) const ROW_H: f64 = 18.0;
+pub(crate) const ROW_H: f64 = 16.0;
 /// Port dot radius.
 pub(crate) const PORT_R: f64 = 4.5;
 /// Inner padding.
-pub(crate) const PAD: f64 = 6.0;
+pub(crate) const PAD: f64 = 8.0;
+
+/// A canvas coordinate moved to the nearest dot.
+pub(crate) fn snap(v: f64) -> f32 {
+    crate::view::render::px32((v / GRID).round() * GRID)
+}
 
 /// One port as laid out: where its dot sits, in canvas units.
 #[derive(Debug, Clone)]
@@ -962,8 +971,8 @@ impl Workspace {
                     .and_then(|s| s.graph.node_mut(id))
                 {
                     node.pos = [
-                        from[0] + crate::view::render::px32(at.x - start.x),
-                        from[1] + crate::view::render::px32(at.y - start.y),
+                        snap(f64::from(from[0]) + (at.x - start.x)),
+                        snap(f64::from(from[1]) + (at.y - start.y)),
                     ];
                 }
                 true

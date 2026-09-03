@@ -528,6 +528,45 @@ fn paint_nodes(
     let stroke = f32::from(t::stroke()).max(1.0);
     let wire_w = (1.5 * zoom).max(1.0);
 
+    // The dot grid: a dot at every pitch, nodes snap their edges to
+    // them. Skipped when the pitch is too small to read.
+    let pitch = px32(crate::edit::nodes::GRID) * zoom;
+    if pitch >= 6.0 {
+        let (bx, by) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+        let (bw, bh) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+        // The canvas point at the top-left corner, then the first dot
+        // at or past it.
+        let top_left = kurbo::Point::new(0.0, 0.0);
+        let first = sp(top_left);
+        let (ox, oy) = (f32::from(first.x), f32::from(first.y));
+        let start_x = ox + ((bx - ox) / pitch).floor() * pitch;
+        let start_y = oy + ((by - oy) / pitch).floor() * pitch;
+        let r = (1.25 * zoom).clamp(1.0, 3.0);
+        let mut pb = PathBuilder::fill();
+        let mut y = start_y;
+        while y <= by + bh {
+            let mut x = start_x;
+            while x <= bx + bw {
+                let n = 8;
+                for i in 0..n {
+                    let a = i as f32 / n as f32 * std::f32::consts::TAU;
+                    let p = gpui::point(px(x + r * a.cos()), px(y + r * a.sin()));
+                    if i == 0 {
+                        pb.move_to(p);
+                    } else {
+                        pb.line_to(p);
+                    }
+                }
+                pb.close();
+                x += pitch;
+            }
+            y += pitch;
+        }
+        if let Ok(p) = pb.build() {
+            window.paint_path(p, t::cell_border());
+        }
+    }
+
     // Wires first, under the boxes they join.
     // A wire takes the mark colour of what it carries; a value with
     // no colour is drawn in ink.
@@ -536,18 +575,25 @@ fn paint_nodes(
             .and_then(|m| t::mark_paint(Some(m)))
             .map_or_else(t::text_muted, |p| p.bg.unwrap_or(p.border))
     };
+    // Each wire is drawn twice: a keyline the colour of a cell's
+    // outline, one stroke wider on each side, then the colour on top,
+    // so it reads on the grey the way a cell does.
+    let mut draw_wire = |from, to, ink| {
+        if let Some(p) = wire(from, to, wire_w + 2.0 * stroke) {
+            window.paint_path(p, t::cell_border());
+        }
+        if let Some(p) = wire(from, to, wire_w) {
+            window.paint_path(p, ink);
+        }
+    };
     for &(a, o, b, i) in &scene.wires {
         let port = &scene.boxes[a].outputs[o];
         let from = sp(port.at);
         let to = sp(scene.boxes[b].inputs[i].at);
-        if let Some(p) = wire(from, to, wire_w) {
-            window.paint_path(p, wire_ink(port.kind));
-        }
+        draw_wire(from, to, wire_ink(port.kind));
     }
-    if let Some((from, to)) = scene.pending
-        && let Some(p) = wire(from, to, wire_w)
-    {
-        window.paint_path(p, scene.pending_kind.map_or_else(t::text, wire_ink));
+    if let Some((from, to)) = scene.pending {
+        draw_wire(from, to, scene.pending_kind.map_or_else(t::text, wire_ink));
     }
 
     let text_px = (crate::workspace::UI_TEXT_PX * zoom).clamp(6.0, 40.0);
