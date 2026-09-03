@@ -8,10 +8,8 @@ use crate::Mode;
 use crate::Workspace;
 use crate::view::grid::cell_glyph_transform;
 use crate::view::grid::cell_label_metrics;
-use crate::view::paint::IconMark;
 use crate::view::paint::build_fill_path;
 use crate::view::paint::build_path;
-use crate::view::paint::glyph_free_icon;
 use crate::view::paint::paint_batched;
 use crate::view::render::px32;
 use crate::view::render::to_byte;
@@ -512,8 +510,9 @@ impl Workspace {
             .selected
             .and_then(|i| self.font().and_then(|f| f.glyphs.get(i)))
             .and_then(|e| e.mark.clone());
-        // A swatch is a small grid cell: the same corner, the same
-        // keyline the mark cells carry, and the same selection ring.
+        // A swatch is a small round cell: the keyline the mark cells
+        // carry and the same selection ring, on a circle, which sits
+        // with the window's own corners better than a square does.
         // They sit at the left with one gap between them and the same
         // gap to the bar's edges, whatever the panel's width.
         const SWATCH: f32 = 16.0;
@@ -528,7 +527,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(t::radius_control())
+                    .rounded_full()
                     .bg(fill)
                     .border(if selected {
                         t::stroke_emphasis()
@@ -566,12 +565,7 @@ impl Workspace {
                 t::cell_border(),
                 current.is_none(),
             )
-            .child(
-                div()
-                    .w(px(SWATCH - 6.0))
-                    .h(px(SWATCH - 6.0))
-                    .child(glyph_free_icon(t::text_muted(), IconMark::Cross)),
-            )
+            .child(cross_mark(t::text(), SWATCH))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.set_selected_mark(None);
                 cx.notify();
@@ -589,4 +583,30 @@ impl Workspace {
             .px(px(INSET))
             .child(swatches)
     }
+}
+
+/// The "no colour" mark: a cross that fills its swatch, drawn at the
+/// stroke the rest of the chrome uses, so it reads at 16px.
+fn cross_mark(color: gpui::Rgba, size: f32) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| bounds,
+        move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+            let w = f32::from(bounds.size.width);
+            let h = f32::from(bounds.size.height);
+            let o = bounds.origin;
+            let (cx_, cy_) = (w / 2.0, h / 2.0);
+            let d = size * 0.22;
+            let pt = |x: f32, y: f32| gpui::point(o.x + px(x), o.y + px(y));
+            let mut pb = PathBuilder::stroke(px(1.5));
+            pb.move_to(pt(cx_ - d, cy_ - d));
+            pb.line_to(pt(cx_ + d, cy_ + d));
+            pb.move_to(pt(cx_ + d, cy_ - d));
+            pb.line_to(pt(cx_ - d, cy_ + d));
+            if let Ok(p) = pb.build() {
+                window.paint_path(p, color);
+            }
+        },
+    )
+    .w(px(size))
+    .h(px(size))
 }

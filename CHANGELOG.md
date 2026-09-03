@@ -30,10 +30,10 @@ Until then, `main` is the only line and this section stays open.
   yellow remains, for things that are wrong: not saved, edited,
   exceptions, incompatible masters.
 - The mark colour swatches at the bottom of the left panel are small
-  grid cells: the same corner, the same keyline the mark cells carry,
-  the same selection ring, and "no colour" drawn the same way. They
-  sit at the left with one gap between them instead of stretching
-  across the bar.
+  round cells: the same corner, the same keyline the mark cells carry,
+  the same selection ring, and "no colour" drawn the same way with a
+  cross that fills it. They sit at the left with one gap between them
+  instead of stretching across the bar.
 - One type size for the whole interface, `UI_TEXT_PX` (13). The 115
   places that set `text_xs` or `text_sm` set nothing now, grid cell
   captions use the same size, and a cell under 48px wide carries no

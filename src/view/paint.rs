@@ -265,13 +265,6 @@ pub(crate) fn glyph_free_icon(color: gpui::Rgba, kind: IconMark) -> impl IntoEle
                         pb.line_to(pt(cx_, cy_ + r));
                     }
                 }
-                IconMark::Cross => {
-                    let d = r * 0.78;
-                    pb.move_to(pt(cx_ - d, cy_ - d));
-                    pb.line_to(pt(cx_ + d, cy_ + d));
-                    pb.move_to(pt(cx_ + d, cy_ - d));
-                    pb.line_to(pt(cx_ - d, cy_ + d));
-                }
             }
             if let Ok(p) = pb.build() {
                 window.paint_path(p, color);
@@ -288,8 +281,6 @@ pub(crate) enum IconMark {
     Plus,
     /// A horizontal minus stroke.
     Minus,
-    /// A diagonal cross.
-    Cross,
 }
 
 /// A circle filled on one half: the ink/ground flip.
