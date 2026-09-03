@@ -51,6 +51,10 @@ use crate::NewFont;
 use crate::NewGlyph;
 use crate::NextMaster;
 use crate::NextSampleString;
+use crate::NodesNew;
+use crate::NodesOpen;
+use crate::NodesRun;
+use crate::NodesSave;
 use crate::OpenFont;
 use crate::Optimize;
 use crate::PasteContours;
@@ -175,6 +179,17 @@ pub(crate) fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Save As…", SaveFontAs),
                 MenuItem::separator(),
                 MenuItem::action("Export…", ExportFont),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "Nodes".into(),
+            items: vec![
+                MenuItem::action("New Nodes", NodesNew),
+                MenuItem::action("Open Nodes…", NodesOpen),
+                MenuItem::action("Save Nodes", NodesSave),
+                MenuItem::separator(),
+                MenuItem::action("Run Nodes", NodesRun),
             ],
             disabled: false,
         },

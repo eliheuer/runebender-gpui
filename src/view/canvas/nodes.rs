@@ -40,6 +40,8 @@ use runebender_core::ui::editing::viewport::ViewPort;
 struct NodesScene {
     /// Every node, laid out.
     boxes: Vec<NodeBox>,
+    /// The mark colour of each box's header, by box index.
+    marks: Vec<Option<&'static str>>,
     /// `(from box index, output index, to box index, input index)`.
     wires: Vec<(usize, usize, usize, usize)>,
     /// A wire being dragged: from a port, to a window point.
@@ -60,19 +62,19 @@ struct NodesScene {
 }
 
 impl Workspace {
-    /// The strip above the canvas: the file, Save, Run, and one
-    /// button per node type to add.
+    /// The strip above the canvas: one row. The files beside the font,
+    /// New, Open…, Save, Run. Node types come from the right-click
+    /// menu, and the same commands sit in the Nodes menu.
     pub(crate) fn nodes_strip(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let Some(state) = self.models.graph.as_ref() else {
             return c::row();
         };
         let running = state.running;
         let open_path = state.path.clone();
-        // Every file beside the font, the open one inverted, and New.
-        let mut files = c::row().flex_wrap();
+        let mut row = c::row().p_1().border_b_1().border_color(t::panel_outline());
         for file in self.models.graph_files.clone() {
             let current = file == open_path;
-            files = files.child(
+            row = row.child(
                 c::toggle(
                     SharedString::from(format!("nodes-tab-{}", file.display())),
                     crate::edit::nodes::file_label(&file),
@@ -91,7 +93,7 @@ impl Workspace {
             );
         }
         if !self.models.graph_files.contains(&open_path) {
-            files = files.child(
+            row = row.child(
                 c::toggle(
                     "nodes-tab-open",
                     crate::edit::nodes::file_label(&open_path),
@@ -102,76 +104,42 @@ impl Workspace {
                 .w_auto(),
             );
         }
-        files = files.child(
-            c::button("nodes-new", "New")
-                .flex_none()
-                .px_2()
-                .w_auto()
-                .on_click(cx.listener(|this, _, _, cx| {
+        let button = |id: &'static str, label: &'static str| {
+            c::button(id, label).flex_none().px_2().w_auto()
+        };
+        row.child(div().flex_1())
+            .child(
+                button("nodes-new", "New").on_click(cx.listener(|this, _, _, cx| {
                     this.new_nodes_file();
                     cx.notify();
                 })),
-        );
-        let mut adds = c::row().flex_wrap();
-        for ty in state.registry.types.iter().filter(|t| t.implemented) {
-            let name = ty.name.clone();
-            adds = adds.child(
-                c::button(
-                    SharedString::from(format!("nodes-add-{}", ty.name)),
-                    ty.title.clone(),
+            )
+            .child(
+                button("nodes-open-strip", "Open…").on_click(cx.listener(|this, _, _, cx| {
+                    this.command_open_nodes_file(cx);
+                })),
+            )
+            .child(
+                button("nodes-save", "Save").on_click(cx.listener(|this, _, _, cx| {
+                    this.save_nodes_file();
+                    cx.notify();
+                })),
+            )
+            .child(
+                c::toggle(
+                    "nodes-run-canvas",
+                    if running { "Running…" } else { "Run" },
+                    !running,
                 )
                 .flex_none()
                 .px_2()
                 .w_auto()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.nodes_add(&name);
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.run_nodes(cx);
                     cx.notify();
                 })),
-            );
-        }
-        // The selected node's choices, when it picks from a list: a
-        // master, a model, or an adapter. The value is typed into the
-        // file; these buttons type it.
-        let choices = self.nodes_choices(cx);
-        c::column()
-            .p_1()
-            .border_b_1()
-            .border_color(t::panel_outline())
-            .child(files)
-            .child(
-                c::row()
-                    .child(
-                        c::button("nodes-save", "Save")
-                            .flex_none()
-                            .w(px(72.0))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.save_nodes_file();
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        c::toggle(
-                            "nodes-run-canvas",
-                            if running { "Running…" } else { "Run" },
-                            !running,
-                        )
-                        .flex_none()
-                        .w(px(96.0))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.run_nodes(cx);
-                            cx.notify();
-                        })),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(t::text_muted())
-                            .child("Drag an output dot to an input of the same kind · drag empty space to pan · wheel to zoom"),
-                    ),
             )
-            .child(adds)
-            .children(choices)
+            .children(self.nodes_choices(cx))
     }
 
     /// One toggle per choice for the selected Master, Model or Adapter
@@ -264,12 +232,20 @@ impl Workspace {
                     cx.notify();
                 }),
             )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    this.nodes_context_menu(event.position);
+                    cx.notify();
+                }),
+            )
             .on_scroll_wheel(
                 cx.listener(move |this, event: &gpui::ScrollWheelEvent, _, cx| {
                     this.nodes_scroll(event);
                     cx.notify();
                 }),
             )
+            .children(self.nodes_menu_overlay(cx))
             .child(
                 canvas(
                     move |bounds, _, _| bounds,
@@ -287,12 +263,56 @@ impl Workspace {
             )
     }
 
+    /// The right-click menu: one row per node type that runs.
+    fn nodes_menu_overlay(&self, cx: &mut Context<'_, Self>) -> Option<gpui::Stateful<gpui::Div>> {
+        let (at, _) = self.models.graph_view.menu?;
+        let state = self.models.graph.as_ref()?;
+        let mut list = div()
+            .id("nodes-menu")
+            .absolute()
+            .left(at.x)
+            .top(at.y)
+            .flex()
+            .flex_col()
+            .py_1()
+            .bg(t::panel_bg())
+            .border(t::stroke())
+            .border_color(t::cell_border())
+            .rounded(t::radius());
+        for (i, ty) in state
+            .registry
+            .types
+            .iter()
+            .filter(|t| t.implemented)
+            .enumerate()
+        {
+            let name = ty.name.clone();
+            list = list.child(
+                div()
+                    .id(("nodes-menu-item", i))
+                    .px_3()
+                    .py_0p5()
+                    .text_color(t::text())
+                    .cursor_pointer()
+                    .hover(|el| el.bg(t::cell_selected_bg()))
+                    .child(ty.title.clone())
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.nodes_add_from_menu(&name);
+                        cx.notify();
+                    })),
+            );
+        }
+        Some(list)
+    }
+
     /// Gathers the boxes, wires and the drag for one paint.
     fn nodes_scene(&self) -> NodesScene {
         let view: &NodesView = &self.models.graph_view;
         let Some(state) = self.models.graph.as_ref() else {
             return NodesScene {
                 boxes: Vec::new(),
+                marks: Vec::new(),
                 wires: Vec::new(),
                 pending: None,
                 pending_kind: None,
@@ -308,6 +328,12 @@ impl Workspace {
             .nodes
             .iter()
             .map(|n| crate::edit::nodes::node_box(state, n))
+            .collect();
+        let marks: Vec<Option<&'static str>> = state
+            .graph
+            .nodes
+            .iter()
+            .map(|n| crate::edit::nodes::type_mark(&n.type_name))
             .collect();
         let index_of = |id: u32| boxes.iter().position(|b| b.id == id);
         let mut wires = Vec::new();
@@ -341,6 +367,7 @@ impl Workspace {
         };
         NodesScene {
             boxes,
+            marks,
             wires,
             pending,
             pending_kind,
@@ -502,22 +529,36 @@ fn paint_nodes(
     let wire_w = (1.5 * zoom).max(1.0);
 
     // Wires first, under the boxes they join.
+    // A wire takes the mark colour of what it carries; a value with
+    // no colour is drawn in ink.
+    let wire_ink = |kind| {
+        crate::edit::nodes::kind_mark(kind)
+            .and_then(|m| t::mark_paint(Some(m)))
+            .map_or_else(t::text_muted, |p| p.bg.unwrap_or(p.border))
+    };
     for &(a, o, b, i) in &scene.wires {
-        let from = sp(scene.boxes[a].outputs[o].at);
+        let port = &scene.boxes[a].outputs[o];
+        let from = sp(port.at);
         let to = sp(scene.boxes[b].inputs[i].at);
         if let Some(p) = wire(from, to, wire_w) {
-            window.paint_path(p, t::text_muted());
+            window.paint_path(p, wire_ink(port.kind));
         }
     }
     if let Some((from, to)) = scene.pending
         && let Some(p) = wire(from, to, wire_w)
     {
-        window.paint_path(p, t::text());
+        window.paint_path(p, scene.pending_kind.map_or_else(t::text, wire_ink));
     }
 
     let text_px = (crate::workspace::UI_TEXT_PX * zoom).clamp(6.0, 40.0);
     let port_r = (px32(crate::edit::nodes::PORT_R) * zoom).max(2.0);
-    for nb in &scene.boxes {
+    for (index, nb) in scene.boxes.iter().enumerate() {
+        let mark = scene
+            .marks
+            .get(index)
+            .copied()
+            .flatten()
+            .and_then(|m| t::mark_paint(Some(m)));
         let top_left = sp(nb.rect.origin());
         let w = px32(nb.rect.width()) * zoom;
         let h = px32(nb.rect.height()) * zoom;
@@ -527,15 +568,32 @@ fn paint_nodes(
         if let Some(p) = rect_path(top_left, w, h, PathBuilder::fill()) {
             window.paint_path(p, t::field_bg());
         }
+        // The header wears the node's mark colour, the way a grid
+        // cell wears its glyph's, and inverts when selected.
+        let header_bg = if selected {
+            t::selected_bg()
+        } else {
+            mark.as_ref().and_then(|m| m.bg).unwrap_or_else(t::panel_bg)
+        };
         if let Some(p) = rect_path(top_left, w, header_h, PathBuilder::fill()) {
-            window.paint_path(
-                p,
-                if selected {
-                    t::selected_bg()
-                } else {
-                    t::panel_bg()
-                },
-            );
+            window.paint_path(p, header_bg);
+        }
+        // The rule between header and body.
+        {
+            let y = top_left.y + px(header_h);
+            let mut pb = PathBuilder::stroke(px(stroke));
+            pb.move_to(gpui::point(top_left.x, y));
+            pb.line_to(gpui::point(top_left.x + px(w), y));
+            if let Ok(p) = pb.build() {
+                window.paint_path(
+                    p,
+                    if selected {
+                        t::selected_bg()
+                    } else {
+                        mark.as_ref().map_or_else(t::cell_border, |m| m.border)
+                    },
+                );
+            }
         }
         if let Some(p) = rect_path(
             top_left,
@@ -552,7 +610,7 @@ fn paint_nodes(
                 if selected {
                     t::selected_bg()
                 } else {
-                    t::cell_border()
+                    mark.as_ref().map_or_else(t::cell_border, |m| m.border)
                 },
             );
         }
@@ -561,7 +619,7 @@ fn paint_nodes(
         let title_ink = if selected {
             t::selected_ink()
         } else {
-            t::text()
+            mark.as_ref().map_or_else(t::text, |m| m.ink)
         };
         paint_text(
             window,

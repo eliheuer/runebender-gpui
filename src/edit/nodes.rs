@@ -531,6 +531,9 @@ pub(crate) struct NodesView {
     /// Where the paint closure records the canvas bounds, so a mouse
     /// position can be made local.
     pub(crate) bounds: Arc<Mutex<gpui::Bounds<gpui::Pixels>>>,
+    /// The right-click menu: where it sits in the canvas, and the
+    /// canvas point a chosen node lands on.
+    pub(crate) menu: Option<(gpui::Point<gpui::Pixels>, kurbo::Point)>,
 }
 
 /// What a drag on the canvas is doing.
@@ -563,6 +566,38 @@ pub(crate) enum NodeDrag {
         /// Where the pointer is.
         to: kurbo::Point,
     },
+}
+
+/// The grid mark colour a port kind carries, so a wire says what it
+/// holds the way a cell says its mark. Values typed by hand carry no
+/// colour.
+pub(crate) fn kind_mark(kind: runebender_core::document::nodes::Kind) -> Option<&'static str> {
+    use runebender_core::document::nodes::Kind;
+    Some(match kind {
+        Kind::Source => "green",
+        Kind::Layer => "yellow",
+        Kind::Model => "blue",
+        Kind::Adapter => "purple",
+        Kind::Glyph | Kind::Glyphs => "orange",
+        Kind::Rows => "pink",
+        Kind::Path => "yellow",
+        Kind::Number | Kind::Flag | Kind::Text => return None,
+    })
+}
+
+/// The grid mark colour a node type's header carries: what the node
+/// mostly gives, or what it does to the font.
+pub(crate) fn type_mark(type_name: &str) -> Option<&'static str> {
+    Some(match type_name {
+        "core.source" | "core.master" => "green",
+        "core.layer" | "core.proof" => "yellow",
+        "core.model" => "blue",
+        "core.adapter" => "purple",
+        "core.install" => "red",
+        "core.compare" => "pink",
+        "core.note" => return None,
+        _ => "orange",
+    })
 }
 
 /// A canvas point to window pixels.
@@ -762,34 +797,6 @@ impl Workspace {
         }
     }
 
-    /// Adds a node of `type_name` at the middle of the view.
-    pub(crate) fn nodes_add(&mut self, type_name: &str) {
-        let origin = self.nodes_origin();
-        let bounds = *self
-            .models
-            .graph_view
-            .bounds
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let centre = gpui::point(
-            origin.x + bounds.size.width / 2.0,
-            origin.y + bounds.size.height / 2.0,
-        );
-        let at = to_canvas(&self.models.graph_view.viewport, origin, centre);
-        let Some(state) = self.models.graph.as_mut() else {
-            return;
-        };
-        let id = state.graph.add(
-            type_name,
-            [
-                crate::view::render::px32(at.x - NODE_W / 2.0),
-                crate::view::render::px32(at.y - HEADER_H),
-            ],
-        );
-        self.models.graph_view.selected = Some(id);
-        self.nodes_revalidate();
-    }
-
     /// Types a value into a node's input and re-checks the file.
     pub(crate) fn nodes_set_value(&mut self, id: u32, input: &str, value: serde_json::Value) {
         if let Some(node) = self
@@ -831,8 +838,36 @@ impl Workspace {
         self.scan_nodes_files();
     }
 
+    /// A right press: the menu of node types to add, at that spot.
+    pub(crate) fn nodes_context_menu(&mut self, pos: gpui::Point<gpui::Pixels>) {
+        let origin = self.nodes_origin();
+        let at = to_canvas(&self.models.graph_view.viewport, origin, pos);
+        let local = gpui::point(pos.x - origin.x, pos.y - origin.y);
+        self.models.graph_view.menu = Some((local, at));
+    }
+
+    /// Adds a node of `type_name` where the menu was opened.
+    pub(crate) fn nodes_add_from_menu(&mut self, type_name: &str) {
+        let Some((_, at)) = self.models.graph_view.menu.take() else {
+            return;
+        };
+        let Some(state) = self.models.graph.as_mut() else {
+            return;
+        };
+        let id = state.graph.add(
+            type_name,
+            [
+                crate::view::render::px32(at.x),
+                crate::view::render::px32(at.y),
+            ],
+        );
+        self.models.graph_view.selected = Some(id);
+        self.nodes_revalidate();
+    }
+
     /// A press: selects, or starts a move, a pan, or a wire.
     pub(crate) fn nodes_mouse_down(&mut self, pos: gpui::Point<gpui::Pixels>, _clicks: usize) {
+        self.models.graph_view.menu = None;
         let origin = self.nodes_origin();
         if !self.models.graph_view.fitted {
             // First use: canvas units at one pixel each, a margin in.

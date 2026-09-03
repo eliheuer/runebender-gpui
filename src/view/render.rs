@@ -47,6 +47,10 @@ use crate::NewFont;
 use crate::NewGlyph;
 use crate::NextMaster;
 use crate::NextSampleString;
+use crate::NodesNew;
+use crate::NodesOpen;
+use crate::NodesRun;
+use crate::NodesSave;
 use crate::OpenFont;
 use crate::Optimize;
 use crate::PasteContours;
@@ -516,6 +520,26 @@ impl Workspace {
             }))
             .on_action(cx.listener(|this, _: &SaveFont, _, cx| {
                 this.command_save(cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &NodesNew, _, cx| {
+                this.new_nodes_file();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &NodesOpen, _, cx| {
+                this.enter_nodes_mode();
+                this.command_open_nodes_file(cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &NodesSave, _, cx| {
+                this.save_nodes_file();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &NodesRun, _, cx| {
+                if this.models.graph.is_none() {
+                    this.enter_nodes_mode();
+                }
+                this.run_nodes(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ExportFont, _, cx| {

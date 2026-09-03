@@ -361,7 +361,7 @@ impl Workspace {
 
     /// Open…: a file picker for a `.nodes.json`.
     #[cfg(not(target_family = "wasm"))]
-    fn command_open_nodes_file(&mut self, cx: &mut Context<'_, Self>) {
+    pub(crate) fn command_open_nodes_file(&mut self, cx: &mut Context<'_, Self>) {
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
@@ -385,7 +385,7 @@ impl Workspace {
     }
 
     #[cfg(target_family = "wasm")]
-    fn command_open_nodes_file(&mut self, _cx: &mut Context<'_, Self>) {
+    pub(crate) fn command_open_nodes_file(&mut self, _cx: &mut Context<'_, Self>) {
         self.status_note = Some("Nodes files open in the desktop app".into());
     }
 }
