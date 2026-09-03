@@ -583,7 +583,7 @@ impl Workspace {
                 t::cell_bg(),
                 t::cell_border(),
                 current.is_none(),
-                Some(cross_mark(t::text(), SWATCH - 2.0 * ring).into_any_element()),
+                Some(cross_mark(t::cell_border(), SWATCH - 2.0 * ring).into_any_element()),
             )
             .on_click(cx.listener(|this, _, _, cx| {
                 this.set_selected_mark(None);
@@ -605,7 +605,8 @@ impl Workspace {
 }
 
 /// The "no colour" mark: a cross that fills its swatch, drawn at the
-/// stroke the rest of the chrome uses, so it reads at 16px.
+/// keyline weight, so it does not read heavier than the ring around
+/// it.
 fn cross_mark(color: gpui::Rgba, size: f32) -> impl IntoElement {
     canvas(
         move |bounds, _, _| bounds,
@@ -616,7 +617,7 @@ fn cross_mark(color: gpui::Rgba, size: f32) -> impl IntoElement {
             let (cx_, cy_) = (w / 2.0, h / 2.0);
             let d = size * 0.28;
             let pt = |x: f32, y: f32| gpui::point(o.x + px(x), o.y + px(y));
-            let mut pb = PathBuilder::stroke(px(1.5));
+            let mut pb = PathBuilder::stroke(t::stroke());
             pb.move_to(pt(cx_ - d, cy_ - d));
             pb.line_to(pt(cx_ + d, cy_ + d));
             pb.move_to(pt(cx_ + d, cy_ - d));

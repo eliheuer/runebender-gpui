@@ -5,6 +5,7 @@
 
 use crate::Mode;
 use crate::Workspace;
+use crate::edit::sidebar::RowMark;
 use crate::view::theme as t;
 use crate::widgets;
 use crate::workspace::SIDEBAR_CATEGORIES;
@@ -38,7 +39,11 @@ impl Workspace {
                 .sidebar_row(
                     ("category", ci),
                     false,
-                    (!subs.is_empty()).then_some(expanded),
+                    Some(if subs.is_empty() {
+                        RowMark::Bullet
+                    } else {
+                        RowMark::Chevron(expanded)
+                    }),
                     None,
                     SharedString::from(*label),
                     format!("{count}").into(),
@@ -63,7 +68,7 @@ impl Workspace {
                     .sidebar_row(
                         ("category", ci),
                         false,
-                        Some(expanded),
+                        Some(RowMark::Chevron(expanded)),
                         None,
                         SharedString::from(*label),
                         format!("{count}").into(),
@@ -112,7 +117,11 @@ impl Workspace {
                 self.sidebar_row(
                     ("script", gi),
                     false,
-                    Some(expanded),
+                    Some(if group.filters.is_empty() {
+                        RowMark::Bullet
+                    } else {
+                        RowMark::Chevron(expanded)
+                    }),
                     Some(group.icon.clone().into()),
                     group.label.clone().into(),
                     format!("{count}").into(),

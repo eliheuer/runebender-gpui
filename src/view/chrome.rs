@@ -446,7 +446,7 @@ impl Workspace {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .child(glyph_free_icon(t::text(), mark))
+                    .child(glyph_free_icon(t::cell_border(), t::stroke(), mark))
             };
             return div()
                 .h(px(BOTTOM_BAR_H))

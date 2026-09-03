@@ -245,7 +245,11 @@ pub(crate) fn eye_icon(color: gpui::Rgba, open: bool) -> impl IntoElement {
 /// Set as text these sit visibly off-centre: a "×" carries its own
 /// side bearings and a "−" rides above the middle. So they are
 /// stroked instead.
-pub(crate) fn glyph_free_icon(color: gpui::Rgba, kind: IconMark) -> impl IntoElement {
+pub(crate) fn glyph_free_icon(
+    color: gpui::Rgba,
+    weight: gpui::Pixels,
+    kind: IconMark,
+) -> impl IntoElement {
     canvas(
         move |bounds, _, _| bounds,
         move |_, bounds: Bounds<gpui::Pixels>, window, _| {
@@ -255,7 +259,7 @@ pub(crate) fn glyph_free_icon(color: gpui::Rgba, kind: IconMark) -> impl IntoEle
             let (cx_, cy_) = (w / 2.0, h / 2.0);
             let r = (w.min(h) / 2.0) * 0.42;
             let pt = |x: f64, y: f64| gpui::point(o.x + px(px32(x)), o.y + px(px32(y)));
-            let mut pb = PathBuilder::stroke(px(1.3));
+            let mut pb = PathBuilder::stroke(weight);
             match kind {
                 IconMark::Plus | IconMark::Minus => {
                     pb.move_to(pt(cx_ - r, cy_));

@@ -436,9 +436,10 @@ impl Workspace {
         self.rebuild_sidebar_matches();
     }
 
-    /// A small disclosure triangle for expandable sidebar rows.
+    /// A small disclosure triangle for expandable sidebar rows, or a
+    /// bullet for the rows that have nothing under them.
     /// Painted, because IBM Plex has no triangle codepoints.
-    pub(crate) fn row_chevron(expanded: bool) -> impl IntoElement {
+    pub(crate) fn row_marker(mark: RowMark, color: gpui::Rgba) -> impl IntoElement {
         canvas(
             move |bounds, _, _| bounds,
             move |_, bounds: Bounds<gpui::Pixels>, window, _| {
@@ -446,9 +447,24 @@ impl Workspace {
                 let w: f32 = bounds.size.width.into();
                 let h: f32 = bounds.size.height.into();
                 let (cx_, cy) = (w / 2.0, h / 2.0);
-                let mut path = gpui::PathBuilder::fill();
                 let pt = |dx: f32, dy: f32| gpui::point(o.x + px(cx_ + dx), o.y + px(cy + dy));
-                if expanded {
+                // A bullet says the row is a leaf: nothing opens.
+                if matches!(mark, RowMark::Bullet) {
+                    use kurbo::Shape as _;
+                    let dot =
+                        kurbo::Circle::new((f64::from(cx_), f64::from(cy)), 1.8).to_path(0.05);
+                    if let Some(p) = crate::view::paint::build_path(
+                        &dot,
+                        kurbo::Affine::IDENTITY,
+                        o,
+                        gpui::PathBuilder::fill(),
+                    ) {
+                        window.paint_path(p, color);
+                    }
+                    return;
+                }
+                let mut path = gpui::PathBuilder::fill();
+                if matches!(mark, RowMark::Chevron(true)) {
                     path.move_to(pt(-3.5, -1.5));
                     path.line_to(pt(3.5, -1.5));
                     path.line_to(pt(0.0, 2.5));
@@ -458,7 +474,7 @@ impl Workspace {
                     path.line_to(pt(-1.5, 3.5));
                 }
                 if let Ok(p) = path.build() {
-                    window.paint_path(p, t::text_muted());
+                    window.paint_path(p, color);
                 }
             },
         )
@@ -476,7 +492,7 @@ impl Workspace {
         &self,
         id: (&'static str, usize),
         indent: bool,
-        chevron: Option<bool>,
+        mark: Option<RowMark>,
         icon: Option<SharedString>,
         label: SharedString,
         count: SharedString,
@@ -490,8 +506,14 @@ impl Workspace {
             // packs its rows tight, and leading is what made ours look
             // twice as tall as it needed to be.
             .h(px(20.0))
-            .px_2()
-            .when(indent, |el| el.ml_3())
+            // The selected row is a filled block, so its margins have
+            // to read the same on all four sides: it sits 2px in from
+            // the panel on every edge, and the label keeps the inset
+            // it had by paying that 2px back in padding.
+            .mx(px(-6.0))
+            .my(px(2.0))
+            .px(px(14.0))
+            .when(indent, |el| el.ml(px(6.0)))
             .rounded(t::radius())
             .cursor_pointer()
             .flex()
@@ -504,8 +526,15 @@ impl Workspace {
                     .text_color(t::selected_ink())
             })
             .when(!active, |el| el.text_color(t::text()))
-            .when_some(chevron, |el, expanded| {
-                el.child(Self::row_chevron(expanded))
+            .when_some(mark, |el, mark| {
+                el.child(Self::row_marker(
+                    mark,
+                    if active {
+                        t::selected_ink()
+                    } else {
+                        t::text_muted()
+                    },
+                ))
             })
             .when_some(icon, |el, icon| {
                 el.child(
@@ -934,4 +963,13 @@ impl Workspace {
                 })),
             )
     }
+}
+
+/// What a sidebar row shows before its label.
+#[derive(Clone, Copy)]
+pub(crate) enum RowMark {
+    /// A disclosure triangle, open when true.
+    Chevron(bool),
+    /// A dot: the row has nothing under it to open.
+    Bullet,
 }
