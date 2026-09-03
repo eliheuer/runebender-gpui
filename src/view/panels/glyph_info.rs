@@ -158,19 +158,15 @@ impl Workspace {
                 .items_center()
                 .justify_between()
                 .gap_2()
-                .text_xs()
                 .child(div().text_color(t::text_muted()).child(header))
-                .child(div().text_sm().text_color(t::text()).child(value))
+                .child(div().text_color(t::text()).child(value))
         };
         let mut panel = div().flex().flex_col().gap_2();
         let (Some(project), Some(index)) = (self.project.as_ref(), self.selected) else {
             return self.section(
                 cx,
                 "Glyph",
-                div()
-                    .text_sm()
-                    .text_color(t::text_muted())
-                    .child("Select a glyph"),
+                div().text_color(t::text_muted()).child("Select a glyph"),
             );
         };
         let font = project.active_font();
@@ -187,7 +183,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap_0p5()
-                .child(div().text_xs().text_color(t::text_muted()).child(header))
+                .child(div().text_color(t::text_muted()).child(header))
                 .child(widgets::input::Input::new(input))
         };
         let pair_row = |header: &'static str,
@@ -197,7 +193,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap_0p5()
-                .child(div().text_xs().text_color(t::text_muted()).child(header))
+                .child(div().text_color(t::text_muted()).child(header))
                 .child(
                     div()
                         .flex()
@@ -216,12 +212,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap_0p5()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child(label_text),
-                    )
+                    .child(div().text_color(t::text_muted()).child(label_text))
                     .child(widgets::input::Input::new(input))
             };
         // In the editor the metric fields live in the floating panel
@@ -239,7 +230,6 @@ impl Workspace {
                 |el, detail| {
                     el.child(
                         div()
-                            .text_xs()
                             .text_color(t::status_yellow())
                             .child(format!("Not interpolating: {detail}")),
                     )
@@ -277,9 +267,7 @@ impl Workspace {
                     .codepoint
                     .and_then(unicode_names2::name)
                     .map(|n| n.to_string()),
-                |el, uni_name| {
-                    el.child(div().text_xs().text_color(t::text_muted()).child(uni_name))
-                },
+                |el, uni_name| el.child(div().text_color(t::text_muted()).child(uni_name)),
             )
             .child(input_row("Production name", &self.inputs.glyph.production))
             .child(input_row("Note", &self.inputs.glyph.note))
@@ -292,7 +280,6 @@ impl Workspace {
                     .gap_0p5()
                     .child(
                         div()
-                            .text_xs()
                             .text_color(t::text_muted())
                             .child("Smart axis (name,min,max)"),
                     )
@@ -323,7 +310,6 @@ impl Workspace {
                         .flex()
                         .items_center()
                         .gap_1()
-                        .text_xs()
                         .child(div().text_color(t::text_muted()).child(format!(
                             "→ {with} at {} ≥ {}",
                             axis.unwrap_or_else(|| "axis".into()),
@@ -348,7 +334,6 @@ impl Workspace {
                         .gap_0p5()
                         .child(
                             div()
-                                .text_xs()
                                 .text_color(t::text_muted())
                                 .child("Switch at (axis value)"),
                         )
@@ -382,7 +367,6 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_sm()
                 .text_color(t::text_muted())
                 .into_any_element(),
             Some((outline, components, points, advance, ascender, descender)) => {

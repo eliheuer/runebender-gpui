@@ -1057,6 +1057,10 @@ pub(crate) const ZOOM_KEY_STEP: f64 = 1.1;
 /// that sit beside tabs in the header and the status bar.
 pub(crate) const TAB_H: f32 = 24.0;
 
+/// The one type size of the interface, in pixels. Every label, value,
+/// button, and cell caption reads at this size.
+pub(crate) const UI_TEXT_PX: f32 = 13.0;
+
 /// Gap between grid cells, and the grid's inner padding.
 pub(crate) const GRID_GAP: f32 = 8.0;
 

@@ -73,7 +73,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
         };
-        let label = |text: SharedString| div().text_xs().text_color(t::text_muted()).child(text);
+        let label = |text: SharedString| div().text_color(t::text_muted()).child(text);
         let metric = |input: &gpui::Entity<widgets::input::InputState>| {
             div()
                 .w(px(64.0))
@@ -97,7 +97,6 @@ impl Workspace {
                     .bg(t::field_bg())
                     .border_b_1()
                     .border_color(t::panel_outline())
-                    .text_sm()
                     .text_color(t::text())
                     .child(name)
                     .child(div().text_color(t::text_muted()).child(unicode)),
@@ -137,16 +136,9 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(CARD_GAP))
+                    .child(div().w(px(10.0)).text_color(t::text_muted()).child(name))
                     .child(
                         div()
-                            .w(px(10.0))
-                            .text_xs()
-                            .text_color(t::text_muted())
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
                             .text_color(t::text())
                             .child(SharedString::from(format!("{value:.0}"))),
                     )
@@ -162,7 +154,6 @@ impl Workspace {
                         .bg(t::field_bg())
                         .border_b_1()
                         .border_color(t::panel_outline())
-                        .text_sm()
                         .text_color(t::text_muted())
                         .child("Selection"),
                 )
@@ -221,7 +212,6 @@ impl Workspace {
                 .px_2()
                 .py_0p5()
                 .rounded(t::radius())
-                .text_sm()
                 .cursor_pointer()
                 .border(t::stroke())
                 .border_color(t::cell_border())
@@ -265,18 +255,13 @@ impl Workspace {
                         )),
                     )
                     .when(self.features_edited, |el| {
-                        el.child(
-                            div()
-                                .text_xs()
-                                .text_color(t::status_yellow())
-                                .child("edited"),
-                        )
+                        el.child(div().text_color(t::status_yellow()).child("edited"))
                     }),
             )
             .children(
                 self.features_status
                     .clone()
-                    .map(|status| div().text_xs().text_color(t::text_muted()).child(status)),
+                    .map(|status| div().text_color(t::text_muted()).child(status)),
             );
         self.section(cx, "Features", body)
     }
@@ -320,7 +305,6 @@ impl Workspace {
                         .rounded(t::radius())
                         .border(t::stroke())
                         .border_color(t::cell_border())
-                        .text_xs()
                         .text_color(t::text())
                         .cursor_pointer()
                         .child(member.to_string())
@@ -333,7 +317,6 @@ impl Workspace {
             if members.len() > 24 {
                 chips = chips.child(
                     div()
-                        .text_xs()
                         .text_color(t::text_muted())
                         .child(format!("+{}", members.len() - 24)),
                 );
@@ -350,7 +333,6 @@ impl Workspace {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_xs()
                                     .text_color(t::text())
                                     .child(format!("@{short} · {side}")),
                             )
@@ -359,7 +341,6 @@ impl Workspace {
                                     .id(SharedString::from(format!("grp-add-{name}")))
                                     .px_1()
                                     .rounded(t::radius())
-                                    .text_xs()
                                     .cursor_pointer()
                                     .border(t::stroke())
                                     .border_color(t::cell_border())
@@ -385,7 +366,6 @@ impl Workspace {
             .child(rows)
             .child(
                 div()
-                    .text_xs()
                     .text_color(t::text_muted())
                     .child("Chip removes · + sel adds the grid selection"),
             );
@@ -455,7 +435,6 @@ impl Workspace {
                     .gap_1()
                     .px_1()
                     .py_0p5()
-                    .text_xs()
                     .cursor_pointer()
                     .hover(|el| el.bg(t::cell_selected_bg()))
                     // Clicking a row loads it into the editor row, so
@@ -524,16 +503,11 @@ impl Workspace {
             .child(widgets::input::Input::new(&self.inputs.kern.filter))
             .child(editor_row)
             .child(list)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child(if hidden > 0 {
-                        format!("{total} pairs · showing {CAP}")
-                    } else {
-                        format!("{total} pairs")
-                    }),
-            );
+            .child(div().text_color(t::text_muted()).child(if hidden > 0 {
+                format!("{total} pairs · showing {CAP}")
+            } else {
+                format!("{total} pairs")
+            }));
         self.section(cx, "Kerning", body)
     }
 
@@ -587,7 +561,6 @@ impl Workspace {
                 div()
                     .id("cpal-remove")
                     .px_1()
-                    .text_sm()
                     .cursor_pointer()
                     .text_color(t::text_muted())
                     .hover(|el| el.text_color(t::text()))
@@ -609,7 +582,6 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_xs()
                     .child(div().w(px(10.0)).h(px(10.0)).rounded_full().bg(dot))
                     .child(
                         div()
@@ -623,7 +595,6 @@ impl Workspace {
                         div()
                             .id(("color-layer-grad", i))
                             .px_1()
-                            .text_xs()
                             .cursor_pointer()
                             .text_color(t::text_muted())
                             .hover(|el| el.text_color(t::text()))
@@ -665,7 +636,6 @@ impl Workspace {
                             .px_2()
                             .py_0p5()
                             .rounded(t::radius())
-                            .text_sm()
                             .cursor_pointer()
                             .border(t::stroke())
                             .border_color(t::cell_border())
@@ -682,7 +652,6 @@ impl Workspace {
                             .px_2()
                             .py_0p5()
                             .rounded(t::radius())
-                            .text_sm()
                             .cursor_pointer()
                             .border(t::stroke())
                             .border_color(t::cell_border())
@@ -699,7 +668,6 @@ impl Workspace {
                             .px_2()
                             .py_0p5()
                             .rounded(t::radius())
-                            .text_sm()
                             .cursor_pointer()
                             .border(t::stroke())
                             .when(toggle_on, |el| {
@@ -736,7 +704,6 @@ impl Workspace {
                 cx,
                 "Compare",
                 div()
-                    .text_xs()
                     .text_color(t::text_muted())
                     .child("One master · nothing to compare"),
             );
@@ -793,11 +760,11 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap_0p5()
-                    .child(div().text_sm().text_color(t::text()).child(format!(
+                    .child(div().text_color(t::text()).child(format!(
                         "{} vs {}",
                         project.master_names[i], project.master_names[active]
                     )))
-                    .child(div().text_xs().text_color(t::text_muted()).child(format!(
+                    .child(div().text_color(t::text_muted()).child(format!(
                         "{} glyphs · {} missing · {} advance diffs · kerning {} vs {}{}",
                         master.glyphs.len(),
                         missing,
@@ -814,7 +781,6 @@ impl Workspace {
         }
         rows = rows.child(
             div()
-                .text_xs()
                 .text_color(if incompatible == 0 {
                     t::text_muted()
                 } else {
@@ -846,14 +812,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_xs()
-                    .child(
-                        div()
-                            .w(px(16.0))
-                            .text_sm()
-                            .text_color(t::text())
-                            .child(name),
-                    )
+                    .child(div().w(px(16.0)).text_color(t::text()).child(name))
                     .child(
                         div()
                             .text_color(t::text_muted())
@@ -871,7 +830,6 @@ impl Workspace {
                 cx,
                 "Dimensions",
                 div()
-                    .text_xs()
                     .text_color(t::text_muted())
                     .child("No reference glyphs with straight stems"),
             );
@@ -892,7 +850,7 @@ impl Workspace {
                 .flex()
                 .flex_col()
                 .gap_0p5()
-                .child(div().text_xs().text_color(t::text_muted()).child(header))
+                .child(div().text_color(t::text_muted()).child(header))
                 .child(widgets::input::Input::new(input))
         };
         let body = div()
@@ -924,12 +882,7 @@ impl Workspace {
             )
             // The vertical-metrics parameters (typo/hhea/win), kept
             // together the way the Glyphs Masters tab carries them.
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Vertical metrics"),
-            )
+            .child(div().text_color(t::text_muted()).child("Vertical metrics"))
             .child(
                 div()
                     .flex()
@@ -957,12 +910,7 @@ impl Workspace {
             // position, position+size) and standard stems, the
             // Glyphs Masters-tab Metrics/Stems story. The zones
             // also draw as bands in the editor.
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Zones and stems"),
-            )
+            .child(div().text_color(t::text_muted()).child("Zones and stems"))
             .child(field("Blue values", &self.inputs.font_info.blue_values))
             .child(field("Other blues", &self.inputs.font_info.other_blues))
             .child(
@@ -981,16 +929,16 @@ impl Workspace {
         let single = self.single_selected_point();
         // A quiet count line rather than a heading: the fields below
         // say what they are.
-        let mut body = div().flex().flex_col().gap_2().child(
+        let mut body =
             div()
-                .text_xs()
-                .text_color(t::text_muted())
-                .child(match count {
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(div().text_color(t::text_muted()).child(match count {
                     0 => "nothing selected".to_string(),
                     1 => "1 point".to_string(),
                     n => format!("{n} points"),
-                }),
-        );
+                }));
         let _ = single;
         // A whole segment selected: report the curve's real size, which
         // is what you compare when matching one curve to another.
@@ -1006,7 +954,6 @@ impl Workspace {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .text_sm()
                     .child(div().text_color(t::text_muted()).child(label))
                     .child(
                         div()
@@ -1030,13 +977,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div()
-                            .w(px(14.0))
-                            .text_sm()
-                            .text_color(t::text_muted())
-                            .child(label),
-                    )
+                    .child(div().w(px(14.0)).text_color(t::text_muted()).child(label))
                     .child(div().flex_1().child(widgets::input::Input::new(input)))
             };
             // The 9-point reference picker (web coordinate quadrant):
@@ -1115,7 +1056,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().text_sm().text_color(t::text_muted()).child("Anchor"))
+                    .child(div().text_color(t::text_muted()).child("Anchor"))
                     .child(
                         div()
                             .flex_1()
@@ -1145,7 +1086,6 @@ impl Workspace {
                         .gap_2()
                         .child(
                             div()
-                                .text_sm()
                                 .text_color(t::text_muted())
                                 .child(format!("Component /{base}")),
                         )
@@ -1155,7 +1095,6 @@ impl Workspace {
                                 .px_2()
                                 .py_0p5()
                                 .rounded(t::radius())
-                                .text_sm()
                                 .cursor_pointer()
                                 .border(t::stroke())
                                 .when(aligned, |el| {
@@ -1196,7 +1135,6 @@ impl Workspace {
                             .gap_2()
                             .child(
                                 div()
-                                    .text_xs()
                                     .text_color(t::text_muted())
                                     .child(format!("Smart {axis}")),
                             )
@@ -1234,7 +1172,6 @@ impl Workspace {
                     .gap_2()
                     .child(
                         div()
-                            .text_sm()
                             .text_color(t::text_muted())
                             .child(SharedString::from(axis.tag.clone())),
                     )
@@ -1264,7 +1201,6 @@ impl Workspace {
                         .gap_1()
                         .px_1()
                         .py_0p5()
-                        .text_sm()
                         .cursor_pointer()
                         .text_color(if at_instance {
                             t::text()
@@ -1300,12 +1236,7 @@ impl Workspace {
                         ),
                 );
             }
-            body = body.child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Instances"),
-            );
+            body = body.child(div().text_color(t::text_muted()).child("Instances"));
             body = body.child(list);
             body = body.child(widgets::input::Input::new(&self.inputs.instance_name));
         }
@@ -1317,7 +1248,6 @@ impl Workspace {
         {
             body = body.child(
                 div()
-                    .text_xs()
                     .text_color(t::text_muted())
                     .child(format!("Mappings ({} user → design)", axis.tag)),
             );
@@ -1331,7 +1261,6 @@ impl Workspace {
                             .rounded(t::radius())
                             .border(t::stroke())
                             .border_color(t::cell_border())
-                            .text_xs()
                             .text_color(t::text())
                             .cursor_pointer()
                             .child(format!("{:.0}→{:.0} ×", m.input, m.output))
@@ -1351,12 +1280,7 @@ impl Workspace {
         }
         // HOI: the trajectory view and the timing ease, the
         // higher-order interpolation corner of the panel.
-        body = body.child(
-            div()
-                .text_xs()
-                .text_color(t::text_muted())
-                .child("Interpolation"),
-        );
+        body = body.child(div().text_color(t::text_muted()).child("Interpolation"));
         let on = self.show_trajectories;
         body = body.child(
             div()
@@ -1369,7 +1293,6 @@ impl Workspace {
                         .px_2()
                         .py_0p5()
                         .rounded(t::radius())
-                        .text_sm()
                         .cursor_pointer()
                         .border(t::stroke())
                         .when(on, |el| {
@@ -1386,7 +1309,7 @@ impl Workspace {
                             cx.notify();
                         })),
                 )
-                .child(div().text_xs().text_color(t::text_muted()).child("Ease"))
+                .child(div().text_color(t::text_muted()).child("Ease"))
                 .child(
                     div()
                         .w(px(64.0))

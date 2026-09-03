@@ -21,6 +21,10 @@ Until then, `main` is the only line and this section stays open.
 - A bare `runebender-gpui` opens with no font and File → Open, instead
   of a Virtua Grotesk checkout beside the repository. Nothing on one
   machine is a default for everyone else's.
+- One type size for the whole interface, `UI_TEXT_PX` (13). The 115
+  places that set `text_xs` or `text_sm` set nothing now, grid cell
+  captions use the same size, and a cell under 48px wide carries no
+  caption.
 - The glyph grid's outlines no longer trail the cells through a
   resize. The cells' container reports where each cell landed after
   layout and the outline overlay paints from that list, instead of

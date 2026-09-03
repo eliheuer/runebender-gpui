@@ -493,7 +493,6 @@ impl Workspace {
             .px_2()
             .when(indent, |el| el.ml_3())
             .rounded(t::radius())
-            .text_sm()
             .cursor_pointer()
             .flex()
             .items_center()
@@ -555,7 +554,6 @@ impl Workspace {
             .flex()
             .items_center()
             .justify_center()
-            .text_xs()
             .cursor_pointer()
             .when(active, |el| {
                 el.bg(t::selected_bg())
@@ -594,12 +592,7 @@ impl Workspace {
     pub(crate) fn sidebar_shapes(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let mut list = div().flex().flex_col().gap_1().p_2();
         let (Mode::Editor(index), Some(font)) = (&self.mode, self.font()) else {
-            return list.child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("No glyph open."),
-            );
+            return list.child(div().text_color(t::text_muted()).child("No glyph open."));
         };
         let index = *index;
         let entry = &font.glyphs[index];
@@ -619,7 +612,6 @@ impl Workspace {
                 .items_center()
                 .gap_2()
                 .rounded(t::radius())
-                .text_xs()
                 .cursor_pointer()
                 .when(active, |el| {
                     el.bg(t::selected_bg()).text_color(t::selected_ink())
@@ -690,7 +682,6 @@ impl Workspace {
         if counts.is_empty() && glyph.components.is_empty() {
             list = list.child(
                 div()
-                    .text_xs()
                     .text_color(t::text_muted())
                     .child("No shapes in this glyph yet."),
             );
@@ -724,7 +715,6 @@ impl Workspace {
                     .items_center()
                     .gap_1()
                     .cursor_pointer()
-                    .text_xs()
                     .text_color(t::text_muted())
                     .child(
                         canvas(
@@ -903,7 +893,6 @@ impl Workspace {
                 } else {
                     t::cell_border()
                 })
-                .text_sm()
                 .text_color(if active {
                     t::selected_ink()
                 } else {

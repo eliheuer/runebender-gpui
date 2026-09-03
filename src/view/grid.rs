@@ -16,6 +16,7 @@ use crate::workspace::GRID_PAD_SM;
 use crate::workspace::GRID_PAD_Y;
 use crate::workspace::GridFit;
 use crate::workspace::SidebarFilter;
+use crate::workspace::UI_TEXT_PX;
 use kurbo::Affine;
 impl Workspace {
     /// Solve the grid's cell size against the measured viewport.
@@ -304,8 +305,9 @@ pub(crate) fn cell_label_metrics(cell_w: f32) -> CellLabels {
                 + PAD_BOTTOM,
         }
     };
-    if cell_w < 34.0 {
-        // Too small to carry text: a pure thumbnail.
+    // One type size everywhere, the interface's own. A cell too
+    // narrow to carry a name at that size carries none.
+    if cell_w < 48.0 {
         CellLabels {
             show: false,
             size: 0.0,
@@ -314,9 +316,9 @@ pub(crate) fn cell_label_metrics(cell_w: f32) -> CellLabels {
         }
     } else if cell_w < 90.0 {
         // Name only.
-        build(10.0, 1)
+        build(UI_TEXT_PX, 1)
     } else {
-        build(12.0, 2)
+        build(UI_TEXT_PX, 2)
     }
 }
 

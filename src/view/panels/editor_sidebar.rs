@@ -311,7 +311,6 @@ impl Workspace {
                         .child(
                             div()
                                 .flex_1()
-                                .text_xs()
                                 .text_color(t::text_muted())
                                 .child(SharedString::from(format!("{} glyphs", shown))),
                         )
@@ -386,10 +385,7 @@ impl Workspace {
             return self.section(
                 cx,
                 "Related",
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("No related glyphs"),
+                div().text_color(t::text_muted()).child("No related glyphs"),
             );
         }
         let mut body = div().flex().flex_col().gap_1();
@@ -404,7 +400,6 @@ impl Workspace {
                         .rounded(t::radius())
                         .border(t::stroke())
                         .border_color(t::cell_border())
-                        .text_xs()
                         .text_color(t::text())
                         .cursor_pointer()
                         .child(related.clone())
@@ -417,7 +412,7 @@ impl Workspace {
                 );
             }
             body = body
-                .child(div().text_xs().text_color(t::text_muted()).child(label))
+                .child(div().text_color(t::text_muted()).child(label))
                 .child(chips);
         }
         self.section(cx, "Related", body)
@@ -438,7 +433,6 @@ impl Workspace {
                 cx,
                 "Shaping",
                 div()
-                    .text_xs()
                     .text_color(t::text_muted())
                     .child("Type around the glyph to inspect shaping"),
             );
@@ -481,7 +475,6 @@ impl Workspace {
                 .cursor_pointer()
                 .child(
                     div()
-                        .text_sm()
                         .text_color(if dim {
                             t::text_muted()
                         } else if lit {
@@ -491,7 +484,7 @@ impl Workspace {
                         })
                         .child(label),
                 )
-                .child(div().text_xs().text_color(t::text_muted()).child(sub))
+                .child(div().text_color(t::text_muted()).child(sub))
                 .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
                     this.shaping_focus = Some(carrier);
                     if open_on_double && ev.click_count() >= 2 {
@@ -613,7 +606,6 @@ impl Workspace {
                     .py_0p5()
                     .rounded(t::radius())
                     .border(t::stroke())
-                    .text_xs()
                     .cursor_pointer()
                     .when(state == Some(true), |el| el.bg(t::selected_bg()))
                     .border_color(match state {
@@ -683,7 +675,6 @@ impl Workspace {
                     .py_0p5()
                     .rounded(t::radius())
                     .border(t::stroke())
-                    .text_xs()
                     .cursor_pointer()
                     .when(lit, |el| el.bg(t::selected_bg()))
                     .border_color(if lit {
@@ -722,32 +713,20 @@ impl Workspace {
             .when(!tags.is_empty(), |el| {
                 el.child(
                     div()
-                        .text_xs()
                         .text_color(t::text_muted())
                         .child("Features (click: default → off → on)"),
                 )
                 .child(toggles)
             })
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Language"),
-            )
+            .child(div().text_color(t::text_muted()).child("Language"))
             .child(locale_chips)
             .child(
                 div()
-                    .text_xs()
                     .text_color(t::text_muted())
                     .child("Characters (logical)"),
             )
             .child(chars_row)
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(t::text_muted())
-                    .child("Glyphs (visual)"),
-            )
+            .child(div().text_color(t::text_muted()).child("Glyphs (visual)"))
             .child(glyphs_row);
         self.section(cx, "Shaping", body)
     }
@@ -959,7 +938,7 @@ impl Workspace {
                 .child(
                     c::row()
                         .child(
-                            c::toggle("bg-show", "Show background", self.show_background).on_click(
+                            c::toggle("bg-show", "Background", self.show_background).on_click(
                                 cx.listener(|this, _, _, cx| {
                                     this.show_background = !this.show_background;
                                     cx.notify();
@@ -1100,7 +1079,6 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .rounded(t::radius())
-                            .text_sm()
                             .cursor_pointer()
                             .when(is_active, |el| {
                                 el.border(t::stroke())
@@ -1132,7 +1110,6 @@ impl Workspace {
                 body = body.child(
                     div()
                         .mt_1()
-                        .text_xs()
                         .text_color(t::text_muted())
                         .child("Glyph Layers"),
                 );
@@ -1149,7 +1126,6 @@ impl Workspace {
                             div()
                                 .id(("glyph-layer-eye", i))
                                 .w(px(20.0))
-                                .text_sm()
                                 .cursor_pointer()
                                 .text_color(if eye_on { t::text() } else { t::text_muted() })
                                 .child("◉")
@@ -1165,7 +1141,6 @@ impl Workspace {
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .truncate()
-                                .text_sm()
                                 .text_color(t::text())
                                 .child(layer.clone()),
                         )
@@ -1173,7 +1148,6 @@ impl Workspace {
                             div()
                                 .id(("glyph-layer-swap", i))
                                 .px_1()
-                                .text_sm()
                                 .cursor_pointer()
                                 .text_color(t::text_muted())
                                 .hover(|el| el.text_color(t::text()))
@@ -1187,7 +1161,6 @@ impl Workspace {
                             div()
                                 .id(("glyph-layer-del", i))
                                 .px_1()
-                                .text_sm()
                                 .cursor_pointer()
                                 .text_color(t::text_muted())
                                 .hover(|el| el.text_color(t::text()))
@@ -1210,7 +1183,6 @@ impl Workspace {
                             .px_2()
                             .py_0p5()
                             .rounded(t::radius())
-                            .text_sm()
                             .cursor_pointer()
                             .border(t::stroke())
                             .border_color(t::cell_border())
@@ -1230,7 +1202,6 @@ impl Workspace {
                             .px_2()
                             .py_0p5()
                             .rounded(t::radius())
-                            .text_sm()
                             .cursor_pointer()
                             .border(t::stroke())
                             .border_color(t::cell_border())
@@ -1261,7 +1232,6 @@ impl Workspace {
                 .id(id)
                 .px_3()
                 .py_1()
-                .text_sm()
                 .text_color(t::text())
                 .cursor_pointer()
                 .hover(|el| el.bg(t::cell_selected_bg()))

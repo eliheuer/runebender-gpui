@@ -54,7 +54,6 @@ fn base(id: impl Into<ElementId>) -> Stateful<gpui::Div> {
         .whitespace_nowrap()
         .rounded(t::radius())
         .border(t::stroke())
-        .text_xs()
         .cursor_pointer()
 }
 
@@ -90,7 +89,6 @@ pub(crate) fn label(text: impl Into<SharedString>) -> gpui::Div {
     div()
         .flex_none()
         .w(px(LABEL_W))
-        .text_xs()
         .text_color(t::text_muted())
         .overflow_hidden()
         .whitespace_nowrap()

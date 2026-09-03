@@ -210,7 +210,6 @@ impl Workspace {
             div()
                 .w(px(w))
                 .flex_shrink_0()
-                .text_xs()
                 .text_color(t::text_muted())
                 .child(label)
         };
@@ -233,7 +232,6 @@ impl Workspace {
                         div()
                             .flex_1()
                             .min_w(px(80.0))
-                            .text_xs()
                             .text_color(t::text_muted())
                             .child("Name"),
                     )
@@ -288,7 +286,6 @@ impl Workspace {
                 div()
                     .w(px(w))
                     .flex_shrink_0()
-                    .text_xs()
                     .text_color(text_color)
                     .overflow_hidden()
                     .child(value)
@@ -338,7 +335,6 @@ impl Workspace {
                         div()
                             .flex_1()
                             .min_w(px(80.0))
-                            .text_sm()
                             .text_color(if selected { t::accent() } else { t::text() })
                             .overflow_hidden()
                             .child(SharedString::from(name.clone())),
@@ -392,7 +388,6 @@ impl Workspace {
         if families.is_empty() {
             return div()
                 .p_4()
-                .text_sm()
                 .text_color(t::text_muted())
                 .child("No positional forms (.init/.medi/.fina) in this font")
                 .into_any_element();
@@ -402,7 +397,6 @@ impl Workspace {
             div()
                 .w(px(THUMB))
                 .flex_shrink_0()
-                .text_xs()
                 .text_color(t::text_muted())
                 .child(label)
         };
@@ -426,7 +420,6 @@ impl Workspace {
                     div()
                         .w(px(140.0))
                         .flex_shrink_0()
-                        .text_xs()
                         .text_color(t::text_muted())
                         .child("Base"),
                 )
@@ -443,7 +436,6 @@ impl Workspace {
                 div()
                     .w(px(140.0))
                     .flex_shrink_0()
-                    .text_sm()
                     .text_color(t::text())
                     .overflow_hidden()
                     .child(base.clone()),

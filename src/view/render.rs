@@ -89,6 +89,7 @@ use crate::widgets;
 use crate::workspace::FontViewMode;
 use crate::workspace::GRID_GAP;
 use crate::workspace::Tool;
+use crate::workspace::UI_TEXT_PX;
 use gpui::Bounds;
 use gpui::Context;
 use gpui::InteractiveElement;
@@ -171,7 +172,6 @@ impl Render for TabTooltip {
             .border(t::stroke())
             .border_color(t::panel_outline())
             .rounded(t::radius())
-            .text_xs()
             .text_color(t::text())
             .child(self.label)
     }
@@ -488,7 +488,10 @@ impl Workspace {
             .bg(t::window_bg())
             .font_family(ui_font_family(cx))
             .text_color(t::text())
-            .text_size(px(13.0))
+            // One type size for the whole interface. Emphasis comes
+            // from colour (a label is dimmer than its value), never
+            // from a second size.
+            .text_size(px(UI_TEXT_PX))
             .key_context("Workspace")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|this, _: &OpenFont, _, cx| {

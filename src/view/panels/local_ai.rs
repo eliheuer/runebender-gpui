@@ -69,7 +69,7 @@ impl Workspace {
             let where_to_put_them = Self::models_dir()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "~/.runebender/models".into());
-            return body.child(div().text_xs().text_color(t::text_muted()).child(format!(
+            return body.child(div().text_color(t::text_muted()).child(format!(
                 "Drop a model folder in {where_to_put_them} and it \
                  appears here. A model is a folder holding config.json, \
                  weights.safetensors and vocab.txt. Nothing is downloaded."
@@ -103,18 +103,19 @@ impl Workspace {
             .filter(|t| t.implemented)
             .collect();
         let body = if self.models.tasks.is_none() {
-            body.child(div().text_xs().text_color(t::text_muted()).child(
-                if self.models.binary.is_some() {
-                    "Asking font-ml what it can do…"
-                } else {
-                    "font-ml not found. cargo install --git \
+            body.child(
+                div()
+                    .text_color(t::text_muted())
+                    .child(if self.models.binary.is_some() {
+                        "Asking font-ml what it can do…"
+                    } else {
+                        "font-ml not found. cargo install --git \
                          https://github.com/eliheuer/font-ml, or set RUNEBENDER_FONT_ML."
-                },
-            ))
+                    }),
+            )
         } else if tasks.is_empty() {
             body.child(
                 div()
-                    .text_xs()
                     .text_color(t::text_muted())
                     .child("font-ml has no task built yet"),
             )
@@ -171,7 +172,6 @@ impl Workspace {
                             .min_w_0()
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .text_xs()
                             .text_color(t::text())
                             .child(note.clone()),
                     )
@@ -192,7 +192,7 @@ impl Workspace {
         let body = self.models.proposals.iter().fold(body, |el, p| {
             let install_task = p.task.clone();
             let discard_task = p.task.clone();
-            el.child(div().text_xs().text_color(t::text()).child(format!(
+            el.child(div().text_color(t::text()).child(format!(
                 "{} proposed: {} glyphs, {} keep structure",
                 p.task,
                 p.glyphs.len(),
@@ -239,7 +239,6 @@ impl Workspace {
                 let better = model < baseline;
                 body.child(
                     div()
-                        .text_xs()
                         .text_color(if better { t::accent() } else { t::text_muted() })
                         .child(format!(
                             "{glyph}: model {model:.1}, mean-shift {baseline:.1}"

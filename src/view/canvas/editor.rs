@@ -2265,8 +2265,8 @@ fn paint_measure_hud(scene: &EditorScene, s: &Screen, window: &mut Window, cx: &
             // Place a label just off its line, then step it outward
             // (and to the other side) until it clears every label
             // already placed this frame.
-            let label_px = px(13.0);
-            let line_h = px(15.0);
+            let label_px = px(crate::workspace::UI_TEXT_PX);
+            let line_h = px((crate::workspace::UI_TEXT_PX * 1.15).ceil());
             let label_font = window.text_style().font();
             let mut placed: Vec<kurbo::Rect> = Vec::new();
             let draw_label = |window: &mut Window,

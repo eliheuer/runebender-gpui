@@ -105,12 +105,11 @@ impl Workspace {
                     .items_center()
                     .gap_2()
                     .overflow_hidden()
-                    .child(div().text_sm().text_color(t::text()).child(title))
+                    .child(div().text_color(t::text()).child(title))
                     // "Saved" is the quiet state; only "Not saved" earns
                     // the warning colour.
                     .child(
                         div()
-                            .text_sm()
                             .text_color(if self.font().is_some_and(|f| f.dirty) {
                                 t::status_yellow()
                             } else {
@@ -298,7 +297,7 @@ impl Workspace {
             .items_center()
             .gap_2()
             .flex_none()
-            .child(div().text_xs().text_color(t::text_muted()).child("blur"))
+            .child(div().text_color(t::text_muted()).child("blur"))
             .children(self.preview.blur_slider.as_ref().map(|slider| {
                 // The thumb hangs past both ends of the track, so the
                 // slider gets its own room rather than sitting on the
@@ -478,7 +477,6 @@ impl Workspace {
                     div()
                         .flex_1()
                         .text_center()
-                        .text_sm()
                         .text_color(t::text_muted())
                         .child(center),
                 )
@@ -495,7 +493,6 @@ impl Workspace {
                                 .id(id)
                                 .px_1p5()
                                 .rounded(t::radius())
-                                .text_xs()
                                 .cursor_pointer()
                                 .text_color(if mode == current {
                                     t::text()
@@ -568,7 +565,6 @@ impl Workspace {
                             .bg(t::panel_bg())
                             .border_t_1()
                             .border_color(t::cell_border())
-                            .text_sm()
                             .text_color(t::text_muted())
                             .child(SharedString::from(format!(
                                 "dx {dx:.0} · dy {dy:.0} · length {len:.1} · angle {angle:.1}°"
@@ -603,7 +599,6 @@ impl Workspace {
                 div()
                     .flex_1()
                     .overflow_hidden()
-                    .text_sm()
                     .text_color(t::text_muted())
                     .child(text),
             )
