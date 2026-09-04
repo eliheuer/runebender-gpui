@@ -14,7 +14,7 @@ use kurbo::BezPath;
 pub(crate) type Thumb = (Arc<BezPath>, f64, f64, f64);
 
 mod chat;
-mod editor_info;
+pub(crate) mod editor_info;
 mod editor_sidebar;
 mod glyph_info;
 mod local_ai;

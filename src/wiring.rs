@@ -608,7 +608,7 @@ impl Workspace {
             mode: start_mode,
             editor: EditorState::new(),
             edit_buffer: runebender_core::text::buffer::TextBuffer::new(),
-            collapsed_sections: HashSet::new(),
+            collapsed_sections: HashSet::from([crate::view::panels::editor_info::FONT_ADVANCED]),
             reference_layers: HashSet::new(),
             show_all_masters: false,
             left_collapsed: false,

@@ -23,6 +23,9 @@ use gpui::px;
 use runebender_core::document::project::Master;
 use runebender_core::formats::color_font::read_color_mapping;
 use runebender_core::formats::color_font::read_color_palette;
+/// The title of the collapsed-by-default technical section.
+pub(crate) const FONT_ADVANCED: &str = "Advanced";
+
 impl Workspace {
     /// The floating info panel at the bottom of the edit view.
     ///
@@ -837,7 +840,7 @@ impl Workspace {
         self.section(cx, "Dimensions", rows)
     }
 
-    /// Font Info section (grid mode): names and vertical metrics of
+    /// Font Info section (grid mode): names and the design metrics of
     /// the active master, saved to fontinfo.plist. The first slice of
     /// Glyphs' Font Info window; axes and instances come later.
     pub(crate) fn font_info_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
@@ -879,7 +882,31 @@ impl Workspace {
                     .gap_1()
                     .child(field("x-height", &self.inputs.font_info.x_height))
                     .child(field("Cap height", &self.inputs.font_info.cap_height)),
-            )
+            );
+        self.section(cx, "Font info", body)
+    }
+
+    /// The export and hinting numbers of the active master: the
+    /// typo/hhea/win vertical metrics and the PostScript zones and
+    /// stems. Real, but not an overview of the font, so this section
+    /// starts collapsed.
+    pub(crate) fn font_advanced_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
+        if self.project.is_none() {
+            return self.section(cx, FONT_ADVANCED, div());
+        }
+        let field = |header: &'static str, input: &gpui::Entity<widgets::input::InputState>| {
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(div().text_color(t::text_muted()).child(header))
+                .child(widgets::input::Input::new(input))
+        };
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
             // The vertical-metrics parameters (typo/hhea/win), kept
             // together the way the Glyphs Masters tab carries them.
             .child(div().text_color(t::text_muted()).child("Vertical metrics"))
@@ -920,7 +947,7 @@ impl Workspace {
                     .child(field("Stems H", &self.inputs.font_info.stems_h))
                     .child(field("Stems V", &self.inputs.font_info.stems_v)),
             );
-        self.section(cx, "Font info", body)
+        self.section(cx, FONT_ADVANCED, body)
     }
 
     /// Selection section: count plus editable X/Y for a single point.

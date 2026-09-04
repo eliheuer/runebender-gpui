@@ -456,6 +456,7 @@ impl Workspace {
                 el.child(self.glyph_info_panel(cx))
                     .child(self.font_info_section(cx))
                     .child(self.dimensions_section(cx))
+                    .child(self.font_advanced_section(cx))
                     .child(self.kerning_section(cx))
                     .child(self.groups_section(cx))
                     .child(self.compare_section(cx))
