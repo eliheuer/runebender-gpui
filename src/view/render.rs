@@ -488,7 +488,8 @@ impl Workspace {
                     .child(resizable_panel().child(center))
                     .child(
                         resizable_panel()
-                            .size(px(230.0))
+                            // The same default as the left panel.
+                            .size(px(246.0))
                             .size_range(px(170.0)..px(440.0))
                             .child(div().size_full().bg(t::panel_bg()).child(right)),
                     ),
