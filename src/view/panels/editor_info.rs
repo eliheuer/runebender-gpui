@@ -455,12 +455,7 @@ impl Workspace {
                         }
                     }))
                     .child({
-                        // Groups read as @name in the accent; raw
-                        // glyph pairs — exceptions — in the warning
-                        // yellow, the Glyphs kerning window's code.
-                        let is_group = |name: &str| {
-                            name.starts_with("public.kern1.") || name.starts_with("public.kern2.")
-                        };
+                        // Groups read as @name, glyphs as their name.
                         let short = |name: &str| {
                             name.strip_prefix("public.kern1.")
                                 .or_else(|| name.strip_prefix("public.kern2."))
