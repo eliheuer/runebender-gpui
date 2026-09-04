@@ -133,17 +133,31 @@ impl Workspace {
                     .gap_2()
                     .overflow_hidden()
                     .child(div().text_color(t::text()).child(title))
-                    // Saved is the mark palette's green, not saved its
-                    // red: the same two colours the glyph grid uses.
-                    .child(
-                        div()
-                            .text_color(if self.font().is_some_and(|f| f.dirty) {
-                                t::mark_color("red").unwrap_or_else(t::status_yellow)
-                            } else {
-                                t::mark_color("green").unwrap_or_else(t::text_muted)
-                            })
-                            .child(status),
-                    ),
+                    // Saved is a green tag, not saved a red one, drawn
+                    // the way the glyph grid draws a mark: filled and
+                    // keylined on Gray, outlined on Dark. Coloured text
+                    // alone was hard to read on the title bar.
+                    .child({
+                        let dirty = self.font().is_some_and(|f| f.dirty);
+                        let paint = t::mark_paint(Some(if dirty { "red" } else { "green" }));
+                        let mut tag = div()
+                            .px_1p5()
+                            .h(px(TAB_H - 4.0))
+                            .flex()
+                            .items_center()
+                            .rounded(t::radius())
+                            .border(t::stroke());
+                        tag = match paint {
+                            Some(p) => tag
+                                .when_some(p.bg, |el, bg| el.bg(bg))
+                                .border_color(p.border)
+                                .text_color(p.ink),
+                            None => tag
+                                .border_color(t::cell_border())
+                                .text_color(t::text_muted()),
+                        };
+                        tag.child(status)
+                    }),
             )
             .when(
                 // Always up in the editor, the Glyphs bottom-corner
