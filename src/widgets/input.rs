@@ -129,6 +129,9 @@ pub(crate) struct InputState {
 
 /// The font size fields are drawn at.
 pub(crate) const FONT_SIZE: f32 = 13.0;
+/// The interface font's cap height as a fraction of the em: Virtua
+/// Grotesk's 768 over 1024. The band a field centres.
+const CAP_HEIGHT: f32 = 0.75;
 
 impl InputState {
     /// An empty single-line field.
@@ -256,10 +259,14 @@ impl InputState {
         f(&mut self.editor)
     }
 
-    /// The height of the laid-out text: the font's line box for a
-    /// single line, so the field can centre it.
-    fn layout_height(&mut self) -> f32 {
-        self.with_layout(|editor| editor.try_layout().map(|l| l.height()).unwrap_or(0.0))
+    /// Where the first line's baseline sits below the layout's top.
+    fn baseline(&mut self) -> f32 {
+        self.with_layout(|editor| {
+            editor
+                .try_layout()
+                .and_then(|l| l.lines().next().map(|line| line.metrics().baseline))
+                .unwrap_or(FONT_SIZE)
+        })
     }
 
     /// Selection boxes, relative to the text origin: x, y, width,
@@ -805,9 +812,11 @@ fn paint_field(
 ) {
     // `bounds` is the content box: the field's own padding has already
     // been taken off. Adding it again here is what pushed the text
-    // right and down. A single line is centred on the font's line
-    // box, so the space above and below the letters matches; a
-    // multi-line field starts at the top.
+    // right and down. A single line is centred on its capitals, not
+    // on the font's line box: the line box hangs an ascender's worth
+    // above the caps and a descender's worth below, and centring it
+    // leaves the letters looking high. A multi-line field starts at
+    // the top.
     let width = f32::from(bounds.size.width);
     let placeholder = state.read(cx).placeholder.clone();
     let empty = state.read(cx).text.is_empty();
@@ -815,12 +824,12 @@ fn paint_field(
 
     let inner = state.update(cx, |input, _| {
         input.set_layout_width(width);
-        let text_h = input.layout_height();
-        let slack = f32::from(bounds.size.height) - text_h;
+        let baseline = input.baseline();
+        let mid = f32::from(bounds.size.height) / 2.0;
         let y = if multi_line {
             0.0
         } else {
-            (slack / 2.0).max(0.0)
+            (mid + CAP_HEIGHT * FONT_SIZE / 2.0 - baseline).max(0.0)
         };
         let inner = Point {
             x: bounds.origin.x,
