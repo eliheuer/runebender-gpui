@@ -1,7 +1,8 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Glyph menu: add, remove, duplicate, generate, groups, and glyph export.
+//! Glyph menu: add, remove, duplicate, generate, compose, groups, and
+//! glyph export.
 
 use crate::Workspace;
 use gpui::Context;
@@ -293,5 +294,64 @@ impl Workspace {
         self.selected = None;
         self.sidebar.counts = None;
         self.status_note = Some(format!("Removed {name}").into());
+    }
+
+    /// Glyph > Compose from Anchors: derive the selected precomposed
+    /// glyphs (or every glyph with a recipe) from their base and marks,
+    /// into the compose proposal layer. Core decides the recipes and
+    /// the offsets; this asks and shows the count.
+    pub(crate) fn command_compose(&mut self) {
+        let names = self.selection_names();
+        let only = (!names.is_empty()).then_some(names);
+        let Some(font) = self.font_mut() else { return };
+        let report =
+            runebender_core::document::compose::compose(&mut font.font, only.as_deref(), true);
+        if report.proposal.is_some() {
+            font.dirty = true;
+        }
+        let proposed = report.proposed().len();
+        let current = report.derived.iter().filter(|d| d.up_to_date).count();
+        let mut note = format!("Compose: {proposed} proposed, {current} up to date");
+        if !report.skipped.is_empty() {
+            note.push_str(&format!(", {} skipped", report.skipped.len()));
+            if let Some((g, why)) = report.skipped.first() {
+                note.push_str(&format!(" ({g}: {why})"));
+            }
+        }
+        self.status_note = Some(note.into());
+        self.refresh_proposal();
+    }
+
+    /// Re-derive the composites that depend on glyphs edited since the
+    /// last save, so a base or a mark that moved shows its derived
+    /// glyphs as a fresh proposal. Runs before a save, over every
+    /// dirty master. Composites already current are left alone.
+    pub(crate) fn recompose_dependents(&mut self) {
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        let mut touched = 0;
+        for master in project.masters.iter_mut() {
+            if !master.dirty || master.modified_glyphs.is_empty() {
+                continue;
+            }
+            let mut wanted: HashSet<String> = HashSet::new();
+            for name in &master.modified_glyphs {
+                wanted.extend(runebender_core::document::compose::dependents(
+                    &master.font,
+                    name,
+                ));
+            }
+            if wanted.is_empty() {
+                continue;
+            }
+            let list: Vec<String> = wanted.into_iter().collect();
+            let report =
+                runebender_core::document::compose::compose(&mut master.font, Some(&list), true);
+            touched += report.proposed().len();
+        }
+        if touched > 0 {
+            self.refresh_proposal();
+        }
     }
 }

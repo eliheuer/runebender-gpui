@@ -154,6 +154,9 @@ impl Workspace {
         #[cfg(not(target_family = "wasm"))]
         {
             let _ = cx;
+            // A base or a mark that moved re-derives its composites
+            // into the compose proposal, so the save carries them.
+            self.recompose_dependents();
             if let Some(project) = self.project.as_mut() {
                 let mut saved = Vec::new();
                 let mut failed = Vec::new();

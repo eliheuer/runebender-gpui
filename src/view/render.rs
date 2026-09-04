@@ -12,6 +12,7 @@ use crate::BooleanIntersect;
 use crate::BooleanSubtract;
 use crate::BooleanUnion;
 use crate::CheckJoining;
+use crate::ComposeFromAnchors;
 use crate::CopyContours;
 use crate::CopySelectedGlyphs;
 use crate::CorrectPathDirection;
@@ -798,6 +799,10 @@ impl Workspace {
             }))
             .on_action(cx.listener(|this, _: &CheckJoining, _, cx| {
                 this.command_check_joining();
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ComposeFromAnchors, _, cx| {
+                this.command_compose();
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &QuadsToCubics, _, cx| {

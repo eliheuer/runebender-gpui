@@ -105,6 +105,7 @@ gpui::actions!(
         ShowAllMasters,
         BakeMasks,
         CheckJoining,
+        ComposeFromAnchors,
         NextSampleString,
         PreviousSampleString,
         HyperToCubic,

@@ -17,6 +17,7 @@ use crate::BooleanIntersect;
 use crate::BooleanSubtract;
 use crate::BooleanUnion;
 use crate::CheckJoining;
+use crate::ComposeFromAnchors;
 use crate::CopyContours;
 use crate::CopySelectedGlyphs;
 use crate::CorrectPathDirection;
@@ -224,6 +225,7 @@ pub(crate) fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Decompose Components", Decompose),
                 MenuItem::separator(),
                 MenuItem::action("Check Joining", CheckJoining),
+                MenuItem::action("Compose from Anchors", ComposeFromAnchors),
                 MenuItem::action("Bake Masks", BakeMasks),
                 MenuItem::action("Export Glyph as SVG", ExportGlyphSvg),
                 MenuItem::separator(),
