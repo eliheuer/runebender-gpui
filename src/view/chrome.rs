@@ -133,14 +133,14 @@ impl Workspace {
                     .gap_2()
                     .overflow_hidden()
                     .child(div().text_color(t::text()).child(title))
-                    // "Saved" is the quiet state; only "Not saved" earns
-                    // the warning colour.
+                    // Saved is the mark palette's green, not saved its
+                    // red: the same two colours the glyph grid uses.
                     .child(
                         div()
                             .text_color(if self.font().is_some_and(|f| f.dirty) {
-                                t::status_yellow()
+                                t::mark_color("red").unwrap_or_else(t::status_yellow)
                             } else {
-                                t::text_muted()
+                                t::mark_color("green").unwrap_or_else(t::text_muted)
                             })
                             .child(status),
                     ),
