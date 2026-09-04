@@ -104,7 +104,7 @@ impl Workspace {
             }
         }
 
-        // Languages: script groups with per-set coverage, like the
+        // Global Scripts: script groups with per-set coverage, like the
         // web sidebar and Glyphs.
         let mut languages = div().flex().flex_col();
         for (gi, group) in sb::language_groups().iter().enumerate() {
@@ -122,7 +122,7 @@ impl Workspace {
                     } else {
                         RowMark::Chevron(expanded)
                     }),
-                    Some(group.icon.clone().into()),
+                    None,
                     group.label.clone().into(),
                     format!("{count}").into(),
                     SidebarFilter::LanguageGroup(gi),
@@ -360,7 +360,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .child(self.section(cx, "Categories", categories))
-                    .child(self.section(cx, "Languages", languages))
+                    .child(self.section(cx, "Global Scripts", languages))
                     .child(self.section(cx, "Filters", filters)),
             )
             // Mark colours sit at the foot of the sidebar, beside the
