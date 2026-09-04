@@ -1081,13 +1081,16 @@ fn paint_line(
     }
 }
 
-/// The zoom-dependent design grid, behind everything.
+/// The zoom-dependent design grid, behind everything: a dot at each
+/// intersection, and the eye supplies the lines.
 ///
 /// The 8-unit lattice fades in past 0.8x. Past 8x a 2-unit fine grid
 /// joins underneath, so the 8s stay one grid at every zoom. Design
 /// space here is sort-relative, so the grid is anchored at the active
-/// sort's origin and the baseline lands on a gridline. This is the
-/// web editor's `draw_design_grid`.
+/// sort's origin and the baseline lands on a row of dots. Lines were
+/// the web editor's `draw_design_grid`; zoomed out they became a
+/// mesh over the whole canvas, and dots carry the same information
+/// without the weight.
 fn paint_design_grid(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let (grid_mid_alpha, _) = grid_alphas(s.zoom);
     if !scene.preview_mode && grid_mid_alpha > 0.0 {
@@ -1100,46 +1103,71 @@ fn paint_design_grid(scene: &EditorScene, s: &Screen, window: &mut Window) {
         let c1 = inv * kurbo::Point::new(bw as f64, bh as f64);
         let (min_x, max_x) = (c0.x.min(c1.x), c0.x.max(c1.x));
         let (min_y, max_y) = (c0.y.min(c1.y), c0.y.max(c1.y));
+        // `skip_every` leaves out the intersections a coarser level
+        // already drew. Dots are batched in runs: one path per few
+        // thousand keeps under gpui's vertex limit per path.
         let level = |spacing: f64,
                      skip_every: u64,
-                     width_px: f32,
+                     size_px: f32,
                      color: gpui::Rgba,
                      window: &mut Window| {
-            let mut pb = PathBuilder::stroke(px(width_px));
-            for ix in to_index((min_x / spacing).floor())..=to_index((max_x / spacing).ceil()) {
-                if skip_every > 0 && ix.unsigned_abs() % skip_every == 0 {
-                    continue;
+            const RUN: usize = 2000;
+            let mut pb = PathBuilder::fill();
+            let mut count = 0;
+            let flush = |pb: &mut PathBuilder, window: &mut Window| {
+                let done = std::mem::replace(pb, PathBuilder::fill());
+                if let Ok(p) = done.build() {
+                    window.paint_path(p, color);
                 }
-                let x = ix as f64 * spacing;
-                pb.move_to(s.to_screen(x, min_y));
-                pb.line_to(s.to_screen(x, max_y));
-            }
-            for iy in to_index((min_y / spacing).floor())..=to_index((max_y / spacing).ceil()) {
-                if skip_every > 0 && iy.unsigned_abs() % skip_every == 0 {
-                    continue;
+            };
+            let xs = to_index((min_x / spacing).floor())..=to_index((max_x / spacing).ceil());
+            let ys = to_index((min_y / spacing).floor())..=to_index((max_y / spacing).ceil());
+            for ix in xs {
+                for iy in ys.clone() {
+                    if skip_every > 0
+                        && ix.unsigned_abs() % skip_every == 0
+                        && iy.unsigned_abs() % skip_every == 0
+                    {
+                        continue;
+                    }
+                    let at = s.to_screen(ix as f64 * spacing, iy as f64 * spacing);
+                    dot(&mut pb, at, size_px);
+                    count += 1;
+                    if count % RUN == 0 {
+                        flush(&mut pb, window);
+                    }
                 }
-                let y = iy as f64 * spacing;
-                pb.move_to(s.to_screen(min_x, y));
-                pb.line_to(s.to_screen(max_x, y));
             }
-            if let Ok(p) = pb.build() {
-                window.paint_path(p, color);
+            if count % RUN != 0 {
+                flush(&mut pb, window);
             }
         };
         level(
             8.0,
             0,
-            1.0,
+            1.5,
             t::design_grid_coarse(px32(grid_mid_alpha)),
             window,
         );
         let close_alpha = smoothstep(((s.zoom - 8.0) / 8.0).clamp(0.0, 1.0));
         if close_alpha > 0.0 {
-            // The 2s only; every 4th line is an 8 the mid pass
-            // already drew.
-            level(2.0, 4, 0.5, t::design_grid_fine(px32(close_alpha)), window);
+            // The 2s only; every 4th intersection is an 8 the mid
+            // pass already drew.
+            level(2.0, 4, 1.0, t::design_grid_fine(px32(close_alpha)), window);
         }
     }
+}
+
+/// One grid dot: a square `size` pixels across, centred on `at`.
+/// A square, not a circle, because a circle costs sixteen vertices
+/// and a grid has tens of thousands of dots.
+fn dot(pb: &mut PathBuilder, at: Point<gpui::Pixels>, size: f32) {
+    let h = px(size / 2.0);
+    pb.move_to(gpui::point(at.x - h, at.y - h));
+    pb.line_to(gpui::point(at.x + h, at.y - h));
+    pb.line_to(gpui::point(at.x + h, at.y + h));
+    pb.line_to(gpui::point(at.x - h, at.y + h));
+    pb.close();
 }
 
 /// The tracing template, under everything.
@@ -1943,71 +1971,55 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
             .or_insert_with(|| (inner, Vec::new()))
             .1
             .push(path.clone());
-        // The point is a window onto the design grid: the gridlines
-        // that cross it are redrawn inside, tinted with the point's
-        // own colour, so you can read where it sits (web draws this
-        // by clipping the grid to the point; gpui masks rectangles
-        // only, so the chords are solved instead: exact, and it costs
-        // a few lines per point).
+        // The point is a window onto the design grid: the grid dots
+        // that fall inside it are redrawn on top, tinted with the
+        // point's own colour, so you can read where it sits.
         if grid_mid_alpha > 0.0 && !scene.preview_mode && !scene.text_mode {
             let (cx_, cy_) = (f32::from(center.x) as f64, f32::from(center.y) as f64);
             let r = r as f64;
             let inv = transform.inverse();
-            for (spacing, alpha, wide) in [
-                (8.0_f64, grid_mid_alpha, 1.0_f32),
-                (2.0, grid_close_alpha, 0.7),
+            for (spacing, alpha, size) in [
+                (8.0_f64, grid_mid_alpha, 1.5_f32),
+                (2.0, grid_close_alpha, 1.0),
             ] {
                 if alpha <= 0.0 {
                     continue;
                 }
                 let mut tint = if is_locked || is_selected { ring } else { hue };
                 tint.a = px32(alpha);
-                let mut lines = BezPath::new();
-                // Vertical gridlines: the chord is the circle's
-                // half-height at that offset (the full radius for a
-                // square point).
+                let mut dots = BezPath::new();
                 let a = (inv * kurbo::Point::new(cx_ - r, cy_)).x;
                 let b = (inv * kurbo::Point::new(cx_ + r, cy_)).x;
-                let (lo, hi) = (a.min(b), a.max(b));
-                for k in to_index((lo / spacing).ceil())..=to_index((hi / spacing).floor()) {
-                    let sx = (transform * kurbo::Point::new(k as f64 * spacing, 0.0)).x;
-                    let d = sx - cx_;
-                    let half = if is_square {
-                        r
-                    } else {
-                        (r * r - d * d).max(0.0).sqrt()
-                    };
-                    if half <= 0.2 {
-                        continue;
-                    }
-                    lines.move_to((sx, cy_ - half));
-                    lines.line_to((sx, cy_ + half));
-                }
+                let (lo_x, hi_x) = (a.min(b), a.max(b));
                 let a = (inv * kurbo::Point::new(cx_, cy_ - r)).y;
                 let b = (inv * kurbo::Point::new(cx_, cy_ + r)).y;
-                let (lo, hi) = (a.min(b), a.max(b));
-                for k in to_index((lo / spacing).ceil())..=to_index((hi / spacing).floor()) {
-                    let sy = (transform * kurbo::Point::new(0.0, k as f64 * spacing)).y;
-                    let d = sy - cy_;
-                    let half = if is_square {
-                        r
-                    } else {
-                        (r * r - d * d).max(0.0).sqrt()
-                    };
-                    if half <= 0.2 {
-                        continue;
+                let (lo_y, hi_y) = (a.min(b), a.max(b));
+                let h = (size / 2.0) as f64;
+                for k in to_index((lo_x / spacing).ceil())..=to_index((hi_x / spacing).floor()) {
+                    for l in to_index((lo_y / spacing).ceil())..=to_index((hi_y / spacing).floor())
+                    {
+                        let at =
+                            transform * kurbo::Point::new(k as f64 * spacing, l as f64 * spacing);
+                        let (dx, dy) = (at.x - cx_, at.y - cy_);
+                        let inside = if is_square {
+                            dx.abs() <= r && dy.abs() <= r
+                        } else {
+                            dx * dx + dy * dy <= r * r
+                        };
+                        if !inside {
+                            continue;
+                        }
+                        dots.extend(kurbo::Shape::to_path(
+                            &kurbo::Rect::new(at.x - h, at.y - h, at.x + h, at.y + h),
+                            0.1,
+                        ));
                     }
-                    lines.move_to((cx_ - half, sy));
-                    lines.line_to((cx_ + half, sy));
                 }
-                if !lines.is_empty() {
+                if !dots.is_empty() {
                     let entry = chord_batch
                         .entry(color_key(tint))
                         .or_insert_with(|| (tint, Vec::new()));
-                    match entry.1.iter_mut().find(|(w, _)| *w == wide) {
-                        Some((_, acc)) => acc.extend(lines.iter()),
-                        None => entry.1.push((wide, lines)),
-                    }
+                    entry.1.push((0.0, dots));
                 }
             }
         }
@@ -2024,13 +2036,8 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
         paint_batched(window, zero, *color, paths, None);
     }
     for (color, path) in chord_batch.values() {
-        for (width, path) in path {
-            if let Some(p) = build_path(
-                path,
-                Affine::IDENTITY,
-                zero,
-                PathBuilder::stroke(px(*width)),
-            ) {
+        for (_, path) in path {
+            if let Some(p) = build_fill_path(path, Affine::IDENTITY, zero) {
                 window.paint_path(p, *color);
             }
         }
