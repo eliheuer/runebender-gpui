@@ -303,13 +303,13 @@ fn divider(
         .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
             cx.stop_propagation();
         })
-        .on_drag(DragDivider(slot), |drag, _, _, cx| {
+        .on_drag(DragDivider(group.clone(), slot), |drag, _, _, cx| {
             cx.stop_propagation();
             cx.new(|_| drag.clone())
         })
         .on_drag_move(move |event: &gpui::DragMoveEvent<DragDivider>, _, cx| {
-            let DragDivider(dragged) = event.drag(cx);
-            if *dragged != slot {
+            let DragDivider(dragged_group, dragged) = event.drag(cx);
+            if *dragged_group != drag_group || *dragged != slot {
                 return;
             }
             let Some(bounds) = panel_bounds(cx, &drag_group, target) else {
@@ -345,8 +345,11 @@ impl gpui::RenderOnce for ResizableGroup {
 }
 
 #[derive(Clone)]
-/// The drag payload: the divider's slot, so drag moves only reach their own divider.
-struct DragDivider(usize);
+/// The drag payload: the divider's group and slot, so drag moves only
+/// reach their own divider. The group matters: a column of panels
+/// inside a row of panels has a slot 0 in each, and without the group
+/// a drag on one moved the other.
+struct DragDivider(SharedString, usize);
 
 impl gpui::Render for DragDivider {
     fn render(

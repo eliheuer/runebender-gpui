@@ -195,9 +195,8 @@ impl Workspace {
             .min_h(px(0.0))
             .flex()
             .flex_col()
+            // No rule of its own: the divider above it is the rule.
             .bg(t::panel_bg())
-            .border_t_1()
-            .border_color(t::cell_border())
             .child(body)
             .into_any_element()
     }
