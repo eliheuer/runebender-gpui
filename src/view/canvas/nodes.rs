@@ -87,7 +87,7 @@ impl Workspace {
                 .px_2()
                 .w_auto()
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.models.graph.as_ref().is_some_and(|g| g.path == file) {
+                    if this.models.graph.as_ref().is_none_or(|g| g.path != file) {
                         this.open_nodes_file(&file);
                         this.models.graph_view.selected = None;
                     }

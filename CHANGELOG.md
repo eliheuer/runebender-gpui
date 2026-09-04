@@ -10,6 +10,12 @@ releases begin.
 No releases yet. `AGENTS.md` has the checklist for the first one.
 Until then, `main` is the only line and this section stays open.
 
+### Fixed
+
+- Text fields draw their text in the browser build again. They shape
+  with parley's own font list, which is empty on the web, so the
+  embedded IBM Plex Sans is registered there.
+
 ### Changed
 
 - The inspector's controls come from one place, `view/controls.rs`:

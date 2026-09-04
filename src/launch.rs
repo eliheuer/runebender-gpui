@@ -32,7 +32,6 @@ use crate::TidyPaths;
 use crate::Undo;
 use crate::Workspace;
 use crate::ZoomToFit;
-#[cfg(not(target_family = "wasm"))]
 use crate::widgets;
 use gpui::App;
 use gpui::SharedString;

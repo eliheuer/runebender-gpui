@@ -42,10 +42,37 @@ pub(crate) struct TextContexts {
 impl Default for TextContexts {
     fn default() -> Self {
         Self {
-            font: FontContext::new(),
+            font: font_context(),
             layout: LayoutContext::new(),
         }
     }
+}
+
+/// The font list fields shape against: the system's, where there is
+/// one.
+#[cfg(not(target_family = "wasm"))]
+fn font_context() -> FontContext {
+    FontContext::new()
+}
+
+/// A browser has no system font list to scan, so the fields would
+/// shape against nothing and draw nothing. Register the face gpui_web
+/// embeds for its own text and make it the sans-serif fallback.
+#[cfg(target_family = "wasm")]
+fn font_context() -> FontContext {
+    let mut font = FontContext::new();
+    let blob = parley::fontique::Blob::new(std::sync::Arc::new(
+        include_bytes!("../../assets/fonts/IBMPlexSans-Regular.ttf").as_slice(),
+    ));
+    let families: Vec<_> = font
+        .collection
+        .register_fonts(blob, None)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    font.collection
+        .set_generic_families(parley::GenericFamily::SansSerif, families.into_iter());
+    font
 }
 
 impl gpui::Global for GlobalTextContexts {}

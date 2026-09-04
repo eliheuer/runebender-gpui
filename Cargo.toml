@@ -128,7 +128,7 @@ toml = "0.8"
 # its command line, which is the only thing that needs clap.
 [dependencies.runebender-core]
 git = "https://github.com/eliheuer/runebender-core"
-rev = "05841c9ba871d2bbb917bca474bdb8301db8f8b9"
+rev = "4651e5d"
 default-features = false
 
 [dependencies.serde]
