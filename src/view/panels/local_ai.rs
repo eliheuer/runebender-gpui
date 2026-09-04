@@ -71,6 +71,44 @@ impl Workspace {
         // now.
         let body = self.nodes_rows(body, cx);
 
+        // Proposals waiting: what each holds, and the two answers.
+        // Above the model check, since a proposal can come from a tool
+        // that needs no model (compose) and must show either way.
+        let body = self.models.proposals.iter().fold(body, |el, p| {
+            let install_task = p.task.clone();
+            let discard_task = p.task.clone();
+            el.child(div().text_color(t::text()).child(format!(
+                "{} proposed: {} glyphs, {} keep structure",
+                p.task,
+                p.glyphs.len(),
+                p.compatible.len()
+            )))
+            .child(
+                c::row()
+                    .child(
+                        c::toggle(
+                            SharedString::from(format!("ai-install-{}", p.task)),
+                            "Install",
+                            true,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.install_proposal(&install_task, None);
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        c::button(
+                            SharedString::from(format!("ai-discard-{}", p.task)),
+                            "Discard",
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.discard_proposal(&discard_task);
+                            cx.notify();
+                        })),
+                    ),
+            )
+        });
+
         if self.models.dir.is_none() {
             let where_to_put_them = Self::models_dir()
                 .map(|p| p.display().to_string())
@@ -193,42 +231,6 @@ impl Workspace {
             ),
             None => body,
         };
-
-        // Proposals waiting: what each holds, and the two answers.
-        let body = self.models.proposals.iter().fold(body, |el, p| {
-            let install_task = p.task.clone();
-            let discard_task = p.task.clone();
-            el.child(div().text_color(t::text()).child(format!(
-                "{} proposed: {} glyphs, {} keep structure",
-                p.task,
-                p.glyphs.len(),
-                p.compatible.len()
-            )))
-            .child(
-                c::row()
-                    .child(
-                        c::toggle(
-                            SharedString::from(format!("ai-install-{}", p.task)),
-                            "Install",
-                            true,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.install_proposal(&install_task, None);
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        c::button(
-                            SharedString::from(format!("ai-discard-{}", p.task)),
-                            "Discard",
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.discard_proposal(&discard_task);
-                            cx.notify();
-                        })),
-                    ),
-            )
-        });
 
         // The judgement, when there is another master to judge against.
         let body = body.child(c::row().child(
