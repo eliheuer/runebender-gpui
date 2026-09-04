@@ -1184,14 +1184,25 @@ fn paint_design_grid(scene: &EditorScene, s: &Screen, window: &mut Window) {
                 lines(2.0, 4, 0.5, fine, window);
             }
         } else {
-            level(8.0, 0, 1.5, coarse, window);
+            let (coarse_dot, fine_dot) = grid_dot_sizes(s.zoom);
+            level(8.0, 0, coarse_dot, coarse, window);
             if close_alpha > 0.0 {
                 // The 2s only; every 4th intersection is an 8 the mid
                 // pass already drew.
-                level(2.0, 4, 1.0, fine, window);
+                level(2.0, 4, fine_dot, fine, window);
             }
         }
     }
+}
+
+/// The dot sizes at this zoom, coarse then fine. Dots grow with the
+/// space between them, so zooming in does not leave specks in a
+/// wide field: about a fifth of the coarse pitch and an eighth of
+/// the fine one, within limits.
+fn grid_dot_sizes(zoom: f64) -> (f32, f32) {
+    let coarse = (8.0 * zoom * 0.2).clamp(1.5, 5.0);
+    let fine = (2.0 * zoom * 0.125).clamp(1.0, 3.5);
+    (px32(coarse), px32(fine))
 }
 
 /// One grid dot: a square `size` pixels across, centred on `at`.
@@ -2023,9 +2034,10 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
             let a = (inv * kurbo::Point::new(cx_, cy_ - r)).y;
             let b = (inv * kurbo::Point::new(cx_, cy_ + r)).y;
             let (lo_y, hi_y) = (a.min(b), a.max(b));
+            let (coarse_dot, fine_dot) = grid_dot_sizes(s.zoom);
             for (spacing, alpha, size, wide) in [
-                (8.0_f64, grid_mid_alpha, 1.5_f32, 1.0_f32),
-                (2.0, grid_close_alpha, 1.0, 0.7),
+                (8.0_f64, grid_mid_alpha, coarse_dot, 1.0_f32),
+                (2.0, grid_close_alpha, fine_dot, 0.7),
             ] {
                 if alpha <= 0.0 {
                     continue;
