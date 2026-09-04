@@ -17,6 +17,7 @@ use crate::view::theme as t;
 use crate::widgets;
 use crate::workspace::BOTTOM_BAR_H;
 use crate::workspace::GridFit;
+use crate::workspace::TAB_H;
 use gpui::Bounds;
 use gpui::Context;
 use gpui::InteractiveElement;
@@ -514,11 +515,15 @@ impl Workspace {
         // mark cells carry. The selected one is not drawn heavier: it
         // gets a second ring of the same width outside the circle, so
         // the swatch itself never changes weight.
-        const SWATCH: f32 = 14.0;
+        // The whole swatch, ring included, is the size of the round
+        // new-tab button at the other corner of the window. The gap is
+        // the sidebar's 6px, and the panel's default width is set so
+        // the row fits it exactly.
         const RING_GAP: f32 = 2.0;
         let ring = f32::from(t::stroke());
-        let outer = SWATCH + 2.0 * (RING_GAP + ring);
-        let inset = (BOTTOM_BAR_H - outer) / 2.0;
+        let outer = TAB_H;
+        let swatch_size = outer - 2.0 * (RING_GAP + ring);
+        let inset = 6.0;
         let swatch = |id: gpui::ElementId,
                       fill: gpui::Rgba,
                       keyline: gpui::Rgba,
@@ -543,8 +548,8 @@ impl Workspace {
                 .cursor_pointer()
                 .child(
                     div()
-                        .w(px(SWATCH))
-                        .h(px(SWATCH))
+                        .w(px(swatch_size))
+                        .h(px(swatch_size))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -583,7 +588,7 @@ impl Workspace {
                 t::cell_bg(),
                 t::cell_border(),
                 current.is_none(),
-                Some(cross_mark(t::cell_border(), SWATCH - 2.0 * ring).into_any_element()),
+                Some(cross_mark(t::cell_border(), swatch_size - 2.0 * ring).into_any_element()),
             )
             .on_click(cx.listener(|this, _, _, cx| {
                 this.set_selected_mark(None);

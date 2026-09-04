@@ -470,7 +470,9 @@ impl Workspace {
                 h_resizable("workspace")
                     .child(
                         resizable_panel()
-                            .size(px(224.0))
+                            // Eight 24px swatches, seven 6px gaps, and
+                            // 6px at each edge: the mark row fits exactly.
+                            .size(px(246.0))
                             .size_range(px(140.0)..px(440.0))
                             .visible(!self.left_collapsed)
                             .child(
