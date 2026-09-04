@@ -2017,7 +2017,9 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
             .1
             .push(path);
     }
-    paint_batched(window, zero, t::halo(), &halo_batch, Some(halo_w));
+    if t::point_halo() {
+        paint_batched(window, zero, t::halo(), &halo_batch, Some(halo_w));
+    }
     for (color, paths) in fill_batch.values() {
         paint_batched(window, zero, *color, paths, None);
     }
@@ -2125,7 +2127,9 @@ fn paint_anchors(scene: &EditorScene, s: &Screen, window: &mut Window) {
             .1
             .push(diamond);
     }
-    paint_batched(window, zero, t::halo(), &anchor_halo, Some(halo_w));
+    if t::point_halo() {
+        paint_batched(window, zero, t::halo(), &anchor_halo, Some(halo_w));
+    }
     for (color, paths) in anchor_fill.values() {
         paint_batched(window, zero, *color, paths, None);
     }

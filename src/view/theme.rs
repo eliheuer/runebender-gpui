@@ -313,6 +313,10 @@ pub(crate) fn point_readonly() -> Rgba {
 pub(crate) fn points_filled() -> bool {
     theme().point_style == theme::PointStyle::Fill
 }
+/// Whether points and anchors get a halo of the ground under them.
+pub(crate) fn point_halo() -> bool {
+    theme().point_halo
+}
 /// The keyline around a filled point; the mark keyline stands in.
 pub(crate) fn point_outline() -> Rgba {
     theme()
