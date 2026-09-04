@@ -516,6 +516,8 @@ pub(crate) struct Workspace {
     /// view. Clicking any master's node switches to that master
     /// with the node selected.
     pub(crate) show_all_masters: bool,
+    /// The design grid as lines rather than dots.
+    pub(crate) grid_lines: bool,
     /// The left sidebar is hidden. The header button toggles it,
     /// as in Glyphs.
     pub(crate) left_collapsed: bool,
@@ -836,6 +838,10 @@ impl Default for MeasureOpts {
         }
     }
 }
+
+/// What the Grid menu shows as ticked: lines when true, dots when
+/// false. Mirrored from the workspace whenever it changes.
+pub(crate) static GRID_LINES_MENU: Mutex<bool> = Mutex::new(false);
 
 /// What the Measure menu shows as ticked. The menu is built outside
 /// the view, so the live options are mirrored here whenever they

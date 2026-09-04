@@ -30,6 +30,8 @@ use crate::FilterRoughen;
 use crate::FilterSlant;
 use crate::FlipHorizontal;
 use crate::FlipVertical;
+use crate::GridDots;
+use crate::GridLines;
 use crate::Harmonize;
 use crate::HyperToCubic;
 use crate::ImportSvg;
@@ -817,6 +819,12 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &CubicsToQuads, _, cx| {
                 this.command_convert_curves(false);
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &GridDots, _, cx| {
+                this.set_grid_lines(false, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GridLines, _, cx| {
+                this.set_grid_lines(true, cx);
             }))
             .on_action(cx.listener(|this, _: &ShowAllMasters, _, cx| {
                 this.show_all_masters = !this.show_all_masters;

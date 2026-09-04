@@ -103,6 +103,8 @@ gpui::actions!(
         FilterSlant,
         SyncMetrics,
         ShowAllMasters,
+        GridDots,
+        GridLines,
         BakeMasks,
         CheckJoining,
         ComposeFromAnchors,

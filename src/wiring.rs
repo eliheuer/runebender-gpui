@@ -611,6 +611,7 @@ impl Workspace {
             collapsed_sections: HashSet::from([crate::view::panels::editor_info::FONT_ADVANCED]),
             reference_layers: HashSet::new(),
             show_all_masters: false,
+            grid_lines: false,
             left_collapsed: false,
             header_press: false,
             #[cfg(not(target_os = "macos"))]

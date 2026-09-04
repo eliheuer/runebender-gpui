@@ -1213,6 +1213,14 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Lines or dots for the design grid, with the menu tick following.
+    pub(crate) fn set_grid_lines(&mut self, lines: bool, cx: &mut Context<'_, Self>) {
+        self.grid_lines = lines;
+        *crate::workspace::GRID_LINES_MENU.lock().expect("grid menu") = lines;
+        cx.set_menus(app_menus());
+        cx.notify();
+    }
+
     /// Nudge the selection by `(dx, dy)` design units.
     ///
     /// The routing matches the web editor: a selected component

@@ -35,6 +35,8 @@ use crate::FilterRoughen;
 use crate::FilterSlant;
 use crate::FlipHorizontal;
 use crate::FlipVertical;
+use crate::GridDots;
+use crate::GridLines;
 use crate::Harmonize;
 use crate::HyperToCubic;
 use crate::ImportSvg;
@@ -91,6 +93,7 @@ use crate::TraceImage;
 use crate::Undo;
 use crate::ZoomToFit;
 use crate::view::theme as t;
+use crate::workspace::GRID_LINES_MENU;
 use crate::workspace::MEASURE_MENU;
 
 /// The action that switches to the theme named `id`.
@@ -125,6 +128,25 @@ pub(crate) fn theme_menu_items() -> Vec<gpui::MenuItem> {
             }
         })
         .collect()
+}
+
+/// The design grid's style: dots at the intersections, or lines. One
+/// is ticked.
+pub(crate) fn grid_menu_items() -> Vec<gpui::MenuItem> {
+    use gpui::MenuItem;
+    let lines = *GRID_LINES_MENU.lock().expect("grid menu");
+    let item =
+        |name: &'static str, action: Box<dyn gpui::Action>, checked: bool| MenuItem::Action {
+            name: name.into(),
+            action,
+            os_action: None,
+            checked,
+            disabled: false,
+        };
+    vec![
+        item("Dots", Box::new(GridDots), !lines),
+        item("Lines", Box::new(GridLines), lines),
+    ]
 }
 
 /// The Measure overlays, as a menu of toggles. They are view options,
@@ -304,6 +326,11 @@ pub(crate) fn app_menus() -> Vec<gpui::Menu> {
                 MenuItem::action("Next Sample String", NextSampleString),
                 MenuItem::action("Previous Sample String", PreviousSampleString),
                 MenuItem::separator(),
+                MenuItem::Submenu(Menu {
+                    name: "Grid".into(),
+                    items: grid_menu_items(),
+                    disabled: false,
+                }),
                 MenuItem::Submenu(Menu {
                     name: "Measure".into(),
                     items: measure_menu_items(),
