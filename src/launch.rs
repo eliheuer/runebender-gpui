@@ -202,6 +202,23 @@ pub(crate) fn print_font_families(cx: &mut App) {
     );
 }
 
+/// The interface font that ships with the editor: Virtua Grotesk, the
+/// same family as the demo font. Registered with gpui at launch.
+pub(crate) const UI_FONT: &[u8] = include_bytes!("../assets/fonts/VirtuaGrotesk-Regular.ttf");
+/// Its family name, as the font's name table spells it.
+pub(crate) const UI_FONT_FAMILY: &str = "Virtua Grotesk";
+
+/// Hands the bundled interface font to gpui, so every platform and
+/// the browser draw the same face. Before anything resolves a family.
+pub(crate) fn register_ui_font(cx: &App) {
+    if let Err(e) = cx
+        .text_system()
+        .add_fonts(vec![std::borrow::Cow::Borrowed(UI_FONT)])
+    {
+        eprintln!("runebender: could not load the bundled interface font: {e:#}");
+    }
+}
+
 /// The interface font, resolved once against what the platform
 /// actually has. A name gpui cannot resolve shapes to nothing, and
 /// no text draws at all. So the preferences are tried in order,
@@ -221,6 +238,10 @@ pub(crate) fn ui_font_family(cx: &App) -> SharedString {
 
 /// The uncached lookup. Runs once.
 pub(crate) fn resolve_ui_font_family(cx: &App) -> SharedString {
+    let available = cx.text_system().all_font_names();
+    if available.iter().any(|f| f == UI_FONT_FAMILY) {
+        return UI_FONT_FAMILY.into();
+    }
     // Each platform's own interface font first, then the families that
     // are actually installed on that platform, then a last-resort
     // shared one. Ordered per platform rather than in one list, or a
@@ -249,7 +270,6 @@ pub(crate) fn resolve_ui_font_family(cx: &App) -> SharedString {
         "Liberation Sans",
         "Arial",
     ];
-    let available = cx.text_system().all_font_names();
     // A handful of families means gpui is on its embedded fallback
     // list rather than the platform's fonts, which is what happens if
     // gpui_platform loses the font-kit feature. Text then shapes and

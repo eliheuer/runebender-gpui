@@ -207,6 +207,7 @@ fn main() {
     #[cfg(not(target_family = "wasm"))]
     if std::env::args().any(|a| a == "--fonts") {
         gpui_platform::application().run(|cx: &mut App| {
+            launch::register_ui_font(cx);
             print_font_families(cx);
             cx.quit();
         });
@@ -243,6 +244,7 @@ fn main() {
     #[cfg(target_family = "wasm")]
     let app = gpui_platform::single_threaded_web();
     let launch = move |cx: &mut App| {
+        launch::register_ui_font(cx);
         // The keymap for app commands; menu items show these as their
         // key equivalents.
         cx.bind_keys(keymap());

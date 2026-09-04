@@ -14,10 +14,14 @@ Until then, `main` is the only line and this section stays open.
 
 - Text fields draw their text in the browser build again. They shape
   with parley's own font list, which is empty on the web, so the
-  embedded IBM Plex Sans is registered there.
+  bundled interface font is registered there.
 
 ### Changed
 
+- The interface font is Virtua Grotesk, the demo font, bundled in
+  `assets/fonts` and registered at launch on every platform and the
+  web. `scripts/refresh-ui-font.sh` in virtua-grotesk copies a fresh
+  build in.
 - The inspector's controls come from one place, `view/controls.rs`:
   buttons, toggles, row labels, and fields share one height, one type
   size, and fill their row, so nothing clips at the panel edge.
