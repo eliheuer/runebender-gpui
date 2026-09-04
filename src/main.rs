@@ -260,10 +260,16 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // The header row is the title bar, as in Zed: the
+                // system bar is hidden and the traffic lights sit in
+                // our own strip, which carries the file name and tabs.
+                // Linux keeps the server's decorations above it.
                 titlebar: Some(TitlebarOptions {
                     title: Some("Runebender".into()),
-                    ..Default::default()
+                    appears_transparent: true,
+                    traffic_light_position: Some(gpui::point(px(12.), px(12.))),
                 }),
+                app_owns_titlebar_drag: true,
                 ..Default::default()
             },
             |window, cx| {

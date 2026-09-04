@@ -612,6 +612,7 @@ impl Workspace {
             reference_layers: HashSet::new(),
             show_all_masters: false,
             left_collapsed: false,
+            header_press: false,
             #[cfg(not(target_os = "macos"))]
             app_menu_bar: app_menu_bar.clone(),
             focus_handle: cx.focus_handle(),

@@ -519,6 +519,9 @@ pub(crate) struct Workspace {
     /// The left sidebar is hidden. The header button toggles it,
     /// as in Glyphs.
     pub(crate) left_collapsed: bool,
+    /// A press on the header's empty space, waiting to become a
+    /// window drag on the first move.
+    pub(crate) header_press: bool,
     /// In-window menu bar for platforms without a native one
     /// (Windows, Linux, the browser).
     #[cfg(not(target_os = "macos"))]

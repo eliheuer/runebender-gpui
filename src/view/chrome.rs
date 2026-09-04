@@ -63,6 +63,7 @@ impl Workspace {
         };
         let in_editor = matches!(self.mode, Mode::Editor(_));
         div()
+            .id("header")
             .flex()
             .items_center()
             // The same 6px everywhere: from the window's edges to the
@@ -73,6 +74,32 @@ impl Workspace {
             .bg(t::panel_bg())
             .border_b_1()
             .border_color(t::panel_outline())
+            // This row is the window's title bar: room for the traffic
+            // lights on macOS, and a press on its empty space moves
+            // the window; a double click zooms it, as the system bar
+            // would. Buttons in the row take their clicks first.
+            .when(cfg!(target_os = "macos"), |el| el.pl(px(80.0)))
+            .window_control_area(gpui::WindowControlArea::Drag)
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, _| this.header_press = true),
+            )
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, _, _| this.header_press = false),
+            )
+            .on_mouse_down_out(cx.listener(|this, _, _, _| this.header_press = false))
+            .on_mouse_move(cx.listener(|this, _, window, _| {
+                if this.header_press {
+                    this.header_press = false;
+                    window.start_window_move();
+                }
+            }))
+            .on_click(|event, window, _| {
+                if event.click_count() == 2 {
+                    window.titlebar_double_click();
+                }
+            })
             .child(
                 div()
                     .id("toggle-left")
