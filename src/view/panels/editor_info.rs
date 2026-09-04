@@ -467,16 +467,13 @@ impl Workspace {
                                 .map(|g| format!("@{g}"))
                                 .unwrap_or_else(|| name.to_string())
                         };
-                        let exception = !is_group(first) || !is_group(second);
+                        // A glyph-to-glyph exception reads the same as a
+                        // group pair: the names say which it is.
                         div()
                             .flex_1()
                             .min_w(px(0.0))
                             .truncate()
-                            .text_color(if exception {
-                                t::status_yellow()
-                            } else {
-                                t::text()
-                            })
+                            .text_color(t::text())
                             .child(format!("{} · {}", short(first), short(second)))
                     })
                     .child(
