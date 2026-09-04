@@ -227,8 +227,11 @@ fn main() {
 
     // QA hook: RB_OPEN_GLYPH=<name> starts in the editor on that
     // glyph, so agent screenshots can reach it without clicks.
-    let start_mode = std::env::var("RB_OPEN_GLYPH")
-        .ok()
+    #[cfg(not(target_family = "wasm"))]
+    let wanted = std::env::var("RB_OPEN_GLYPH").ok();
+    #[cfg(target_family = "wasm")]
+    let wanted = web_host::glyph_from_location();
+    let start_mode = wanted
         .and_then(|name| {
             let p = project.as_ref()?;
             p.active_font()

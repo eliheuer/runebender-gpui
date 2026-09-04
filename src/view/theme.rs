@@ -157,6 +157,11 @@ fn with_alpha(color: ColorRgba, a: f32) -> Rgba {
 pub(crate) fn window_bg() -> Rgba {
     c(theme().surface("app"))
 }
+/// The editing canvas ground: paper under the outline, which on a
+/// mid-grey theme is lighter than the panels, not darker.
+pub(crate) fn canvas_bg() -> Rgba {
+    c(theme().surface("canvas"))
+}
 /// The fill of panels and bars.
 pub(crate) fn panel_bg() -> Rgba {
     c(theme().surface("panel"))
@@ -259,10 +264,6 @@ pub(crate) fn outline_fill() -> Rgba {
 pub(crate) fn metrics_line() -> Rgba {
     c(theme().role("metricsLine"))
 }
-/// The preview-mode glyph fill; the status yellow.
-pub(crate) fn preview_glyph() -> Rgba {
-    status_yellow()
-}
 /// The translucent fill of a component.
 pub(crate) fn component_fill() -> Rgba {
     with_alpha(theme().role("component"), 0.35)
@@ -300,7 +301,26 @@ pub(crate) fn point_readonly() -> Rgba {
     }
 }
 
-// ---- points (dark inner, colored ring — the web style) ----
+// ---- points ----
+//
+// Two recipes. Ring: a dark interior with the kind's hue as a ring,
+// the web style, for grounds far from mid lightness. Fill: the hue
+// as the interior with one keyline, the mark cells' treatment, for
+// a mid-grey ground where a thin ring carries no colour.
+
+/// Whether points are hue-filled with a keyline, or dark with a
+/// hue ring.
+pub(crate) fn points_filled() -> bool {
+    theme().point_style == theme::PointStyle::Fill
+}
+/// The keyline around a filled point; the mark keyline stands in.
+pub(crate) fn point_outline() -> Rgba {
+    theme()
+        .point_outline
+        .or(theme().mark_outline)
+        .map(c)
+        .unwrap_or_else(text)
+}
 
 /// The dark inner fill every point marker shares.
 pub(crate) fn point_inner() -> Rgba {
@@ -542,7 +562,11 @@ pub(crate) fn halo() -> Rgba {
 /// The ring around a selected point. This is `pointSelectedOuter` in
 /// the web editor, which feeds it from the selection colour.
 pub(crate) fn point_selected_ring() -> Rgba {
-    c(theme().role("selection"))
+    if theme().roles.contains_key("pointSelectedRing") {
+        c(theme().role("pointSelectedRing"))
+    } else {
+        c(theme().role("selection"))
+    }
 }
 
 // ---- anchors ----

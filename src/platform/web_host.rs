@@ -71,6 +71,22 @@ pub(crate) fn server_from_location() -> Option<String> {
     None
 }
 
+/// `?glyph=<name>` starts in the editor on that glyph: the web
+/// build's `RB_OPEN_GLYPH`, so a headless screenshot reaches edit
+/// mode without clicks.
+pub(crate) fn glyph_from_location() -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let search = search.strip_prefix('?')?;
+    for pair in search.split('&') {
+        if let Some(value) = pair.strip_prefix("glyph=") {
+            return js_sys::decode_uri_component(value)
+                .ok()
+                .map(|v| String::from(v));
+        }
+    }
+    None
+}
+
 async fn get_bytes(
     client: &Arc<dyn HttpClient>,
     url: &str,

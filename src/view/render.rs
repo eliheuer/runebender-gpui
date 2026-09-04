@@ -272,6 +272,7 @@ impl Workspace {
                                             .min_h(px(0.0))
                                             .flex()
                                             .flex_col()
+                                            .bg(t::canvas_bg())
                                             .child(self.editor_view(index, cx)),
                                     ),
                                 )

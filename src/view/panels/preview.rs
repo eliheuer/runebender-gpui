@@ -94,10 +94,13 @@ impl Workspace {
                 move |_, bounds: Bounds<gpui::Pixels>, window, _| {
                     let w: f64 = f32::from(bounds.size.width) as f64;
                     let h: f64 = f32::from(bounds.size.height) as f64;
+                    // Ink on the panel, or the panel on ink: the
+                    // preview is type, so it takes the text colours,
+                    // not a hue.
                     let (ink, ground) = if invert {
-                        (t::window_bg(), t::preview_glyph())
+                        (t::panel_bg(), t::text())
                     } else {
-                        (t::preview_glyph(), t::panel_bg())
+                        (t::text(), t::panel_bg())
                     };
                     window.paint_quad(gpui::fill(bounds, ground));
                     // The type fits the pane, the way Glyphs and the

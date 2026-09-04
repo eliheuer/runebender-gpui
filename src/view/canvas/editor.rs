@@ -1905,19 +1905,26 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
         let center = s.to_screen(p.x, p.y);
         let is_selected = scene.selected_points.contains(&(p.contour, p.index));
         let is_locked = scene.locked_points.contains(&(p.contour, p.index));
+        let hue = if p.hyper {
+            t::point_hyper_outer()
+        } else if !p.on_curve {
+            t::point_offcurve_outer()
+        } else if p.smooth {
+            t::point_smooth_outer()
+        } else {
+            t::point_corner_outer()
+        };
+        // The hue is the ring or the fill, by the theme's recipe; the
+        // grid chords inside the point take the hue either way.
         let (ring, inner) = if is_locked {
             // Locked nodes read as inert.
             (t::point_readonly(), t::point_readonly())
         } else if is_selected {
             (t::point_selected_ring(), t::point_selected())
-        } else if p.hyper {
-            (t::point_hyper_outer(), t::point_inner())
-        } else if !p.on_curve {
-            (t::point_offcurve_outer(), t::point_inner())
-        } else if p.smooth {
-            (t::point_smooth_outer(), t::point_inner())
+        } else if t::points_filled() {
+            (t::point_outline(), hue)
         } else {
-            (t::point_corner_outer(), t::point_inner())
+            (hue, t::point_inner())
         };
         let is_square = p.on_curve && !p.smooth && !p.hyper;
         let r = if p.hyper && p.on_curve {
@@ -1953,7 +1960,7 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
                 if alpha <= 0.0 {
                     continue;
                 }
-                let mut tint = ring;
+                let mut tint = if is_locked || is_selected { ring } else { hue };
                 tint.a = px32(alpha);
                 let mut lines = BezPath::new();
                 // Vertical gridlines: the chord is the circle's
