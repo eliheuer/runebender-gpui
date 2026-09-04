@@ -71,7 +71,7 @@ impl Workspace {
             .gap_1p5()
             .px_1p5()
             .py_1p5()
-            .bg(t::panel_bg())
+            .bg(t::titlebar_bg())
             .border_b_1()
             .border_color(t::panel_outline())
             // This row is the window's title bar: room for the traffic

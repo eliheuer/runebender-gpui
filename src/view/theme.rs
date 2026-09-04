@@ -161,6 +161,11 @@ pub(crate) fn window_bg() -> Rgba {
 pub(crate) fn panel_bg() -> Rgba {
     c(theme().surface("panel"))
 }
+/// The header row that stands in for the title bar: a step darker
+/// than the panels, so the window controls sit on contrast.
+pub(crate) fn titlebar_bg() -> Rgba {
+    c(theme().surface("titlebar"))
+}
 /// The rule around a panel.
 pub(crate) fn panel_outline() -> Rgba {
     c(theme().surface("outline"))

@@ -522,8 +522,11 @@ impl Workspace {
                     )
             }))
             .child(
+                // Round, so it sits with the window's corner rather
+                // than fighting it.
                 tab("tab-new".into(), "+".into(), false)
                     .w(px(TAB_H))
+                    .rounded_full()
                     .justify_center()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.command_new_session();
