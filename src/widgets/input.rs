@@ -256,6 +256,12 @@ impl InputState {
         f(&mut self.editor)
     }
 
+    /// The height of the laid-out text: the font's line box for a
+    /// single line, so the field can centre it.
+    fn layout_height(&mut self) -> f32 {
+        self.with_layout(|editor| editor.try_layout().map(|l| l.height()).unwrap_or(0.0))
+    }
+
     /// Selection boxes, relative to the text origin: x, y, width,
     /// height.
     fn selection_rects(&mut self) -> Vec<(f32, f32, f32, f32)> {
@@ -797,18 +803,31 @@ fn paint_field(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let inner = Point {
-        x: bounds.origin.x + px(PAD_X),
-        y: bounds.origin.y + px(PAD_Y),
-    };
-    let width = f32::from(bounds.size.width) - PAD_X * 2.0;
-
+    // `bounds` is the content box: the field's own padding has already
+    // been taken off. Adding it again here is what pushed the text
+    // right and down. A single line is centred on the font's line
+    // box, so the space above and below the letters matches; a
+    // multi-line field starts at the top.
+    let width = f32::from(bounds.size.width);
     let placeholder = state.read(cx).placeholder.clone();
     let empty = state.read(cx).text.is_empty();
+    let multi_line = state.read(cx).multi_line;
 
-    state.update(cx, |input, _| {
+    let inner = state.update(cx, |input, _| {
         input.set_layout_width(width);
+        let text_h = input.layout_height();
+        let slack = f32::from(bounds.size.height) - text_h;
+        let y = if multi_line {
+            0.0
+        } else {
+            (slack / 2.0).max(0.0)
+        };
+        let inner = Point {
+            x: bounds.origin.x,
+            y: bounds.origin.y + px(y),
+        };
         input.record_origin(inner);
+        inner
     });
 
     if empty && !placeholder.is_empty() {
