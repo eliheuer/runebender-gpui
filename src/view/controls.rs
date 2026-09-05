@@ -77,7 +77,7 @@ pub(crate) fn toggle(
     let el = base(id).child(label.into());
     if active {
         el.bg(t::selected_bg())
-            .border_color(t::selected_bg())
+            .border_color(t::selected_outline())
             .text_color(t::selected_ink())
     } else {
         el.border_color(t::cell_border()).text_color(t::text())

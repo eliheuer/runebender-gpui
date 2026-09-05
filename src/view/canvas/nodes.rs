@@ -556,7 +556,7 @@ fn paint_nodes(
         let selected = scene.selected == Some(nb.id);
         let header_rect = nb.header();
         let outline = if selected {
-            t::selected_bg()
+            t::selected_outline()
         } else {
             mark.as_ref().map_or_else(t::cell_border, |m| m.border)
         };

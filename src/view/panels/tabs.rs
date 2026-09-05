@@ -235,7 +235,7 @@ impl Workspace {
                     .when(active, |el| {
                         el.border(t::stroke())
                             .bg(t::selected_bg())
-                            .border_color(t::selected_bg())
+                            .border_color(t::selected_outline())
                             .text_color(t::selected_ink())
                     })
                     .when(!active, |el| el.text_color(t::text()))
@@ -389,7 +389,7 @@ impl Workspace {
                 .when(active, |el| {
                     el.border(t::stroke())
                         .bg(t::selected_bg())
-                        .border_color(t::selected_bg())
+                        .border_color(t::selected_outline())
                         .text_color(t::selected_ink())
                 })
                 .when(!active, |el| {

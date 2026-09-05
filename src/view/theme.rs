@@ -218,6 +218,11 @@ pub(crate) fn cell_selected_ring() -> Rgba {
 pub(crate) fn selected_bg() -> Rgba {
     c(theme().role("controlSelected"))
 }
+/// The outline of a selected control: the selected ring, which on
+/// Gray is the ordinary dark keyline, so a highlight keeps its edge.
+pub(crate) fn selected_outline() -> Rgba {
+    cell_selected_ring()
+}
 /// The text and icon colour on a selected control.
 pub(crate) fn selected_ink() -> Rgba {
     c(theme().role("controlSelectedInk"))

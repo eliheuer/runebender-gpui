@@ -667,7 +667,7 @@ impl Workspace {
                             .border(t::stroke())
                             .when(toggle_on, |el| {
                                 el.bg(t::selected_bg())
-                                    .border_color(t::selected_bg())
+                                    .border_color(t::selected_outline())
                                     .text_color(t::selected_ink())
                             })
                             .when(!toggle_on, |el| {
@@ -1118,7 +1118,7 @@ impl Workspace {
                                 .border(t::stroke())
                                 .when(aligned, |el| {
                                     el.bg(t::selected_bg())
-                                        .border_color(t::selected_bg())
+                                        .border_color(t::selected_outline())
                                         .text_color(t::selected_ink())
                                 })
                                 .when(!aligned, |el| {
@@ -1316,7 +1316,7 @@ impl Workspace {
                         .border(t::stroke())
                         .when(on, |el| {
                             el.bg(t::selected_bg())
-                                .border_color(t::selected_bg())
+                                .border_color(t::selected_outline())
                                 .text_color(t::selected_ink())
                         })
                         .when(!on, |el| {
