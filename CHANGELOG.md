@@ -18,6 +18,9 @@ Until then, `main` is the only line and this section stays open.
 
 ### Changed
 
+- Core pin updated for revision-checked agent proposals. Installing a guarded
+  proposal skips glyphs whose foreground changed after the proposal was made.
+
 - The interface font is Virtua Grotesk, the demo font, bundled in
   `assets/fonts` and registered at launch on every platform and the
   web. `scripts/refresh-ui-font.sh` in virtua-grotesk copies a fresh

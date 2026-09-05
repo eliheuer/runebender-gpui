@@ -5323,7 +5323,7 @@ dependencies = [
 [[package]]
 name = "runebender-core"
 version = "0.1.0"
-source = "git+https://github.com/eliheuer/runebender-core?rev=f1719e8#f1719e804d445cb5846c1272c67bb148f5d12075"
+source = "git+https://github.com/eliheuer/runebender-core?rev=33aa618#33aa6184a240a03694be5bc2851968548ade7294"
 dependencies = [
  "fea-rs",
  "glyphslib",
@@ -5338,6 +5338,7 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "sha2",
  "skrifa 0.44.0",
  "spline",
  "unicode-bidi",
