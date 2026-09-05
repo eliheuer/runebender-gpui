@@ -297,6 +297,7 @@ pub(crate) fn project_from_fetched(
             ds_doc: None,
             ds_dirty: false,
             brace: Vec::new(),
+            experiments: Default::default(),
         }
     };
     let mut project = project;
