@@ -18,6 +18,8 @@ Until then, `main` is the only line and this section stays open.
 
 ### Changed
 
+- Live experiment cards in Nodes: fork versions, preview through Designbot, export PNG/PDF, apply reviewed changes and undo. Versions are session-only. OMP shares the same live branches.
+
 - Core pin updated for revision-checked agent proposals. Installing a guarded
   proposal skips glyphs whose foreground changed after the proposal was made.
 

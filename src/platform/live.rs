@@ -11,6 +11,7 @@ impl Workspace {
     /// Gives each newly opened document its own endpoint; old clients disconnect.
     pub(crate) fn reset_live(&mut self) {
         self.live = None;
+        self.models.experiment_previews = crate::edit::experiments::ExperimentPreviews::default();
         self.live = Server::start()
             .map_err(|e| eprintln!("Live tools unavailable: {e}"))
             .ok();
@@ -31,12 +32,29 @@ impl Workspace {
                     .update(cx, |workspace, cx| {
                         let request = workspace.live.as_ref().and_then(Server::try_recv);
                         if let Some(request) = request {
-                            request.respond(|call| match workspace.project.as_mut() {
-                                Some(project) => live::call(project, &call.name, &call.arguments),
-                                None => {
-                                    serde_json::json!({"ok": false, "error": "no document open"})
+                            let mut installed = false;
+                            request.respond(|call| {
+                                if matches!(call.name.as_str(), "proposal_install" | "experiment_apply" | "experiment_undo_apply") && workspace.editor.drag.is_some() {
+                                    return serde_json::json!({"ok":false,"error":"finish the canvas gesture before installing"});
+                                }
+                                match workspace.project.as_mut() {
+                                    Some(project) => {
+                                        let result = live::call(project, &call.name, &call.arguments);
+                                        installed = result["root_changed"] == true
+                                            && result["master"].as_u64() == Some(project.active as u64);
+                                        result
+                                    }
+                                    None => serde_json::json!({"ok":false,"error":"no document open"}),
                                 }
                             });
+                            if installed {
+                                workspace.editor.selected.clear();
+                                workspace.editor.selected_anchors.clear();
+                                workspace.editor.selected_component = None;
+                                workspace.editor.hyper_contour = None;
+                                workspace.editor.segment_hover = None;
+                                workspace.rebuild_text_models();
+                            }
                             workspace.refresh_proposal();
                             cx.notify();
                         }

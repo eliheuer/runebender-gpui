@@ -779,6 +779,7 @@ impl Workspace {
                 tasks_json: None,
                 strength_slider: None,
                 graph: None,
+                experiment_previews: crate::edit::experiments::ExperimentPreviews::default(),
                 graph_files: Vec::new(),
                 graph_view: crate::edit::nodes::NodesView::default(),
             },

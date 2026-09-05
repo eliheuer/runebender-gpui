@@ -241,6 +241,7 @@ impl Workspace {
                     .flex_col()
                     .size_full()
                     .min_h(px(0.0))
+                    .child(self.experiment_nodes(cx))
                     .child(self.nodes_strip(cx))
                     .child(self.nodes_view(cx))
                     .child(self.status_bar(cx))

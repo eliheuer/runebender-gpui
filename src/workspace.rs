@@ -714,6 +714,8 @@ pub(crate) struct PreviewState {
 
 /// The Local AI panel's state: the model on disk and its controls.
 pub(crate) struct ModelsState {
+    /// Snapshot previews for the live experiment nodes.
+    pub(crate) experiment_previews: crate::edit::experiments::ExperimentPreviews,
     /// Scales what a model predicts. A model can be right about which
     /// way a point moves and short on how far, which looks like a
     /// prediction that is too light.
