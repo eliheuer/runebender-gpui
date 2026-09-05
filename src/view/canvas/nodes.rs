@@ -471,10 +471,11 @@ fn paint_nodes(
         }
     };
 
-    // The dot grid: a small ring at every pitch, in canvas units so it
-    // zooms with the boxes. Node edges run through the ring centres,
-    // since the box sizes are multiples of the pitch and positions
-    // snap to it. Skipped when the pitch is too small to read.
+    // The dot grid: a small filled dot at every pitch, in canvas units
+    // so it zooms with the boxes. Node edges run through the dot
+    // centres, since the box sizes are multiples of the pitch and
+    // positions snap to it. Skipped when the pitch is too small to
+    // read.
     if px32(nl::GRID) * zoom >= 8.0 {
         let local = kurbo::Rect::new(
             0.0,
@@ -494,7 +495,7 @@ fn paint_nodes(
             b: mix(bg.b, line.b),
             a: 1.0,
         };
-        draw(window, &rings, PathBuilder::stroke(px(stroke)), faint);
+        draw(window, &rings, PathBuilder::fill(), faint);
     }
 
     // A wire takes the mark colour of what it carries; a value with
@@ -679,9 +680,10 @@ fn paint_nodes(
                 cx,
             );
         }
-        // Ports: a filled dot when wired, a ring when not. While a
-        // wire is being dragged, the inputs that take it grow a
-        // second ring and the rest fade, so the legal drops show.
+        // Ports: filled with the wire's colour when wired, the field
+        // ground when not, keylined in ink either way. While a wire
+        // is being dragged, the inputs that take it grow a second
+        // ring and the rest fade, so the legal drops show.
         for (port, is_input) in nb
             .inputs
             .iter()
@@ -695,12 +697,12 @@ fn paint_nodes(
             };
             let ink = if fades { t::text_muted() } else { t::text() };
             let dot = circle(port.at, nl::PORT_R);
-            draw(
-                window,
-                &dot,
-                PathBuilder::fill(),
-                if port.linked { ink } else { t::field_bg() },
-            );
+            let fill = if port.linked {
+                wire_ink(port.kind)
+            } else {
+                t::field_bg()
+            };
+            draw(window, &dot, PathBuilder::fill(), fill);
             draw(window, &dot, PathBuilder::stroke(px(stroke)), ink);
             if takes {
                 let ring = circle(port.at, nl::PORT_R * 2.0);
