@@ -479,6 +479,10 @@ pub(crate) type BlurFrame = (u64, Arc<gpui::RenderImage>);
 /// The whole editor: the open project, the edit sessions, and every
 /// view's state. `wiring.rs` builds it; the window renders it.
 pub(crate) struct Workspace {
+    /// The live document's private agent endpoint, serviced on the UI thread.
+    #[cfg(unix)]
+    pub(crate) live: Option<runebender_core::document::live_socket::Server>,
+
     /// The open font project; None when nothing loaded.
     pub(crate) project: Option<Project>,
     /// Why the project failed to open, shown in the status bar.

@@ -128,6 +128,8 @@ impl Workspace {
                         workspace.active_session = 0;
                         workspace.last_editor = None;
                         workspace.project = Some(project);
+                        #[cfg(unix)]
+                        workspace.reset_live();
                         workspace.refresh_proposal();
                         workspace.sidebar.counts = None;
                         workspace.load_error = None;
@@ -290,6 +292,8 @@ impl Workspace {
                         workspace.active_session = 0;
                         workspace.last_editor = None;
                         workspace.project = Some(project);
+                        #[cfg(unix)]
+                        workspace.reset_live();
                         workspace.refresh_proposal();
                         workspace.sidebar.counts = None;
                         workspace.load_error = None;

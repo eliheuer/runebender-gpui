@@ -643,6 +643,8 @@ impl Workspace {
             clipboard: Vec::new(),
             #[cfg(target_family = "wasm")]
             web_host: None,
+            #[cfg(unix)]
+            live: None,
             _watcher: None,
             #[cfg(not(target_family = "wasm"))]
             last_save: Arc::new(Mutex::new(web_time::Instant::now())),
@@ -852,6 +854,8 @@ impl Workspace {
         };
         workspace.rebuild_text_models();
         workspace.start_watching(cx);
+        #[cfg(unix)]
+        workspace.start_live_pump(cx);
         #[cfg(target_family = "wasm")]
         if let Some(base) = web_host::server_from_location() {
             workspace.connect_web_host(base, cx);

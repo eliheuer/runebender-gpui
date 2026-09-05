@@ -1,16 +1,10 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The Chat pane: a local language model over the open font.
+//! The Chat pane: a local model over the live open font.
 //!
-//! The model runs in `font-ml chat`, a separate process, over the
-//! harness core defines (`runebender-core agent tools`). This shell
-//! keeps the conversation, sends it for each turn on stdin, reads the
-//! JSON events back, and shows them. When the model proposes, the
-//! layer lands on disk like any other proposal and is adopted into
-//! the open font for the person to install or discard. The shell
-//! never lets the model near the foreground: the tool list has no
-//! way to, and the pane adds none.
+//! Local models run in `font-ml chat` and use core's live editor mailbox.
+//! Proposals are already in memory when the turn finishes. The shell owns presentation and process lifetime.
 
 use std::sync::{Arc, Mutex};
 
@@ -120,16 +114,18 @@ impl Workspace {
             self.status_note = Some("The model is still answering".into());
             return;
         }
-        let Some(model) = self.chat.model.clone() else {
-            self.status_note = Some(
-                "No chat model: put a folder with a .gguf and tokenizer.json under \
-                 ~/.runebender/models"
-                    .into(),
-            );
+        let model = self.chat.model.clone().unwrap_or_default();
+        let font_ml = self.models.binary.clone().unwrap_or_default();
+        if model.as_os_str().is_empty() || font_ml.as_os_str().is_empty() {
+            self.status_note = Some("Choose a local model and install font-ml".into());
             return;
-        };
-        let Some(font_ml) = self.models.binary.clone() else {
-            self.status_note = Some("font-ml not found".into());
+        }
+        #[cfg(unix)]
+        let session = self.live.as_ref().map(|server| server.path().to_path_buf());
+        #[cfg(not(unix))]
+        let session: Option<PathBuf> = None;
+        let Some(session) = session else {
+            self.status_note = Some("Live chat requires the native Unix editor endpoint".into());
             return;
         };
         let Some(core) = core_binary() else {
@@ -140,14 +136,6 @@ impl Workspace {
             );
             return;
         };
-        // The tools read the font on disk.
-        if self
-            .project
-            .as_ref()
-            .is_some_and(|p| p.masters.iter().any(|m| m.dirty))
-        {
-            self.command_save(cx);
-        }
         let Some(project) = self.project.as_ref() else {
             self.status_note = Some("Open a font first".into());
             return;
@@ -178,8 +166,16 @@ impl Workspace {
                 let job = job.clone();
                 let finished = finished.clone();
                 async move {
-                    let result =
-                        run_chat(&font_ml, &model, &font, &core, &conversation, &events, &job);
+                    let result = run_chat(
+                        &font_ml,
+                        &model,
+                        &font,
+                        &core,
+                        &session,
+                        &conversation,
+                        &events,
+                        &job,
+                    );
                     *finished.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
                 }
             })
@@ -204,7 +200,12 @@ impl Workspace {
                     break result;
                 }
             };
+            let tail: Vec<Value> =
+                std::mem::take(&mut *events.lock().unwrap_or_else(|e| e.into_inner()));
             this.update(cx, |workspace, cx| {
+                for event in tail {
+                    workspace.chat_event(event);
+                }
                 workspace.chat.busy = None;
                 workspace.chat.job = None;
                 if let Err(e) = result {
@@ -226,8 +227,7 @@ impl Workspace {
         if let Some(child) = job.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             let _ = child.kill();
         }
-        self.chat.busy = None;
-        self.status_note = Some("Cancelled".into());
+        self.status_note = Some("Cancelling…".into());
     }
 
     /// One event from font-ml, into the transcript.
@@ -301,34 +301,12 @@ impl Workspace {
         }
     }
 
-    /// After a turn: proposals the model made are adopted from disk so
-    /// they show in the Local AI panel with Install and Discard.
-    fn chat_finished(&mut self, source: &std::path::Path) {
+    /// After a turn, refresh the proposals already in memory.
+    fn chat_finished(&mut self, _source: &std::path::Path) {
         self.chat_raw.clear();
         self.chat
             .entries
             .retain(|e| !matches!(e, ChatEntry::Assistant(s) if s.is_empty()));
-        let proposed: Vec<String> = self
-            .chat
-            .messages
-            .iter()
-            .filter(|m| m.get("role").and_then(Value::as_str) == Some("tool"))
-            .filter_map(|m| m.get("content").and_then(Value::as_str))
-            .filter_map(|c| serde_json::from_str::<Value>(c).ok())
-            .filter(|r| r.get("name").and_then(Value::as_str) == Some("propose"))
-            .filter_map(|r| {
-                r.get("result")?
-                    .get("proposal")?
-                    .get("task")?
-                    .as_str()
-                    .map(String::from)
-            })
-            .collect();
-        for task in proposed {
-            if let Err(e) = self.adopt_proposal_from_disk(&task, source) {
-                self.status_note = Some(e.into());
-            }
-        }
         self.refresh_proposal();
     }
 
@@ -413,12 +391,14 @@ fn run_chat(
     model: &std::path::Path,
     font: &std::path::Path,
     core: &std::path::Path,
+    session: &std::path::Path,
     conversation: &str,
     events: &Mutex<Vec<Value>>,
     job: &Mutex<Option<std::process::Child>>,
 ) -> Result<(), String> {
     use std::io::{BufRead as _, Write as _};
-    let mut child = std::process::Command::new(font_ml)
+    let mut command = std::process::Command::new(font_ml);
+    command
         .arg("chat")
         .arg("--model")
         .arg(model)
@@ -426,6 +406,8 @@ fn run_chat(
         .arg(font)
         .arg("--core")
         .arg(core)
+        .env("RUNEBENDER_LIVE_SESSION", session);
+    let mut child = command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
