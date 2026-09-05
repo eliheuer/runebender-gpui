@@ -210,15 +210,17 @@ pub(crate) fn cell_selected_ring() -> Rgba {
 
 // ---- selection ----
 
-/// The fill of a selected control: the ink itself. A selected state
-/// is shown by inverting, not by a hue, so it reads in every theme and
-/// for every eye.
+/// The fill of a selected control. A selected state is shown by a
+/// neutral, not a hue, so it reads in every theme and for every eye.
+/// Dark and Light invert to the ink; Gray uses a dark grey a step
+/// lighter than its outlines, so a highlight and a rule never read
+/// as the same thing.
 pub(crate) fn selected_bg() -> Rgba {
-    text()
+    c(theme().role("controlSelected"))
 }
-/// The text and icon colour on a selected control: the panel's fill.
+/// The text and icon colour on a selected control.
 pub(crate) fn selected_ink() -> Rgba {
-    panel_bg()
+    c(theme().role("controlSelectedInk"))
 }
 
 // ---- accents and text ----

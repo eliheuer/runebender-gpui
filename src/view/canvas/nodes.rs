@@ -574,14 +574,13 @@ fn paint_nodes(
         rule.move_to(kurbo::Point::new(header_rect.x0, header_rect.y1));
         rule.line_to(kurbo::Point::new(header_rect.x1, header_rect.y1));
         draw(window, &rule, PathBuilder::stroke(px(stroke)), outline);
+        // The keyline stays one stroke when selected: a heavier one
+        // broke the alignment of boxes snapped side by side. The
+        // header's fill is what says selected.
         draw(
             window,
             &rect(nb.rect),
-            PathBuilder::stroke(px(if selected {
-                f32::from(t::stroke_emphasis())
-            } else {
-                stroke
-            })),
+            PathBuilder::stroke(px(stroke)),
             outline,
         );
         // Title left, status right, in the header.
