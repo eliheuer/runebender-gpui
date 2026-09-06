@@ -669,7 +669,15 @@ impl Workspace {
         if let Some(dir) = state.path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let result = state.graph.save(&state.path);
+        // The file is a recipe, not a session bundle. Never let a saved branch
+        // name bind to an unrelated version with that name after reopening.
+        let mut recipe = state.graph.clone();
+        for node in &mut recipe.nodes {
+            if node.type_name == "live.fork" {
+                node.values.remove("branch");
+            }
+        }
+        let result = recipe.save(&state.path);
         let label = file_label(&state.path);
         self.status_note = Some(match result {
             Ok(()) => format!("Saved {label}").into(),
