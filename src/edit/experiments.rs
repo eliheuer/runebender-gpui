@@ -93,15 +93,31 @@ mod native {
                     return;
                 }
             }
-            self.models.experiment_previews.queue = state
+            let path = state.path.clone();
+            let proof_ids: Vec<_> = state
                 .graph
                 .nodes
                 .iter()
                 .filter(|n| n.type_name == "live.proof")
-                .map(|n| (state.path.clone(), n.id))
+                .map(|n| n.id)
+                .collect();
+            // A graph run creates missing results; it never silently replaces a
+            // completed proof. The node's explicit Rerun controls are the only
+            // way to request a fresh Designbot render.
+            self.models.experiment_previews.queue = proof_ids
+                .into_iter()
+                .filter(|id| {
+                    !self
+                        .models
+                        .experiment_previews
+                        .images
+                        .contains_key(&format!("{}:{id}", path.display()))
+                })
+                .map(|id| (path.clone(), id))
                 .collect();
             self.status_note = Some(
-                "Versions ready; rendering proofs. Apply outputs run only when clicked.".into(),
+                "Versions ready; rendering missing proofs. Apply outputs run only when clicked."
+                    .into(),
             );
             self.next_live_proof(cx);
         }
@@ -299,12 +315,25 @@ mod native {
             }
             match action {
                 "Render glyphs" | "Render kerning" | "Latest OMP proof" => {
+                    if let Some(g) = self.models.graph.as_ref() {
+                        let key = format!("{}:{id}", g.path.display());
+                        if self.models.experiment_previews.images.contains_key(&key) {
+                            self.status_note = Some(
+                                "This node already has a snapshot. Use Rerun to replace it.".into(),
+                            );
+                            return;
+                        }
+                    }
                     self.preview_experiment(
                         id,
                         action == "Render kerning",
                         action == "Latest OMP proof",
                         cx,
                     );
+                    return;
+                }
+                "Rerun glyphs" | "Rerun kerning" => {
+                    self.preview_experiment(id, action == "Rerun kerning", false, cx);
                     return;
                 }
                 "Export PDF…" | "Export PNG…" => {
