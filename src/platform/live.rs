@@ -11,6 +11,9 @@ impl Workspace {
     /// Gives each newly opened document its own endpoint; old clients disconnect.
     pub(crate) fn reset_live(&mut self) {
         self.live = None;
+        // Session-bound branch names must never attach to another loaded font.
+        self.models.graph = None;
+        self.models.graph_files.clear();
         self.models.experiment_previews = crate::edit::experiments::ExperimentPreviews::default();
         self.live = Server::start()
             .map_err(|e| eprintln!("Live tools unavailable: {e}"))
@@ -55,6 +58,7 @@ impl Workspace {
                                 workspace.editor.segment_hover = None;
                                 workspace.rebuild_text_models();
                             }
+                            workspace.sync_live_nodes();
                             workspace.refresh_proposal();
                             cx.notify();
                         }

@@ -18,7 +18,7 @@ Until then, `main` is the only line and this section stays open.
 
 ### Changed
 
-- Live experiment cards in Nodes: fork versions, preview through Designbot, export PNG/PDF, apply reviewed changes and undo. Versions are session-only. OMP shares the same live branches.
+- Live experiments are connected canvas nodes, replacing the strip above the graph. Fork versions, render Designbot previews inside proof nodes, export a new UFO, discard a version, or connect an explicit Apply output. Run preserves existing versions and never applies them. OMP branches appear in the graph. Versions remain session-only.
 
 - Core pin updated for revision-checked agent proposals. Installing a guarded
   proposal skips glyphs whose foreground changed after the proposal was made.

@@ -8,8 +8,7 @@
 //! machine and the hit-testing live in `edit/nodes.rs` beside the
 //! panel's rows; and everything here is one `canvas` element painted
 //! with `PathBuilder`, the way the editing view paints an outline.
-//! Nothing is a `div`, so a box and its wires scale together and one
-//! paint pass draws the lot.
+//! Boxes, controls, proofs and wires share the canvas transform and hit geometry.
 
 use crate::Workspace;
 use crate::edit::nodes::{NodeBox, NodesView, RowState, to_screen};
@@ -43,6 +42,8 @@ use runebender_core::ui::nodes as nl;
 struct NodesScene {
     /// Every node, laid out.
     boxes: Vec<NodeBox>,
+    /// Live version labels and proof snapshots, keyed by graph node.
+    live: std::collections::BTreeMap<u32, (String, Option<std::sync::Arc<gpui::RenderImage>>)>,
     /// The mark colour of each box's header, by box index.
     marks: Vec<Option<&'static str>>,
     /// `(from box index, output index, to box index, input index)`.
@@ -215,6 +216,11 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    #[cfg(unix)]
+                    if this.live_node_mouse_down(event.position, cx) {
+                        cx.notify();
+                        return;
+                    }
                     this.nodes_mouse_down(event.position, event.click_count);
                     cx.notify();
                 }),
@@ -315,6 +321,7 @@ impl Workspace {
         let Some(state) = self.models.graph.as_ref() else {
             return NodesScene {
                 boxes: Vec::new(),
+                live: std::collections::BTreeMap::default(),
                 marks: Vec::new(),
                 wires: Vec::new(),
                 pending: None,
@@ -346,8 +353,49 @@ impl Workspace {
             }
             _ => None,
         };
+        let mut live = std::collections::BTreeMap::new();
+        if let Some(project) = self.project.as_ref() {
+            for node in &state.graph.nodes {
+                if !node.type_name.starts_with("live.") {
+                    continue;
+                }
+                let label = match runebender_core::document::nodes_live::resolve(
+                    &state.graph,
+                    project,
+                    node.id,
+                ) {
+                    Ok(v) => format!(
+                        "{} · {}",
+                        project
+                            .master_names
+                            .get(v.master)
+                            .map_or("Master", |n| n.as_ref()),
+                        v.branch
+                            .as_deref()
+                            .unwrap_or("Live, including unsaved edits")
+                    ),
+                    Err(_) => "Connect input, then create version".to_string(),
+                };
+                #[allow(
+                    unused_mut,
+                    reason = "Only native builds attach process-rendered images"
+                )]
+                let mut entry = (label, None);
+                #[cfg(unix)]
+                if let Some((_, image, caption)) = self
+                    .models
+                    .experiment_previews
+                    .images
+                    .get(&format!("{}:{}", state.path.display(), node.id))
+                {
+                    entry = (caption.clone(), Some(image.clone()));
+                }
+                live.insert(node.id, entry);
+            }
+        }
         NodesScene {
             boxes,
+            live,
             marks,
             wires,
             pending,
@@ -678,6 +726,67 @@ fn paint_nodes(
                 window,
                 cx,
             );
+        }
+        if let Some((label, image)) = scene.live.get(&nb.id) {
+            let label = clip_text(window, label, text_px, w - 2.0 * pad);
+            paint_text(
+                window,
+                cx,
+                sp(kurbo::Point::new(
+                    nb.rect.x0 + nl::PAD,
+                    nb.content_top() + nl::PAD / 2.0,
+                )),
+                &label,
+                text_px,
+                t::text_muted(),
+            );
+            for (i, action) in nl::actions(&nb.type_name).iter().enumerate() {
+                let r = nb.action_rect(i);
+                draw(
+                    window,
+                    &rect(r),
+                    PathBuilder::stroke(px(stroke)),
+                    t::cell_border(),
+                );
+                paint_text(
+                    window,
+                    cx,
+                    sp(kurbo::Point::new(r.x0 + nl::PAD, r.y0 + nl::PAD / 2.0)),
+                    action,
+                    text_px,
+                    t::text(),
+                );
+            }
+            if nb.type_name == "live.proof" {
+                let r = nb.preview_rect();
+                if let Some(image) = image {
+                    let size = image.size(0);
+                    let ratio =
+                        f64::from(u32::from(size.width)) / f64::from(u32::from(size.height));
+                    let width = r.width().min(r.height() * ratio);
+                    let height = width / ratio;
+                    let r = kurbo::Rect::from_center_size(r.center(), (width, height));
+                    let target =
+                        Bounds::from_corners(sp(r.origin()), sp(kurbo::Point::new(r.x1, r.y1)));
+                    let _ = window.paint_image(
+                        target,
+                        target,
+                        gpui::Corners::default(),
+                        image.clone(),
+                        0,
+                        false,
+                    );
+                } else {
+                    paint_text(
+                        window,
+                        cx,
+                        sp(kurbo::Point::new(r.x0, r.y0)),
+                        "Render to compare this direction",
+                        text_px,
+                        t::text_muted(),
+                    );
+                }
+            }
         }
         // Ports: filled with the wire's colour when wired, the field
         // ground when not, keylined in ink either way. While a wire

@@ -1,15 +1,14 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Live experiment cards in the node workspace; font state and rendering live in core.
+//! Live node actions and background proof images. Graph geometry is shared with core.
 
 /// Native process-backed experiment controls.
 #[cfg(unix)]
 mod native {
     use crate::Workspace;
-    use crate::view::{controls as c, theme as t};
-    use gpui::{Context, IntoElement, ParentElement, StatefulInteractiveElement, Styled, div, px};
-    use gpui::{InteractiveElement as _, StyledImage as _};
+    use gpui::Context;
+    use runebender_core::document::nodes_live as live;
     use serde_json::{Value, json};
     use std::{collections::BTreeMap, sync::Arc};
 
@@ -17,9 +16,11 @@ mod native {
     #[derive(Default)]
     pub(crate) struct ExperimentPreviews {
         /// Node key to rendered scene and image.
-        images: BTreeMap<String, (Value, Arc<gpui::RenderImage>)>,
+        pub(crate) images: BTreeMap<String, (Value, Arc<gpui::RenderImage>, String)>,
         /// One background render at a time bounds CPU and memory use.
         busy: bool,
+        /// Remaining proof nodes for an explicit graph run, scoped to its file.
+        queue: std::collections::VecDeque<(std::path::PathBuf, u32)>,
     }
 
     impl Workspace {
@@ -39,45 +40,110 @@ mod native {
             }
         }
 
-        /// Fork a root or experiment into the next available session name.
-        fn fork_experiment(&mut self, parent: Option<&str>) {
-            let Some(project) = self.project.as_ref() else {
-                return;
-            };
-            let mut n = 1;
-            while project
-                .experiments
-                .versions
-                .contains_key(&format!("version-{n}"))
-            {
-                n += 1;
+        /// Advance an explicit graph run without allowing concurrent renderer processes.
+        fn next_live_proof(&mut self, cx: &mut Context<'_, Self>) {
+            while let Some((path, id)) = self.models.experiment_previews.queue.pop_front() {
+                if self.models.graph.as_ref().is_some_and(|g| g.path == path) {
+                    self.preview_experiment(id, false, false, cx);
+                    if self.models.experiment_previews.busy {
+                        break;
+                    }
+                }
             }
-            let mut args = json!({"master":project.active,"name":format!("version-{n}"),"reason":"Node workspace experiment"});
-            if let Some(parent) = parent {
-                args["parent"] = json!(parent);
-            }
-            self.experiment_command("experiment_fork", args);
         }
 
-        /// Render a snapshot on a worker and attach the exact rendered image to its card.
+        /// Run live forks in connection order and render their proofs, without applying outputs.
+        pub(crate) fn run_live_nodes(&mut self, cx: &mut Context<'_, Self>) {
+            if self.models.experiment_previews.busy {
+                self.status_note = Some("A proof is rendering".into());
+                return;
+            }
+            let (Some(state), Some(project)) = (self.models.graph.as_mut(), self.project.as_mut())
+            else {
+                return;
+            };
+            if state
+                .graph
+                .nodes
+                .iter()
+                .any(|n| !n.type_name.starts_with("live."))
+            {
+                self.status_note=Some("Disk task nodes require a separate workflow; live fonts cannot be passed to them yet".into());
+                return;
+            }
+            if let Some(problem) = state.graph.validate(&state.registry).first() {
+                self.status_note = Some(problem.to_string().into());
+                return;
+            }
+            let order = match state.graph.order() {
+                Ok(v) => v,
+                Err(_) => {
+                    self.status_note = Some("Remove the cycle before running".into());
+                    return;
+                }
+            };
+            for id in order {
+                if state
+                    .graph
+                    .node(id)
+                    .is_some_and(|n| n.type_name == "live.fork")
+                    && let Err(e) = live::create_version(&mut state.graph, project, id)
+                {
+                    self.status_note = Some(e.into());
+                    return;
+                }
+            }
+            self.models.experiment_previews.queue = state
+                .graph
+                .nodes
+                .iter()
+                .filter(|n| n.type_name == "live.proof")
+                .map(|n| (state.path.clone(), n.id))
+                .collect();
+            self.status_note = Some(
+                "Versions ready; rendering proofs. Apply outputs run only when clicked.".into(),
+            );
+            self.next_live_proof(cx);
+        }
+
+        /// Render a snapshot on a worker and attach the exact rendered image to its node.
         fn preview_experiment(
             &mut self,
-            branch: Option<String>,
+            id: u32,
             text: bool,
             latest: bool,
             cx: &mut Context<'_, Self>,
         ) {
             if self.models.experiment_previews.busy {
+                self.status_note = Some("A proof is rendering; wait for it to finish".into());
                 return;
             }
+            let selection = self.selection_names();
+            let Some(graph) = self.models.graph.as_ref() else {
+                return;
+            };
             let Some(project) = self.project.as_mut() else {
                 return;
             };
-            let key = format!("{}:{}", project.active, branch.as_deref().unwrap_or("root"));
+            let version = match live::resolve(&graph.graph, project, id) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.status_note = Some(e.into());
+                    return;
+                }
+            };
+            let branch = version.branch;
+            let caption = format!(
+                "Snapshot · {} · master {}",
+                branch.as_deref().unwrap_or("root"),
+                version.master
+            );
+            let proof_key = format!("{}:{}", version.master, branch.as_deref().unwrap_or("root"));
+            let key = format!("{}:{id}", graph.path.display());
             let result = if latest {
-                json!({"scene":project.experiments.proofs.get(&key),"error":"Ask OMP for a proof first"})
+                json!({"scene":project.experiments.proofs.get(&proof_key),"error":"Ask OMP for a proof first"})
             } else {
-                let mut args = json!({"master":project.active});
+                let mut args = json!({"master":version.master});
                 if let Some(branch) = branch {
                     args["branch"] = json!(branch);
                 }
@@ -87,7 +153,7 @@ mod native {
                     let font = if let Some(name) = args["branch"].as_str() {
                         &project.experiments.versions[name].master.font
                     } else {
-                        &project.active_font().font
+                        &project.masters[version.master].font
                     };
                     let names: Vec<_> = font
                         .default_layer()
@@ -96,7 +162,11 @@ mod native {
                         .take(6)
                         .map(|g| g.name().to_string())
                         .collect();
-                    args["glyphs"] = json!(names);
+                    args["glyphs"] = json!(if selection.is_empty() {
+                        names
+                    } else {
+                        selection.iter().take(256).cloned().collect()
+                    });
                 }
                 runebender_core::document::live::call(
                     project,
@@ -121,11 +191,12 @@ mod native {
                         let mut buffer=image.to_rgba8();
                         for p in buffer.pixels_mut() {p.0.swap(0,2);}
                         let image=Arc::new(gpui::RenderImage::new(vec![image::Frame::new(buffer)]));
-                        this.models.experiment_previews.images.insert(key,(scene,image));
+                        this.models.experiment_previews.images.insert(key,(scene,image,caption));
                         this.status_note=Some("Snapshot proof ready. Refresh after edits; Export PDF uses this exact snapshot.".into());
                     }
                     Err(e)=>this.status_note=Some(e.into()),
                 }
+                this.next_live_proof(cx);
                 cx.notify();
             });
         }).detach();
@@ -133,7 +204,7 @@ mod native {
 
         /// Export the displayed snapshot through the platform save dialog.
         fn export_experiment_proof(&mut self, key: &str, pdf: bool, cx: &mut Context<'_, Self>) {
-            let Some((scene, _)) = self.models.experiment_previews.images.get(key) else {
+            let Some((scene, _, _)) = self.models.experiment_previews.images.get(key) else {
                 return;
             };
             let scene = scene.clone();
@@ -171,141 +242,196 @@ mod native {
             .detach();
         }
 
-        /// A compact live-version graph above the general node canvas.
-        pub(crate) fn experiment_nodes(&self, cx: &mut Context<'_, Self>) -> impl IntoElement {
-            let Some(project) = self.project.as_ref() else {
-                return div();
+        /// Hit-test actions using the same scaled rectangles as the canvas painter.
+        pub(crate) fn live_node_mouse_down(
+            &mut self,
+            pos: gpui::Point<gpui::Pixels>,
+            cx: &mut Context<'_, Self>,
+        ) -> bool {
+            let Some(state) = self.models.graph.as_ref() else {
+                return false;
             };
-            let active = project.active;
-            let mut nodes = vec![(None, "Root (live)".to_string())];
-            nodes.extend(
-                project
-                    .experiments
-                    .versions
-                    .iter()
-                    .filter(|(_, v)| v.root == active)
-                    .map(|(name, v)| {
-                        (
-                            Some(name.clone()),
-                            format!("{} → {name}", v.parent.as_deref().unwrap_or("Root")),
-                        )
-                    }),
-            );
-            let mut row = div()
-                .flex()
-                .gap_2()
-                .p_2()
-                .h(px(380.0))
-                .border_b_1()
-                .border_color(t::panel_outline());
-            for (branch, title) in nodes {
-                let key = format!("{active}:{}", branch.as_deref().unwrap_or("root"));
-                let fork = branch.clone();
-                let glyph = branch.clone();
-                let text = branch.clone();
-                let mut card = div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .p_2()
-                    .w(px(220.0))
-                    .flex_shrink_0()
-                    .border_1()
-                    .border_color(t::panel_outline())
-                    .child(title)
-                    .child(
-                        c::button(gpui::SharedString::from(format!("fork-{key}")), "Fork")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.fork_experiment(fork.as_deref());
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        c::button(
-                            gpui::SharedString::from(format!("glyph-{key}")),
-                            "Refresh glyph proof",
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.preview_experiment(glyph.clone(), false, false, cx);
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        c::button(
-                            gpui::SharedString::from(format!("text-{key}")),
-                            "Refresh kerning proof",
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.preview_experiment(text.clone(), true, false, cx);
-                            cx.notify();
-                        })),
-                    );
-                if project.experiments.proofs.contains_key(&key) {
-                    let latest = branch.clone();
-                    card = card.child(
-                        c::button(
-                            gpui::SharedString::from(format!("latest-{key}")),
-                            "Show latest agent proof",
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.preview_experiment(latest.clone(), false, true, cx);
-                            cx.notify();
-                        })),
-                    );
-                }
-                if let Some((_, image)) = self.models.experiment_previews.images.get(&key) {
-                    card = card.child(
-                        gpui::img(image.clone())
-                            .w(px(200.0))
-                            .h(px(100.0))
-                            .object_fit(gpui::ObjectFit::Contain),
-                    );
-                    let export = key.clone();
-                    card = card.child("Snapshot · refresh after edits").child(
-                        c::button(
-                            gpui::SharedString::from(format!("pdf-{key}")),
-                            "Export snapshot PDF",
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.export_experiment_proof(&export, true, cx);
-                        })),
-                    );
-                }
-                if self.models.experiment_previews.images.contains_key(&key) {
-                    let export = key.clone();
-                    card = card.child(
-                        c::button(
-                            gpui::SharedString::from(format!("png-{key}")),
-                            "Export snapshot PNG",
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.export_experiment_proof(&export, false, cx);
-                        })),
-                    );
-                }
-                if let Some(branch) = branch {
-                    card=card.child(c::button(gpui::SharedString::from(format!("apply-{key}")),"Apply all · redraw allowed").on_click(cx.listener(move |this,_,_,cx| {
-                    if this.editor.drag.is_some() {return;}
-                    let Some(project)=this.project.as_ref() else {return;};
-                    let v=&project.experiments.versions[&branch];
-                    let names:Vec<_>=v.master.font.default_layer().iter().filter(|g|v.base.get_glyph(g.name().as_str())!=Some(*g)).map(|g|g.name().to_string()).collect();
-                    this.experiment_command("experiment_apply",json!({"master":active,"branch":branch,"glyphs":names,"kerning":true,"keep_structure":false}));cx.notify();
-                })));
-                } else {
-                    card = card.child("Versions last until this font closes.").child(
-                        c::button("undo-version", "Undo last application").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                if this.editor.drag.is_none() {
-                                    this.experiment_command("experiment_undo_apply", json!({}));
-                                }
-                                cx.notify();
-                            },
-                        )),
-                    );
-                }
-                row = row.child(card);
+            // Let an open context menu own its clicks.
+            if self.models.graph_view.menu.is_some() {
+                return false;
             }
-            div().child(row.id("live-experiment-cards").overflow_x_scroll())
+            let view = &self.models.graph_view;
+            let origin = view.bounds.lock().unwrap_or_else(|e| e.into_inner()).origin;
+            let at = runebender_core::ui::nodes::to_canvas(
+                &view.viewport,
+                kurbo::Point::new(
+                    f64::from(f32::from(pos.x - origin.x)),
+                    f64::from(f32::from(pos.y - origin.y)),
+                ),
+            );
+            let boxes = runebender_core::ui::nodes::layout(&state.graph, &state.registry);
+            let runebender_core::ui::nodes::Hit::Node(id) =
+                runebender_core::ui::nodes::hit(&boxes, at)
+            else {
+                return false;
+            };
+            let Some(node) = boxes.iter().find(|n| n.id == id) else {
+                return false;
+            };
+            for (i, action) in runebender_core::ui::nodes::actions(&node.type_name)
+                .iter()
+                .enumerate()
+            {
+                if node.action_rect(i).contains(at) {
+                    self.models.graph_view.selected = Some(id);
+                    self.models.graph_view.drag = None;
+                    self.live_node_action(id, action, cx);
+                    return true;
+                }
+            }
+            false
+        }
+
+        /// Dispatch a compact action inside a live graph node.
+        pub(crate) fn live_node_action(
+            &mut self,
+            id: u32,
+            action: &str,
+            cx: &mut Context<'_, Self>,
+        ) {
+            if self.editor.drag.is_some() {
+                return;
+            }
+            match action {
+                "Render glyphs" | "Render kerning" | "Latest OMP proof" => {
+                    self.preview_experiment(
+                        id,
+                        action == "Render kerning",
+                        action == "Latest OMP proof",
+                        cx,
+                    );
+                    return;
+                }
+                "Export PDF…" | "Export PNG…" => {
+                    if let Some(g) = self.models.graph.as_ref() {
+                        let key = format!("{}:{id}", g.path.display());
+                        if !self.models.experiment_previews.images.contains_key(&key) {
+                            self.status_note = Some("Render this proof before exporting".into());
+                            return;
+                        }
+                        self.export_experiment_proof(&key, action == "Export PDF…", cx);
+                    }
+                    return;
+                }
+                "Undo last application" => {
+                    self.experiment_command("experiment_undo_apply", json!({}));
+                    return;
+                }
+                "Save as new UFO…" => {
+                    self.save_node_font(id, cx);
+                    return;
+                }
+                _ => {}
+            }
+            let (Some(state), Some(project)) = (self.models.graph.as_mut(), self.project.as_mut())
+            else {
+                return;
+            };
+            let result: Result<String, String> = (|| match action {
+                "Create version" => {
+                    let v = live::create_version(&mut state.graph, project, id)?;
+                    Ok(format!(
+                        "OMP: edit branch {} on master {}. The root is unchanged.",
+                        v.branch.unwrap_or_default(),
+                        v.master
+                    ))
+                }
+                "Fork direction" => {
+                    live::resolve(&state.graph, project, id)?;
+                    let n = state.graph.node(id).ok_or("missing node")?;
+                    let pos = [
+                        n.pos[0] + 304.0,
+                        state
+                            .graph
+                            .nodes
+                            .iter()
+                            .map(|n| n.pos[1])
+                            .fold(0.0_f32, f32::max)
+                            + 384.0,
+                    ];
+                    live::add_direction(&mut state.graph, id, pos);
+                    Ok(
+                        "Connected a new direction. Create its version to snapshot the input."
+                            .into(),
+                    )
+                }
+                "Add apply node" => {
+                    live::resolve(&state.graph, project, id)?;
+                    let n = state.graph.node(id).ok_or("missing node")?;
+                    let pos = [n.pos[0] + 608.0, n.pos[1]];
+                    let output = state.graph.add("live.apply", pos);
+                    state.graph.connect(id, "font", output, "font");
+                    Ok("Connected an explicit Apply output".into())
+                }
+                "Apply changes" => {
+                    let result = live::apply(&state.graph, project, id)?;
+                    Ok(result.to_string())
+                }
+                "Discard version" => {
+                    let v = live::resolve(&state.graph, project, id)?;
+                    live::discard(project, &v.branch.ok_or("Cannot discard the root")?)?;
+                    state.graph.remove(id);
+                    Ok("Discarded version; root unchanged".into())
+                }
+                _ => Err("Unknown node action".into()),
+            })();
+            self.status_note = Some(result.unwrap_or_else(|e| e).into());
+            self.nodes_revalidate();
+            if action == "Apply changes" {
+                self.editor.selected.clear();
+                self.editor.selected_anchors.clear();
+                self.editor.selected_component = None;
+                self.editor.hyper_contour = None;
+                self.rebuild_text_models();
+            }
+            cx.notify();
+        }
+
+        /// Export a captured master as a new UFO without changing the loaded document.
+        fn save_node_font(&mut self, id: u32, cx: &mut Context<'_, Self>) {
+            let (Some(state), Some(project)) = (self.models.graph.as_ref(), self.project.as_ref())
+            else {
+                return;
+            };
+            let version = match live::resolve(&state.graph, project, id) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.status_note = Some(e.into());
+                    return;
+                }
+            };
+            let Some(branch) = version.branch else {
+                return;
+            };
+            let font = project.experiments.versions[&branch].master.font.clone();
+            let filename = format!("{branch}.ufo");
+            let dialog = cx.prompt_for_new_path(&std::env::temp_dir(), Some(&filename));
+            cx.spawn(async move |this, cx| {
+                let Ok(Ok(Some(path))) = dialog.await else {
+                    return;
+                };
+                let result =
+                    cx.background_executor()
+                        .spawn(async move {
+                            runebender_core::document::nodes_live::save_new(&font, &path)
+                        })
+                        .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.status_note = Some(
+                        result
+                            .map(|()| "Saved a new UFO; loaded source unchanged".to_string())
+                            .unwrap_or_else(|e| e)
+                            .into(),
+                    );
+                    cx.notify();
+                });
+            })
+            .detach();
         }
     }
 }
@@ -317,12 +443,3 @@ pub(crate) use native::ExperimentPreviews;
 #[cfg(not(unix))]
 #[derive(Default)]
 pub(crate) struct ExperimentPreviews;
-
-#[cfg(not(unix))]
-impl crate::Workspace {
-    /// Explain the native-only experiment bridge in unsupported hosts.
-    pub(crate) fn experiment_nodes(&self, _: &mut gpui::Context<'_, Self>) -> gpui::Div {
-        use gpui::ParentElement as _;
-        gpui::div().child("Live experiment previews require the native macOS or Linux editor.")
-    }
-}

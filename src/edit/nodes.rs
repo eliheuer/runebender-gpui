@@ -197,7 +197,9 @@ impl Workspace {
         }
         self.models.graph = Some(GraphState {
             path,
-            graph: NodeGraph::default(),
+            graph: runebender_core::document::nodes_live::starter(
+                self.project.as_ref().map_or(0, |p| p.active),
+            ),
             registry: self.node_registry(),
             order: Vec::new(),
             problems: Vec::new(),
@@ -205,6 +207,10 @@ impl Workspace {
             running: false,
         });
         self.models.graph_view.selected = None;
+        self.models.graph_view.viewport.zoom = 1.0;
+        self.models.graph_view.viewport.offset = kurbo::Vec2::new(24.0, 24.0);
+        self.models.graph_view.fitted = true;
+        self.nodes_revalidate();
         self.mode = Mode::Nodes;
     }
 
@@ -219,6 +225,20 @@ impl Workspace {
     /// proposals list refreshed.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn run_nodes(&mut self, cx: &mut Context<'_, Self>) {
+        if self.models.graph.as_ref().is_some_and(|s| {
+            s.graph
+                .nodes
+                .iter()
+                .any(|n| n.type_name.starts_with("live."))
+        }) {
+            #[cfg(unix)]
+            self.run_live_nodes(cx);
+            #[cfg(not(unix))]
+            {
+                self.status_note = Some("Live graph execution requires macOS or Linux".into());
+            }
+            return;
+        }
         let (running, problem, graph, registry, path) = {
             let Some(state) = self.models.graph.as_ref() else {
                 return;
@@ -586,33 +606,25 @@ impl Workspace {
         }
         if self.models.graph.is_none() {
             self.scan_nodes_files();
-            match self.models.graph_files.first().cloned() {
-                Some(file) => self.open_nodes_file(&file),
-                None => {
-                    let dir = self
-                        .project
-                        .as_ref()
-                        .and_then(|p| p.active_font().source_path.parent().map(Path::to_path_buf))
-                        .unwrap_or_default();
-                    let path = dir.join("nodes").join("untitled.nodes.json");
-                    self.models.graph = Some(GraphState {
-                        path,
-                        graph: NodeGraph::default(),
-                        registry: self.node_registry(),
-                        order: Vec::new(),
-                        problems: Vec::new(),
-                        rows: BTreeMap::new(),
-                        running: false,
-                    });
-                }
-            }
+            self.new_nodes_file();
         }
+
+        self.sync_live_nodes();
         self.mode = Mode::Nodes;
         self.status_note = None;
     }
 
+    /// Import versions created by external agents into the open live graph.
+    pub(crate) fn sync_live_nodes(&mut self) {
+        if let (Some(state), Some(project)) = (self.models.graph.as_mut(), self.project.as_ref())
+            && runebender_core::document::nodes_live::import_versions(&mut state.graph, project) > 0
+        {
+            self.nodes_revalidate();
+        }
+    }
+
     /// After an edit: problems, order and rows follow the graph.
-    fn nodes_revalidate(&mut self) {
+    pub(crate) fn nodes_revalidate(&mut self) {
         let Some(state) = self.models.graph.as_mut() else {
             return;
         };
@@ -689,8 +701,35 @@ impl Workspace {
                 crate::view::render::px32(at.y),
             ],
         );
+        if type_name == "live.font"
+            && let Some(node) = state.graph.node_mut(id)
+        {
+            node.values.insert(
+                "master".into(),
+                serde_json::json!(self.project.as_ref().map_or(0, |p| p.active)),
+            );
+        }
         self.models.graph_view.selected = Some(id);
         self.nodes_revalidate();
+    }
+
+    /// A rendered version keeps its original input connection as provenance.
+    fn live_input_is_fixed(&self, id: u32) -> bool {
+        self.models
+            .graph
+            .as_ref()
+            .and_then(|g| g.graph.node(id))
+            .is_some_and(|n| {
+                n.type_name == "live.fork"
+                    && n.values
+                        .get("branch")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|branch| {
+                            self.project
+                                .as_ref()
+                                .is_some_and(|p| p.experiments.versions.contains_key(branch))
+                        })
+            })
     }
 
     /// A press: selects, or starts a move, a pan, or a wire.
@@ -728,6 +767,10 @@ impl Workspace {
                 to: window,
             },
             Hit::Input(to, input, _) => {
+                if input == "font" && self.live_input_is_fixed(to) {
+                    self.status_note=Some("This version retains its original input. Fork a new direction to change it.".into());
+                    return;
+                }
                 // Picking up a wired input takes the wire off it, to
                 // drop somewhere else or nowhere.
                 let existing = self
@@ -829,7 +872,9 @@ impl Workspace {
         }) = self.models.graph_view.drag.take()
         {
             if let Hit::Input(to, input, want) = self.nodes_hit(at) {
-                if to != from && want == kind {
+                if input == "font" && self.live_input_is_fixed(to) {
+                    self.status_note=Some("This version retains its original input. Fork a new direction to change it.".into());
+                } else if to != from && want == kind {
                     if let Some(s) = self.models.graph.as_mut() {
                         s.graph.connect(from, &output, to, &input);
                     }
