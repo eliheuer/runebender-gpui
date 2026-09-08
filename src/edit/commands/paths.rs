@@ -9,7 +9,6 @@ use crate::workspace::Tool;
 use gpui::Context;
 use runebender_core::outline::cleanup::add_extreme_points;
 use runebender_core::outline::cleanup::correct_path_directions;
-use runebender_core::outline::cleanup::fit_curve_handles;
 use runebender_core::outline::cleanup::round_glyph_coordinates;
 use runebender_core::outline::cleanup::tidy_contours;
 use runebender_core::outline::convert::cubics_to_quads;
@@ -421,23 +420,6 @@ impl Workspace {
             self.discard_last_undo(index);
         } else {
             self.editor.selected.clear();
-        }
-    }
-
-    /// Fit Curve: set selected segments' handles to a percentage of
-    /// their tangent-intersection maximum.
-    pub(crate) fn command_fit_curve(&mut self, fraction: f64) {
-        let Mode::Editor(index) = self.mode else {
-            return;
-        };
-        self.push_undo_snapshot(index);
-        let selected = self.editor.selected.clone();
-        let changed = self
-            .font_mut()
-            .and_then(|f| f.edit_glyph(index, |g| fit_curve_handles(g, &selected, fraction)))
-            .unwrap_or(false);
-        if !changed {
-            self.discard_last_undo(index);
         }
     }
 

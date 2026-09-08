@@ -5323,7 +5323,7 @@ dependencies = [
 [[package]]
 name = "runebender-core"
 version = "0.1.0"
-source = "git+https://github.com/eliheuer/runebender-core?rev=3f49be8#3f49be8ae0d501e01c133f37b8919fd1b88b2e69"
+source = "git+https://github.com/eliheuer/runebender-core?rev=1d3b2a3#1d3b2a3468b1976e2a8461834e1dcd1fbf7a50a2"
 dependencies = [
  "fea-rs",
  "glyphslib",

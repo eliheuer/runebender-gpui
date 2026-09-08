@@ -769,8 +769,6 @@ pub(crate) struct InputFields {
     pub(crate) stroke: gpui::Entity<widgets::input::InputState>,
     /// Offset field: bolder (positive) or lighter (negative) units.
     pub(crate) offset: gpui::Entity<widgets::input::InputState>,
-    /// Fit Curve percentage field in the Curves section.
-    pub(crate) fit: gpui::Entity<widgets::input::InputState>,
     /// Hex field that appends a color to the CPAL palette.
     pub(crate) color_hex: gpui::Entity<widgets::input::InputState>,
     /// Ease amount field: Enter bakes interpolation timing into a

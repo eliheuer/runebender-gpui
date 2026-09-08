@@ -432,9 +432,9 @@ impl Workspace {
             .flex()
             .flex_col()
             .when(in_editor, |el| {
-                el.child(self.glyph_info_panel(cx))
-                    .child(self.selection_section(cx))
+                el.child(self.selection_section(cx))
                     .child(self.transform_section(cx))
+                    .child(self.glyph_info_panel(cx))
                     .child(self.curves_section(cx))
                     .child(self.background_section(cx))
                     .child(self.color_section(cx))

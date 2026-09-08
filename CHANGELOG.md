@@ -18,6 +18,10 @@ Until then, `main` is the only line and this section stays open.
 
 ### Changed
 
+- The inspector starts with Coordinates, followed by Transformations and Path
+  Operations. Its coordinate picker is a clean 3×3 reference grid, and
+  path-operation controls are separated from transformation icons.
+
 - Live experiments are connected canvas nodes, replacing the strip above the graph. Fork versions, render Designbot previews inside proof nodes, export a new UFO, discard a version, or connect an explicit Apply output. Run preserves existing versions and never applies them. OMP branches appear in the graph. Versions remain session-only.
 
 - Core pin updated for revision-checked agent proposals. Installing a guarded

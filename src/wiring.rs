@@ -208,23 +208,6 @@ impl Workspace {
                 }
             }
         });
-        let fit_input = cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder(""));
-        let sub_fit = cx.subscribe_in(&fit_input, window, {
-            let state = fit_input.clone();
-            move |this: &mut Self, _, ev: &widgets::input::InputEvent, _, cx| {
-                if matches!(ev, widgets::input::InputEvent::PressEnter)
-                    && let Ok(pct) = state
-                        .read(cx)
-                        .value()
-                        .trim()
-                        .trim_end_matches('%')
-                        .parse::<f64>()
-                {
-                    this.command_fit_curve(pct / 100.0);
-                    cx.notify();
-                }
-            }
-        });
         let color_hex_input =
             cx.new(|cx| widgets::input::InputState::new(window, cx).placeholder("#RRGGBB"));
         let sub_color_hex = cx.subscribe_in(&color_hex_input, window, {
@@ -734,7 +717,6 @@ impl Workspace {
                 sub_instance_name,
                 sub_stroke,
                 sub_offset,
-                sub_fit,
                 sub_color_hex,
                 sub_ease,
                 sub_extrude,
@@ -874,7 +856,6 @@ impl Workspace {
                 slant: slant_input,
                 stroke: stroke_input,
                 offset: offset_input,
-                fit: fit_input,
                 color_hex: color_hex_input,
                 ease: ease_input,
                 extrude: extrude_input,

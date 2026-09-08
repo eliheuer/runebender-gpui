@@ -889,7 +889,7 @@ impl Workspace {
                         },
                     )))
                     .child(
-                        c::button("op-extremes", "Add extremes").on_click(cx.listener(
+                        c::button("op-extremes", "Add Extremes").on_click(cx.listener(
                             |this, _, _, cx| {
                                 this.command_add_extremes();
                                 cx.notify();
@@ -899,7 +899,7 @@ impl Workspace {
             )
             .child(
                 c::row()
-                    .child(c::button("op-round", "Round corners").on_click(cx.listener(
+                    .child(c::button("op-round", "Round Corners").on_click(cx.listener(
                         |this, _, _, cx| {
                             this.command_round_corners();
                             cx.notify();
@@ -953,15 +953,19 @@ impl Workspace {
                 "Roughen s,h,v",
                 widgets::input::Input::new(&self.inputs.roughen),
             ));
-        self.section(
-            cx,
-            "Transformations",
-            c::column()
-                .child(icons)
-                .child(booleans)
-                .child(curves)
-                .child(effects),
-        )
+        div()
+            .flex()
+            .flex_col()
+            .child(self.section(
+                cx,
+                "Transformations",
+                c::column().child(icons).child(booleans),
+            ))
+            .child(self.section(
+                cx,
+                "Path Operations",
+                c::column().child(curves).child(effects),
+            ))
     }
 
     /// Curves section: the comb and continuity toggles. This is the
@@ -969,7 +973,7 @@ impl Workspace {
     pub(crate) fn curves_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let toggles = c::row()
             .child(
-                c::toggle("curve-comb", "Curvature comb", self.curve_comb).on_click(cx.listener(
+                c::toggle("curve-comb", "Curvature Comb", self.curve_comb).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.curve_comb = !this.curve_comb;
                         cx.notify();
@@ -984,14 +988,7 @@ impl Workspace {
                     }),
                 ),
             );
-        // Fit curve: type a percentage, Enter sets the selected
-        // segments' handles to that fraction of their maximum (100 =
-        // handles at the tangent intersection), Glyphs' scale.
-        let body = c::column().child(toggles).child(c::field(
-            "Fit curve %",
-            widgets::input::Input::new(&self.inputs.fit),
-        ));
-        self.section(cx, "Curves", body)
+        self.section(cx, "Curves", c::column().child(toggles))
     }
 
     /// Background section: show/send/swap/clear plus the reference

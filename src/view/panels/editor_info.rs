@@ -901,18 +901,15 @@ impl Workspace {
     pub(crate) fn selection_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let count = self.editor.selected.len();
         let single = self.single_selected_point();
-        // A quiet count line rather than a heading: the fields below
-        // say what they are.
-        let mut body =
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(div().text_color(t::text_muted()).child(match count {
-                    0 => "nothing selected".to_string(),
-                    1 => "1 point".to_string(),
-                    n => format!("{n} points"),
-                }));
+        // The coordinate controls are useful before a point is selected, so
+        // keep the empty state quiet rather than spending a line on it.
+        let mut body = div().flex().flex_col().gap_2();
+        if count > 0 {
+            body = body.child(div().text_color(t::text_muted()).child(match count {
+                1 => "1 point".to_string(),
+                n => format!("{n} points"),
+            }));
+        }
         let _ = single;
         // A whole segment selected: report the curve's real size, which
         // is what you compare when matching one curve to another.
@@ -950,9 +947,20 @@ impl Workspace {
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .child(div().w(px(14.0)).text_color(t::text_muted()).child(label))
-                    .child(div().flex_1().child(widgets::input::Input::new(input)))
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(12.0))
+                            .text_color(t::text_muted())
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(widgets::input::Input::new(input)),
+                    )
             };
             // The 9-point reference picker (web coordinate quadrant):
             // numeric X/Y and W/H act about the chosen corner.
@@ -965,27 +973,34 @@ impl Workspace {
                     Quadrant::BottomRight,
                 ],
             ];
-            let mut picker = div()
-                .w(px(52.0))
-                .h(px(52.0))
-                .flex()
-                .flex_col()
-                .justify_between()
-                .border(t::stroke())
-                .border_color(t::panel_outline())
-                .p(px(3.0));
+            // One coordinate system for the rules and dots: the 36px inset
+            // grid is centred in its 52px box, with points 18px apart.
+            // This avoids asking flex layout and an absolute crosshair to
+            // agree on a centre after borders and padding are applied.
+            const GRID_START: f32 = 8.0;
+            const GRID_STEP: f32 = 18.0;
+            const DOT_RADIUS: f32 = 5.0;
+            let mut picker_dots = div().absolute().inset_0();
             for (ri, row_quads) in QUADRANTS.iter().enumerate() {
-                let mut row_el = div().flex().justify_between().w_full();
                 for (qi, quadrant) in row_quads.iter().enumerate() {
                     let quadrant = *quadrant;
                     let active = self.coord_quadrant == quadrant;
-                    row_el = row_el.child(
+                    let x = GRID_START + qi as f32 * GRID_STEP;
+                    let y = GRID_START + ri as f32 * GRID_STEP;
+                    picker_dots = picker_dots.child(
                         div()
                             .id(("quadrant", ri * 3 + qi))
+                            .absolute()
+                            .left(px(x - DOT_RADIUS))
+                            .top(px(y - DOT_RADIUS))
                             .w(px(10.0))
                             .h(px(10.0))
                             .rounded_full()
                             .cursor_pointer()
+                            // The circles are opaque masks over the rule layer;
+                            // their outlines therefore stay clean, as in the
+                            // original coordinate control.
+                            .bg(t::panel_bg())
                             .border(t::stroke())
                             .when(active, |el| el.bg(t::text()).border_color(t::text()))
                             .when(!active, |el| el.border_color(t::cell_border()))
@@ -995,17 +1010,47 @@ impl Workspace {
                             })),
                     );
                 }
-                picker = picker.child(row_el);
             }
+            // Keep all six rules in one inset layer, and the dots in a second
+            // inset layer above it. Their positions share the constants above.
+            let picker_rules = div()
+                .absolute()
+                .inset_0()
+                .children((0..3).map(|row| {
+                    div()
+                        .absolute()
+                        .left(px(GRID_START))
+                        .right(px(GRID_START))
+                        .top(px(GRID_START + row as f32 * GRID_STEP))
+                        .h(t::stroke())
+                        .bg(t::cell_border())
+                }))
+                .children((0..3).map(|column| {
+                    div()
+                        .absolute()
+                        .top(px(GRID_START))
+                        .bottom(px(GRID_START))
+                        .left(px(GRID_START + column as f32 * GRID_STEP))
+                        .w(t::stroke())
+                        .bg(t::cell_border())
+                }));
+            let picker = div()
+                .w(px(52.0))
+                .h(px(52.0))
+                .flex_none()
+                .relative()
+                .child(picker_rules)
+                .child(picker_dots);
             body = body.child(
                 div()
                     .flex()
-                    .gap_3()
+                    .gap_2()
                     .items_center()
                     .child(picker)
                     .child(
                         div()
                             .flex_1()
+                            .min_w(px(0.0))
                             .flex()
                             .flex_col()
                             .gap_1()
@@ -1015,6 +1060,7 @@ impl Workspace {
                     .child(
                         div()
                             .flex_1()
+                            .min_w(px(0.0))
                             .flex()
                             .flex_col()
                             .gap_1()
