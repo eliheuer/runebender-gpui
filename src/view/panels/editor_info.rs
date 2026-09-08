@@ -38,7 +38,12 @@ impl Workspace {
         index: usize,
         _cx: &mut Context<'_, Self>,
     ) -> impl IntoElement + use<> {
-        if self.editor.tool == Tool::Preview {
+        // Text mode can intentionally be empty after deleting the final sort.
+        // Do not leave the previously edited glyph's metrics card stranded on
+        // the canvas when there is no longer a sort to describe.
+        if self.editor.tool == Tool::Preview
+            || (self.editor.tool == Tool::Text && self.edit_buffer.active_sort().is_none())
+        {
             return div().into_any_element();
         }
         let Some(font) = self.font() else {
@@ -68,6 +73,9 @@ impl Workspace {
         card_shadow.a *= 0.5;
         let card = || {
             div()
+                // The compact, fixed width keeps the five equal fields usable
+                // without letting the card expand into empty canvas space.
+                .w(px(320.0))
                 .rounded(card_radius)
                 .border(t::stroke())
                 .border_color(t::panel_outline())
@@ -84,25 +92,11 @@ impl Workspace {
                 .flex()
                 .flex_col()
         };
-        let label = |text: SharedString| div().text_color(t::text_muted()).child(text);
-        let metric = |input: &gpui::Entity<widgets::input::InputState>| {
+        let field = |input: &gpui::Entity<widgets::input::InputState>, width: f32| {
             div()
-                .w(px(64.0))
-                .child(widgets::input::Input::new(input).small())
+                .w(px(width))
+                .child(widgets::input::Input::new(input).small().centered())
         };
-        let kern_group =
-            |label_text: SharedString, input: &gpui::Entity<widgets::input::InputState>| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(CARD_GAP))
-                    .child(label(label_text))
-                    .child(
-                        div()
-                            .w(px(96.0))
-                            .child(widgets::input::Input::new(input).small()),
-                    )
-            };
 
         let metrics = card()
             .child(
@@ -131,33 +125,19 @@ impl Workspace {
                     .gap(px(CARD_GAP))
                     .p(px(CARD_PAD))
                     .child(
+                        // A single, equal-width row keeps the editable
+                        // spacing and kerning values compact and legible:
+                        // left group, LSB, width, RSB, right group.
                         div()
                             .flex()
                             .items_center()
+                            .w_full()
                             .gap(px(CARD_GAP))
-                            .child(label("LSB".into()))
-                            .child(metric(&self.inputs.metric.lsb))
-                            .child(metric(&self.inputs.metric.width))
-                            .child(metric(&self.inputs.metric.rsb))
-                            .child(label("RSB".into())),
-                    )
-                    .child(
-                        // Kerning groups are editable in the floating
-                        // metrics pane too, using the same inputs and
-                        // Enter-to-commit wiring as the Glyph inspector.
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(CARD_GAP))
-                            .child(kern_group("L".into(), &self.inputs.glyph.group_l))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_center()
-                                    .text_color(t::text_muted())
-                                    .child("Kern groups"),
-                            )
-                            .child(kern_group("R".into(), &self.inputs.glyph.group_r)),
+                            .child(field(&self.inputs.glyph.group_l, 56.0))
+                            .child(field(&self.inputs.metric.lsb, 56.0))
+                            .child(field(&self.inputs.metric.width, 56.0))
+                            .child(field(&self.inputs.metric.rsb, 56.0))
+                            .child(field(&self.inputs.glyph.group_r, 56.0)),
                     ),
             );
 

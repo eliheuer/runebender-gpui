@@ -201,6 +201,10 @@ impl Workspace {
         self.mode = Mode::Editor(index);
         // The info and colors sections follow the open glyph.
         self.selected = Some(index);
+        // A newly created workspace owns a fresh `TextBuffer`. Seeded glyphs
+        // can render without a model, but typed characters are accepted only
+        // after its inventory and kerning data have been built from the font.
+        self.rebuild_text_models();
         self.seed_edit_buffer(index);
         self.editor.initialized = false;
         self.editor.selected.clear();

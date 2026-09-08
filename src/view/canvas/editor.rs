@@ -116,6 +116,8 @@ struct EditorScene {
     component_path: Arc<BezPath>,
     /// True while the text tool is up.
     text_mode: bool,
+    /// Whether Text mode has a sort whose glyph-specific helpers may draw.
+    text_sort_active: bool,
     /// The text buffer's sorts, ready to paint.
     sort_paints: Vec<SortPaint>,
     /// The text caret, when the text tool is up.
@@ -313,6 +315,7 @@ impl Workspace {
         let outline = entry.contour_path.clone();
         let component_path = entry.component_path.clone();
         let text_mode = self.editor.tool == Tool::Text;
+        let text_sort_active = text_mode && self.edit_buffer.active_sort().is_some();
         let (sort_paints, text_caret): (Vec<SortPaint>, Option<(f64, f64)>) = {
             let line_height = self.text_line_height();
             let layout = self.edit_buffer.layout(line_height);
@@ -346,7 +349,8 @@ impl Workspace {
                     })
                 })
                 .collect();
-            let caret = text_mode.then_some((layout.cursor_x - off.0, layout.cursor_y - off.1));
+            let caret =
+                text_sort_active.then_some((layout.cursor_x - off.0, layout.cursor_y - off.1));
             (paints, caret)
         };
         let (sort_top, sort_bottom) = self.text_sort_bounds();
@@ -596,7 +600,10 @@ impl Workspace {
         };
         // Curve overlays: comb strips and continuity rings, computed
         // in design space from the shared analyses in core.
-        let comb_strips: Vec<CombStrip> = if self.curve_comb && self.editor.tool != Tool::Preview {
+        let comb_strips: Vec<CombStrip> = if self.curve_comb
+            && self.editor.tool != Tool::Preview
+            && (!text_mode || text_sort_active)
+        {
             font.font
                 .get_glyph(entry.name.as_ref())
                 .map(|g| {
@@ -627,31 +634,33 @@ impl Workspace {
             .flat_map(|s| s.iter())
             .map(|s| s.kappa.abs())
             .fold(0.0, f64::max);
-        let continuity_rings: Vec<(kurbo::Point, gpui::Rgba)> =
-            if self.curve_continuity && self.editor.tool != Tool::Preview {
-                font.font
-                    .get_glyph(entry.name.as_ref())
-                    .map(|g| {
-                        let cubics = runebender_core::analysis::curve::cubics_from_norad(g);
-                        runebender_core::analysis::curve::node_continuity(&cubics)
-                            .into_iter()
-                            .filter_map(|nc| {
-                                use runebender_core::analysis::curve::GLevel;
-                                let color = match nc.level {
-                                    GLevel::Corner => return None,
-                                    GLevel::G2 | GLevel::G3 => t::continuity_g2(),
-                                    GLevel::G1 => t::continuity_g1(),
-                                    GLevel::G1Line => t::continuity_line(),
-                                    GLevel::Kink => t::continuity_kink(),
-                                };
-                                Some((nc.at, color))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
+        let continuity_rings: Vec<(kurbo::Point, gpui::Rgba)> = if self.curve_continuity
+            && self.editor.tool != Tool::Preview
+            && (!text_mode || text_sort_active)
+        {
+            font.font
+                .get_glyph(entry.name.as_ref())
+                .map(|g| {
+                    let cubics = runebender_core::analysis::curve::cubics_from_norad(g);
+                    runebender_core::analysis::curve::node_continuity(&cubics)
+                        .into_iter()
+                        .filter_map(|nc| {
+                            use runebender_core::analysis::curve::GLevel;
+                            match nc.level {
+                                GLevel::Corner => None,
+                                GLevel::G2
+                                | GLevel::G3
+                                | GLevel::G1
+                                | GLevel::G1Line
+                                | GLevel::Kink => Some((nc.at, t::continuity())),
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         // Measure-tool HUD: colorized strokes, measurements, and side
         // bearings from core's measure module, in design space. The
         // paint layer maps them to the screen and draws dimension
@@ -832,6 +841,7 @@ impl Workspace {
             outline,
             component_path,
             text_mode,
+            text_sort_active,
             sort_paints,
             text_caret,
             sort_top,
@@ -1912,6 +1922,9 @@ fn paint_masks(scene: &EditorScene, s: &Screen, window: &mut Window) {
 /// Curvature comb, behind the outline so points stay selectable over
 /// it.
 fn paint_curvature_comb(scene: &EditorScene, s: &Screen, window: &mut Window) {
+    if scene.text_mode && !scene.text_sort_active {
+        return;
+    }
     let transform = s.transform;
     for strip in &scene.comb_strips {
         for w in strip.windows(2) {
@@ -1927,6 +1940,17 @@ fn paint_curvature_comb(scene: &EditorScene, s: &Screen, window: &mut Window) {
             } else {
                 0.0
             };
+            // Each coloured tooth keeps the same dark keyline as points,
+            // anchors, and selected cells, so neighbouring comb colours stay
+            // legible instead of blending into a rainbow ribbon.
+            if let Some(p) = build_path(
+                &quad,
+                Affine::IDENTITY,
+                s.origin,
+                PathBuilder::stroke(px(2.0)),
+            ) {
+                window.paint_path(p, t::point_outline());
+            }
             if let Some(p) = build_fill_path(&quad, Affine::IDENTITY, s.origin) {
                 window.paint_path(p, t::comb_gradient(k));
             }
@@ -2049,7 +2073,7 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
             let (px, py) = (-dy, dx);
             // Direction needs to remain legible as part of the point, rather
             // than reading as a smaller decorative arrow beside it.
-            let r = r as f64 * 1.25;
+            let r = r as f64 * 1.5;
             let tip = kurbo::Point::new(cx + dx * r * 1.15, cy + dy * r * 1.15);
             let left = kurbo::Point::new(
                 cx - dx * r * 0.70 + px * r * 0.85,
@@ -2106,7 +2130,10 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
             // Locked nodes read as inert.
             (t::point_readonly(), t::point_readonly())
         } else if is_selected {
-            (t::point_selected_ring(), t::point_selected())
+            // Selection changes the fill to yellow, not the keyline. The
+            // dark outline is what keeps a selected node readable over every
+            // curve helper and fill.
+            (t::point_outline(), t::point_selected())
         } else if t::points_filled() {
             (t::point_outline(), hue)
         } else {
@@ -2301,9 +2328,11 @@ fn paint_anchors(scene: &EditorScene, s: &Screen, window: &mut Window) {
         diamond.line_to((cx_ - r, cy_));
         diamond.close_path();
         let (ring, inner) = if is_selected {
-            (t::point_selected_ring(), t::point_selected())
+            (t::point_outline(), t::point_selected())
         } else {
-            (t::anchor(), t::point_inner())
+            // Anchors are a single solid pink diamond with the shared dark
+            // keyline, rather than a pink ring around an unrelated black core.
+            (t::point_outline(), t::anchor())
         };
         anchor_halo.push(diamond.clone());
         anchor_fill
@@ -2680,12 +2709,23 @@ fn paint_measure_hud(scene: &EditorScene, s: &Screen, window: &mut Window, cx: &
 
 /// Continuity rings around on-curve nodes.
 fn paint_continuity_rings(scene: &EditorScene, s: &Screen, window: &mut Window) {
+    if scene.text_mode && !scene.text_sort_active {
+        return;
+    }
     if !scene.continuity_rings.is_empty() {
         use kurbo::Shape as _;
         let r = 4.5 * 1.9;
         for (at, color) in &scene.continuity_rings {
             let c = s.transform * *at;
             let circle = kurbo::Circle::new(c, r).to_path(0.25);
+            if let Some(p) = build_path(
+                &circle,
+                Affine::IDENTITY,
+                s.origin,
+                PathBuilder::stroke(px(3.0)),
+            ) {
+                window.paint_path(p, t::point_outline());
+            }
             if let Some(p) = build_path(
                 &circle,
                 Affine::IDENTITY,

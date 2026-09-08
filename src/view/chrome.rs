@@ -63,6 +63,10 @@ impl Workspace {
         let in_editor = matches!(self.mode, Mode::Editor(_));
         div()
             .id("header")
+            // Keep the titlebar stable in every mode. Editor-only tool tiles
+            // are constrained to the tab height, but the bar itself owns the
+            // final 36px extent rather than deriving it from visible children.
+            .h(px(crate::workspace::TAB_H + 12.0))
             .flex()
             .items_center()
             // The same 6px everywhere: from the window's edges to the

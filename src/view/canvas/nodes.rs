@@ -75,7 +75,11 @@ impl Workspace {
         };
         let running = state.running;
         let open_path = state.path.clone();
-        let mut row = c::row().p_1().border_b_1().border_color(t::panel_outline());
+        let mut row = c::row()
+            .h(px(crate::workspace::NODE_VIEW_RAIL_H))
+            .p_1()
+            .border_b_1()
+            .border_color(t::panel_outline());
         for file in self.models.graph_files.clone() {
             let current = file == open_path;
             row = row.child(
@@ -513,9 +517,13 @@ fn paint_nodes(
     let sp = |p: kurbo::Point| to_screen(vp, origin, p);
     let stroke = f32::from(t::stroke()).max(1.0);
     let wire_w = (1.5 * zoom).max(1.0);
-    // Every graph object shares this lower-left screen-space lift. Convert
-    // it to canvas units so zooming never makes the shadow look heavier.
-    let shadow_offset = f64::from(4.0 / zoom.max(0.01));
+    // Node cards use the same lower-left screen-space lift as glyph tiles.
+    // Convert it to canvas units so zooming never makes the shadow look
+    // heavier.
+    let card_shadow_offset = f64::from(4.0 / zoom.max(0.01));
+    // Ports use a restrained, centered 3px halo rather than an offset cast
+    // shadow. Wires have no shadow.
+    let connector_shadow_spread = 3.0 * stroke;
     let draw = |window: &mut Window, path: &BezPath, builder: PathBuilder, color: gpui::Rgba| {
         if let Some(p) = build_path(path, tf, origin, builder) {
             window.paint_path(p, color);
@@ -558,14 +566,7 @@ fn paint_nodes(
             .and_then(|m| t::mark_paint(Some(m)))
             .map_or_else(t::text_muted, |p| p.bg.unwrap_or(p.border))
     };
-    let draw_wire = |window: &mut Window, path: &BezPath, ink| {
-        let shadow_path = kurbo::Affine::translate((-shadow_offset, shadow_offset)) * path;
-        draw(
-            window,
-            &shadow_path,
-            PathBuilder::stroke(px(wire_w + 2.0 * stroke)),
-            t::cell_shadow(),
-        );
+    let draw_wire_foreground = |window: &mut Window, path: &BezPath, ink| {
         draw(
             window,
             path,
@@ -574,28 +575,19 @@ fn paint_nodes(
         );
         draw(window, path, PathBuilder::stroke(px(wire_w)), ink);
     };
-    for &(a, o, b, i) in &scene.wires {
-        let port = &scene.boxes[a].outputs[o];
-        let path = wire_path(port.at, scene.boxes[b].inputs[i].at);
-        draw_wire(window, &path, wire_ink(port.kind));
-    }
-    if let Some((from, to)) = scene.pending {
-        // The pending end is a window point; bring it into canvas
-        // units so the wire is one path like the others.
-        let inverse = tf.inverse();
-        let to_canvas = |p: Point<gpui::Pixels>| {
-            inverse
-                * kurbo::Point::new(
-                    f64::from(f32::from(p.x - origin.x)),
-                    f64::from(f32::from(p.y - origin.y)),
-                )
-        };
-        let path = wire_path(to_canvas(from), to_canvas(to));
-        draw_wire(
-            window,
-            &path,
-            scene.pending_kind.map_or_else(t::text, wire_ink),
-        );
+    // Port halos live on the graph ground. Drawing them before card bodies
+    // keeps the normal port dot clean and prevents the halo from spilling
+    // into the node interior.
+    for nb in &scene.boxes {
+        for port in nb.inputs.iter().chain(&nb.outputs) {
+            let dot = circle(port.at, nl::PORT_R);
+            draw(
+                window,
+                &dot,
+                PathBuilder::stroke(px(stroke + 2.0 * connector_shadow_spread)),
+                t::cell_shadow(),
+            );
+        }
     }
 
     let text_px = (crate::workspace::UI_TEXT_PX * zoom).clamp(6.0, 40.0);
@@ -625,7 +617,7 @@ fn paint_nodes(
         let shadow = if selected {
             f64::from(5.0 / zoom.max(0.01))
         } else {
-            shadow_offset
+            card_shadow_offset
         };
         let shadow_rect = kurbo::Rect::new(
             nb.rect.x0 - shadow,
@@ -653,9 +645,8 @@ fn paint_nodes(
         rule.move_to(kurbo::Point::new(header_rect.x0, header_rect.y1));
         rule.line_to(kurbo::Point::new(header_rect.x1, header_rect.y1));
         draw(window, &rule, PathBuilder::stroke(px(stroke)), outline);
-        // The keyline stays one stroke when selected: a heavier one
-        // broke the alignment of boxes snapped side by side. The
-        // header's fill is what says selected.
+        // The header's fill is what says selected; the keyline stays at the
+        // same standard weight as the rest of the node.
         draw(
             window,
             &rect(nb.rect),
@@ -819,10 +810,44 @@ fn paint_nodes(
                 }
             }
         }
-        // Ports: filled with the wire's colour when wired, the field
-        // ground when not, keylined in ink either way. While a wire
-        // is being dragged, the inputs that take it grow a second
-        // ring and the rest fade, so the legal drops show.
+        // A result line under the box, when the node has one.
+        if let Some(RowState::Done(_, Some(note))) = scene.rows.get(&nb.id) {
+            paint_text(
+                window,
+                cx,
+                gpui::point(top_left.x, top_left.y + px(h + pad / 2.0)),
+                note,
+                text_px * 0.9,
+                t::text_muted(),
+            );
+        }
+    }
+    // The visible wire and port dot are foreground geometry. This lets the
+    // line reach the dot cleanly, while their halo remains behind the cards.
+    for &(a, o, b, i) in &scene.wires {
+        let port = &scene.boxes[a].outputs[o];
+        let path = wire_path(port.at, scene.boxes[b].inputs[i].at);
+        draw_wire_foreground(window, &path, wire_ink(port.kind));
+    }
+    if let Some((from, to)) = scene.pending {
+        let inverse = tf.inverse();
+        let to_canvas = |p: Point<gpui::Pixels>| {
+            inverse
+                * kurbo::Point::new(
+                    f64::from(f32::from(p.x - origin.x)),
+                    f64::from(f32::from(p.y - origin.y)),
+                )
+        };
+        let path = wire_path(to_canvas(from), to_canvas(to));
+        draw_wire_foreground(
+            window,
+            &path,
+            scene.pending_kind.map_or_else(t::text, wire_ink),
+        );
+    }
+    // Ports sit above the visible wire, so the wire terminates directly at a
+    // crisp, unshadowed connection point.
+    for nb in &scene.boxes {
         for (port, is_input) in nb
             .inputs
             .iter()
@@ -841,28 +866,12 @@ fn paint_nodes(
             } else {
                 t::field_bg()
             };
-            let shadow_dot = circle(
-                kurbo::Point::new(port.at.x - shadow_offset, port.at.y + shadow_offset),
-                nl::PORT_R,
-            );
-            draw(window, &shadow_dot, PathBuilder::fill(), t::cell_shadow());
             draw(window, &dot, PathBuilder::fill(), fill);
             draw(window, &dot, PathBuilder::stroke(px(stroke)), ink);
             if takes {
                 let ring = circle(port.at, nl::PORT_R * 2.0);
                 draw(window, &ring, PathBuilder::stroke(px(stroke)), t::text());
             }
-        }
-        // A result line under the box, when the node has one.
-        if let Some(RowState::Done(_, Some(note))) = scene.rows.get(&nb.id) {
-            paint_text(
-                window,
-                cx,
-                gpui::point(top_left.x, top_left.y + px(h + pad / 2.0)),
-                note,
-                text_px * 0.9,
-                t::text_muted(),
-            );
         }
     }
     // Problems in the corner, so a file that will not run says why.

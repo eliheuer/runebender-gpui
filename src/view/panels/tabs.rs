@@ -518,8 +518,11 @@ impl Workspace {
                 .cursor_pointer()
                 .when(active, |el| {
                     el.border(t::stroke())
-                        .border_color(t::mark_color("orange").unwrap_or_else(t::selected_ink))
-                        .text_color(t::mark_color("yellow").unwrap_or_else(t::selected_ink))
+                        // Workspace tabs are outline-only. The two greys
+                        // match the header tools: full-strength for the
+                        // active tab and a dimmer grey for its neighbours.
+                        .border_color(t::selected_ink())
+                        .text_color(t::selected_ink())
                 })
                 .when(!active, |el| {
                     el.border(t::stroke())
@@ -644,10 +647,12 @@ impl Workspace {
                     .child(
                         div()
                             .id(("tab-close", i))
-                            .px_0p5()
                             .rounded(t::radius())
-                            .text_color(t::text_muted())
-                            .hover(|el| el.text_color(t::text()))
+                            // Inherit the tab's active/inactive gray so the
+                            // close affordance remains equally legible, and
+                            // leave its outer spacing to the tab's symmetric
+                            // padding rather than adding a second right inset.
+                            .hover(|el| el.text_color(t::selected_ink()))
                             .child("×")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();

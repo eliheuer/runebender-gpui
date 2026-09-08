@@ -1089,6 +1089,13 @@ pub(crate) const ZOOM_KEY_STEP: f64 = 1.1;
 /// that sit beside tabs in the header and the status bar.
 pub(crate) const TAB_H: f32 = 24.0;
 
+/// Outer height shared by the three node-view rails.
+pub(crate) const NODE_VIEW_RAIL_H: f32 = TAB_H + 12.0;
+
+/// Header content inside a collapsed node-view inspector rail: 23px content,
+/// 6px top and bottom padding, and a 1px bottom rule make 36px overall.
+pub(crate) const NODE_VIEW_SECTION_HEADER_H: f32 = NODE_VIEW_RAIL_H - 13.0;
+
 /// The one type size of the interface, in pixels. Every label, value,
 /// button, and cell caption reads at this size.
 pub(crate) const UI_TEXT_PX: f32 = 13.0;

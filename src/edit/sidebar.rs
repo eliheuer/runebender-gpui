@@ -729,6 +729,8 @@ impl Workspace {
         body: impl IntoElement,
     ) -> gpui::Div {
         let collapsed = self.collapsed_sections.contains(title);
+        let node_view_rail =
+            matches!(self.mode, Mode::Nodes) && matches!(title, "Glyph" | "Font info") && collapsed;
         div()
             .flex()
             .flex_col()
@@ -737,9 +739,15 @@ impl Workspace {
             .py_1p5()
             .border_b_1()
             .border_color(t::panel_outline())
+            .when(node_view_rail, |el| {
+                el.h(px(crate::workspace::NODE_VIEW_RAIL_H))
+            })
             .child(
                 div()
                     .id(SharedString::from(format!("section-{title}")))
+                    .when(node_view_rail, |el| {
+                        el.h(px(crate::workspace::NODE_VIEW_SECTION_HEADER_H))
+                    })
                     .flex()
                     .items_center()
                     .gap_1()
@@ -793,8 +801,10 @@ impl Workspace {
     ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id)
-            .w(px(crate::view::controls::CONTROL_H))
-            .h(px(crate::view::controls::CONTROL_H))
+            // Header tools must fit the titlebar tab height. Larger tiles
+            // made the header jump when editor-only tools appeared.
+            .w(px(crate::workspace::TAB_H))
+            .h(px(crate::workspace::TAB_H))
             .rounded(t::radius_control())
             .cursor_pointer()
             .when(active, |el| el.bg(t::selected_bg()))

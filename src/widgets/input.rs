@@ -262,6 +262,11 @@ impl InputState {
         self.with_layout(|editor| editor.try_layout().map(|l| l.height()).unwrap_or(0.0))
     }
 
+    /// The width of the laid-out single-line value.
+    fn layout_width(&mut self) -> f32 {
+        self.with_layout(|editor| editor.try_layout().map(|l| l.width()).unwrap_or(0.0))
+    }
+
     /// Selection boxes, relative to the text origin: x, y, width,
     /// height.
     fn selection_rects(&mut self) -> Vec<(f32, f32, f32, f32)> {
@@ -689,6 +694,8 @@ pub(crate) struct Input {
     full_height: bool,
     /// Whether the field draws at the shorter height.
     small: bool,
+    /// Whether a single-line value is centered in its field.
+    centered: bool,
 }
 
 impl Input {
@@ -698,6 +705,7 @@ impl Input {
             state: state.clone(),
             full_height: false,
             small: false,
+            centered: false,
         }
     }
 
@@ -710,6 +718,12 @@ impl Input {
     /// A shorter field, for rows that pack several together.
     pub(crate) fn small(mut self) -> Self {
         self.small = true;
+        self
+    }
+
+    /// Centre a single-line value horizontally.
+    pub(crate) fn centered(mut self) -> Self {
+        self.centered = true;
         self
     }
 }
@@ -727,6 +741,7 @@ impl gpui::RenderOnce for Input {
         let focus_handle = state.read(cx).focus_handle.clone();
         let focused = focus_handle.is_focused(window);
         let multi_line = state.read(cx).multi_line;
+        let centered = self.centered;
         // Compact metric fields keep the same 20px text line box as a
         // regular field. Their old 20px total height also included 8px
         // of padding, leaving no vertical slack for the line to centre in.
@@ -767,7 +782,7 @@ impl gpui::RenderOnce for Input {
                 canvas(
                     move |bounds, _, _| bounds,
                     move |_, bounds: Bounds<Pixels>, window, cx| {
-                        paint_field(&paint_state, bounds, focused, window, cx);
+                        paint_field(&paint_state, bounds, focused, centered, window, cx);
                     },
                 )
                 .size_full(),
@@ -804,6 +819,7 @@ fn paint_field(
     state: &gpui::Entity<InputState>,
     bounds: Bounds<Pixels>,
     focused: bool,
+    centered: bool,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -828,8 +844,13 @@ fn paint_field(
         } else {
             (slack / 2.0).max(0.0)
         };
+        let x = if centered && !multi_line {
+            ((width - input.layout_width()) * 0.5).max(0.0)
+        } else {
+            0.0
+        };
         let inner = Point {
-            x: bounds.origin.x,
+            x: bounds.origin.x + px(x),
             y: bounds.origin.y + px(y),
         };
         input.record_origin(inner);

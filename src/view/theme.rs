@@ -593,65 +593,30 @@ pub(crate) fn reference_layer() -> Rgba {
 
 // ---- curve overlays (web curve_gradient + continuity palette) ----
 
-/// The comb's cool-to-warm curvature ramp.
+/// The comb's palette-based curvature ramp.
 pub(crate) fn comb_gradient(t: f64) -> Rgba {
-    const STOPS: [[f32; 3]; 5] = [
-        [0.16, 0.80, 0.82], // teal
-        [0.40, 0.44, 0.95], // indigo
-        [0.86, 0.28, 0.72], // magenta
-        [1.00, 0.55, 0.24], // orange
-        [1.00, 0.84, 0.36], // amber
-    ];
-    let u = px32(t.clamp(0.0, 1.0)) * (STOPS.len() as f32 - 1.0);
+    let stops = ["green", "blue", "purple", "pink", "orange"];
+    let u = px32(t.clamp(0.0, 1.0)) * (stops.len() as f32 - 1.0);
     let i = usize::try_from(to_count(u.floor()))
         .unwrap_or(0)
-        .min(STOPS.len() - 2);
+        .min(stops.len() - 2);
     let f = u - i as f32;
-    let (a, b) = (STOPS[i], STOPS[i + 1]);
+    let fallback = mark_color("green").unwrap_or_else(text);
+    let (a, b) = (
+        mark_color(stops[i]).unwrap_or(fallback),
+        mark_color(stops[i + 1]).unwrap_or(fallback),
+    );
     Rgba {
-        r: a[0] + (b[0] - a[0]) * f,
-        g: a[1] + (b[1] - a[1]) * f,
-        b: a[2] + (b[2] - a[2]) * f,
+        r: a.r + (b.r - a.r) * f,
+        g: a.g + (b.g - a.g) * f,
+        b: a.b + (b.b - a.b) * f,
         a: 1.0,
     }
 }
 
-/// Continuity badge for a curvature-continuous (G2 or better) joint:
-/// green.
-pub(crate) fn continuity_g2() -> Rgba {
-    Rgba {
-        r: 0.30,
-        g: 0.85,
-        b: 0.55,
-        a: 1.0,
-    }
-}
-/// Continuity badge for a tangent-only (G1) joint: yellow.
-pub(crate) fn continuity_g1() -> Rgba {
-    Rgba {
-        r: 0.95,
-        g: 0.80,
-        b: 0.30,
-        a: 1.0,
-    }
-}
-/// Continuity badge where a curve meets a straight line: neutral grey.
-pub(crate) fn continuity_line() -> Rgba {
-    Rgba {
-        r: 0.55,
-        g: 0.62,
-        b: 0.70,
-        a: 1.0,
-    }
-}
-/// Continuity badge for a kink: red.
-pub(crate) fn continuity_kink() -> Rgba {
-    Rgba {
-        r: 0.95,
-        g: 0.35,
-        b: 0.30,
-        a: 1.0,
-    }
+/// The green palette mark used by every continuity indicator.
+pub(crate) fn continuity() -> Rgba {
+    mark_color("green").unwrap_or_else(text)
 }
 
 // ---- measure HUD (web POPCOUNT_1..4 + HALO_COLOR) ----
@@ -692,16 +657,6 @@ pub(crate) fn popcount_tier(pc: u32) -> Rgba {
 /// web editor.
 pub(crate) fn halo() -> Rgba {
     c(theme().role("halo"))
-}
-
-/// The ring around a selected point. This is `pointSelectedOuter` in
-/// the web editor, which feeds it from the selection colour.
-pub(crate) fn point_selected_ring() -> Rgba {
-    if theme().roles.contains_key("pointSelectedRing") {
-        c(theme().role("pointSelectedRing"))
-    } else {
-        c(theme().role("selection"))
-    }
 }
 
 // ---- anchors ----
