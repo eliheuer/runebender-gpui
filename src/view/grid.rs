@@ -29,9 +29,16 @@ impl Workspace {
     }
 
     /// Same solve for the editor sidebar's mini grid, against its own
-    /// narrower viewport.
+    /// narrower viewport. Its rows are slightly taller than they are
+    /// wide, which gives the thumbnail outline a calmer vertical centre
+    /// without making the column count jump.
     pub(crate) fn sidebar_cell_metrics(&self) -> GridFit {
-        Self::solve_grid(self.sidebar.viewport, self.sidebar.cell_size, GRID_PAD_SM)
+        Self::solve_grid_with_row_factor(
+            self.sidebar.viewport,
+            self.sidebar.cell_size,
+            GRID_PAD_SM,
+            1.18,
+        )
     }
 
     /// Scroll a row-quantized grid by a wheel delta.
@@ -64,18 +71,44 @@ impl Workspace {
     /// size, then width and height divided evenly. Falls back to one
     /// target-size cell before the viewport reports a size.
     pub(crate) fn solve_grid(viewport: gpui::Size<gpui::Pixels>, target: f32, pad: f32) -> GridFit {
+        Self::solve_grid_with_row_factor(viewport, target, pad, 1.0)
+    }
+
+    /// The shared grid solve with a caller-selected target row aspect.
+    fn solve_grid_with_row_factor(
+        viewport: gpui::Size<gpui::Pixels>,
+        target: f32,
+        pad: f32,
+        row_factor: f32,
+    ) -> GridFit {
         let label_h = |w: f32| cell_label_metrics(w).height;
         let target = target.max(24.0);
         let vw: f32 = viewport.width.into();
         let vh: f32 = viewport.height.into();
         if vw <= 0.0 || vh <= 0.0 {
-            // First frame, before the probe reports: fall back to the
-            // target size.
+            // First frame, before the probe reports: populate enough
+            // cells that opening a glyph never looks like an empty
+            // sidebar with one stranded square. The measured viewport
+            // replaces this compact, sidebar-sized estimate on the next
+            // frame.
+            let fallback_w = 280.0;
+            let fallback_h = 560.0;
+            let usable_w = (fallback_w - pad * 2.0).max(target);
+            let cols = usize::try_from(to_count((usable_w + GRID_GAP) / (target + GRID_GAP)))
+                .unwrap_or(1)
+                .max(1);
+            let cell_w = ((usable_w - GRID_GAP * (cols - 1) as f32) / cols as f32).floor();
+            let target_row = (cell_w + label_h(cell_w)) * row_factor;
+            let usable_h = (fallback_h - pad.min(GRID_PAD_Y) * 2.0).max(target_row);
+            let rows = usize::try_from(to_count((usable_h + GRID_GAP) / (target_row + GRID_GAP)))
+                .unwrap_or(1)
+                .max(1);
+            let cell_h = ((usable_h - GRID_GAP * (rows - 1) as f32) / rows as f32).floor();
             return GridFit {
-                cell_w: target,
-                cell_h: target + label_h(target),
-                cols: 1,
-                rows: 1,
+                cell_w,
+                cell_h,
+                cols,
+                rows,
             };
         }
         let usable_w = (vw - pad * 2.0).max(target);
@@ -84,7 +117,7 @@ impl Workspace {
             .max(1);
         let cell_w = ((usable_w - GRID_GAP * (cols - 1) as f32) / cols as f32).floor();
 
-        let target_row = cell_w + label_h(cell_w);
+        let target_row = (cell_w + label_h(cell_w)) * row_factor;
         let usable_h = (vh - pad.min(GRID_PAD_Y) * 2.0).max(target_row);
         let rows = usize::try_from(to_count((usable_h + GRID_GAP) / (target_row + GRID_GAP)))
             .unwrap_or(1)
@@ -117,6 +150,37 @@ impl Workspace {
             indices.sort_by_key(|&i| font.glyphs[i].name.clone());
         }
         indices
+    }
+
+    /// Move the primary grid selection by a cell offset in the visible
+    /// order and scroll it into view. Arrow navigation is intentionally
+    /// bounded at the grid edges rather than wrapping to another row.
+    pub(crate) fn step_grid_selection(&mut self, offset: isize) -> bool {
+        let order = self.visible_grid_indices();
+        if order.is_empty() || offset == 0 {
+            return false;
+        }
+        let current = self
+            .selected
+            .and_then(|selected| order.iter().position(|&index| index == selected))
+            .unwrap_or(0);
+        let target = current
+            .saturating_add_signed(offset)
+            .min(order.len().saturating_sub(1));
+        if target == current && self.selected.is_some() {
+            return false;
+        }
+        self.selected = Some(order[target]);
+        self.grid.multi_selected.clear();
+
+        let fit = self.grid_cell_metrics();
+        let row = target / fit.cols.max(1);
+        if row < self.grid.scroll_row {
+            self.grid.scroll_row = row;
+        } else if row >= self.grid.scroll_row + fit.rows.max(1) {
+            self.grid.scroll_row = row + 1 - fit.rows.max(1);
+        }
+        true
     }
 
     /// Cmd-click: toggle a glyph in the multi-selection.
@@ -239,10 +303,10 @@ impl Workspace {
 /// Where a glyph's outline sits inside a cell, as an affine from
 /// design space to the cell's local pixels.
 ///
-/// One vertical scale serves every glyph, so a period stays a dot and
-/// an M stays tall. Each glyph is centred on its own ink. The em
-/// window grows rather than cropping ink that runs past it. This is a
-/// port of the web editor's grid thumbnail box in `glyph_svg.rs`.
+/// One em-based scale keeps a period small and an M tall, while the
+/// visible ink itself is centred in the available thumbnail box. The
+/// em window grows rather than cropping ink that runs past it. This is
+/// a port of the web editor's grid thumbnail box in `glyph_svg.rs`.
 pub(crate) fn cell_glyph_transform(
     ink: kurbo::Rect,
     empty: bool,
@@ -253,6 +317,9 @@ pub(crate) fn cell_glyph_transform(
 ) -> Affine {
     const EM_FILL: f64 = 0.65;
     const BASELINE_FROM_TOP: f64 = 0.8;
+    // A small inset prevents a centred outline from looking crowded
+    // against a thin cell rule.
+    const THUMBNAIL_FILL: f64 = 0.92;
     let (ink_x0, ink_w) = if empty || ink.width() <= 0.0 {
         (0.0, advance.max(1.0))
     } else {
@@ -266,35 +333,41 @@ pub(crate) fn cell_glyph_transform(
         (em_top.min(-ink.y1), (em_top + em_height).max(-ink.y0))
     };
     let box_h = (bottom - top).max(1.0);
-    let scale = (w / ink_w).min(h / box_h);
+    let scale = (w / ink_w).min(h / box_h) * THUMBNAIL_FILL;
     let x_offset = (w - ink_w * scale) / 2.0 - ink_x0 * scale;
-    let baseline = (h - box_h * scale) / 2.0 - top * scale;
-    Affine::translate((x_offset, baseline)) * Affine::scale_non_uniform(scale, -scale)
+    let y_offset = if empty {
+        // Empty glyphs have no visible ink to centre; keep the em's
+        // baseline placement for their advance-width placeholder.
+        (h - box_h * scale) / 2.0 - top * scale
+    } else {
+        // GPUI's y axis points down while font y points up. Put ink.y1
+        // at the top inset, so the actual outline (not its em box) has
+        // the same air above and below. This is particularly important
+        // for flat letters such as E, whose baseline box is asymmetric.
+        (h - ink.height() * scale) / 2.0 + ink.y1 * scale
+    };
+    Affine::translate((x_offset, y_offset)) * Affine::scale_non_uniform(scale, -scale)
 }
 
 /// A cell's label block: whether it shows at all, its type size, and
 /// the height it takes.
 ///
-/// Mirrors the web editor's cell-labels box: 8px sides and bottom, a
-/// 2px gap, both lines the same size.
+/// Uses one compact inset on every side, with close leading so names
+/// and Unicode sit together in the cell's lower-left corner.
 pub(crate) fn cell_label_metrics(cell_w: f32) -> CellLabels {
     // gpui's default line box is much taller than the type size, which
     // clipped the first line and pushed the two apart. The line height
     // is stated here and the block's height is derived from it, so the
     // box always holds exactly what it draws.
-    const PAD_TOP: f32 = 4.0;
-    const PAD_BOTTOM: f32 = 8.0;
-    const GAP: f32 = 2.0;
+    const PAD: f32 = 5.0;
+    const GAP: f32 = 0.0;
     let build = |size: f32, lines: usize| {
-        let line = (size * 1.25).ceil();
+        let line = (size * 1.10).ceil();
         CellLabels {
             show: true,
             size,
             line,
-            height: PAD_TOP
-                + line * lines as f32
-                + GAP * (lines.saturating_sub(1)) as f32
-                + PAD_BOTTOM,
+            height: PAD + line * lines as f32 + GAP * (lines.saturating_sub(1)) as f32 + PAD,
         }
     };
     // One type size everywhere, the interface's own. A cell too

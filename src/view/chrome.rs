@@ -12,8 +12,8 @@ use crate::view::paint::IconMark;
 use crate::view::paint::eye_icon;
 use crate::view::paint::flat_slider;
 use crate::view::paint::glyph_free_icon;
-use crate::view::paint::icon_svg;
 use crate::view::paint::invert_icon;
+use crate::view::paint::sidebar_icon;
 use crate::view::render::px32;
 use crate::view::theme as t;
 use crate::widgets;
@@ -23,7 +23,6 @@ use crate::workspace::CELL;
 use crate::workspace::Drag;
 use crate::workspace::FontViewMode;
 use crate::workspace::MINI_CELL;
-use crate::workspace::TAB_H;
 use gpui::AppContext;
 use gpui::Context;
 use gpui::InteractiveElement;
@@ -71,7 +70,9 @@ impl Workspace {
             .gap_1p5()
             .px_1p5()
             .py_1p5()
-            .bg(t::titlebar_bg())
+            // The editor chrome shares the selected-glyph ground: a dark,
+            // quiet band that lets the tool icons and title read in one ink.
+            .bg(t::header_bg())
             .border_b_1()
             .border_color(t::panel_outline())
             // This row is the window's title bar: room for the traffic
@@ -100,26 +101,6 @@ impl Workspace {
                     window.titlebar_double_click();
                 }
             })
-            .child(
-                div()
-                    .id("toggle-left")
-                    .w(px(TAB_H))
-                    .h(px(TAB_H))
-                    .rounded(t::radius_control())
-                    .cursor_pointer()
-                    .child(icon_svg(
-                        "glyph-grid",
-                        if self.left_collapsed {
-                            t::text_muted()
-                        } else {
-                            t::text()
-                        },
-                    ))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.left_collapsed = !this.left_collapsed;
-                        cx.notify();
-                    })),
-            )
             .when(cfg!(not(target_os = "macos")), |el| {
                 #[cfg(not(target_os = "macos"))]
                 let el = el.child(div().flex_none().child(self.app_menu_bar.clone()));
@@ -132,39 +113,16 @@ impl Workspace {
                     .items_center()
                     .gap_2()
                     .overflow_hidden()
-                    .child(div().text_color(t::text()).child(title))
-                    // Saved is a green tag, not saved a red one, drawn
-                    // the way the glyph grid draws a mark: filled and
-                    // keylined on Gray, outlined on Dark. Coloured text
-                    // alone was hard to read on the title bar.
+                    .child(div().text_color(t::header_ink()).child(title))
+                    // The dark header provides enough contrast that save
+                    // state can be just coloured text, not another box.
                     .child({
                         let dirty = self.font().is_some_and(|f| f.dirty);
-                        let paint = t::mark_paint(Some(if dirty { "red" } else { "green" }));
-                        let mut tag = div()
-                            .px_1p5()
-                            .h(px(TAB_H - 4.0))
-                            .flex()
-                            .items_center()
-                            .rounded(t::radius())
-                            .border(t::stroke());
-                        tag = match paint {
-                            Some(p) => tag
-                                .when_some(p.bg, |el, bg| el.bg(bg))
-                                .border_color(p.border)
-                                .text_color(p.ink),
-                            None => tag
-                                .border_color(t::cell_border())
-                                .text_color(t::text_muted()),
-                        };
-                        tag.child(status)
+                        let color = t::mark_color(if dirty { "red" } else { "green" });
+                        div()
+                            .text_color(color.unwrap_or(t::selected_ink()))
+                            .child(status)
                     }),
-            )
-            .when(
-                // Always up in the editor, the Glyphs bottom-corner
-                // toggle: direction is a property of the review, not
-                // of the text tool.
-                in_editor,
-                |el| el.child(self.direction_toolbar(cx)),
             )
             .when(in_editor, |el| el.child(self.header_tools(cx)))
             .child(self.tab_strip(cx))
@@ -327,6 +285,24 @@ impl Workspace {
                         cx.notify();
                     })),
             )
+    }
+
+    /// The left-sidebar toggle in the editor's bottom-bar control cluster.
+    fn sidebar_toggle(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
+        let ink = if self.left_collapsed {
+            t::text_muted()
+        } else {
+            t::text()
+        };
+        div()
+            .id("toggle-left")
+            .flex_none()
+            .cursor_pointer()
+            .child(sidebar_icon(ink, !self.left_collapsed))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.left_collapsed = !this.left_collapsed;
+                cx.notify();
+            }))
     }
 
     /// What is left on the right of the bar: the blur, which is a
@@ -642,6 +618,7 @@ impl Workspace {
             .border_t_1()
             .border_color(t::cell_border())
             .children(matches!(self.mode, Mode::Editor(_)).then(|| self.preview_toggle(cx)))
+            .children(matches!(self.mode, Mode::Editor(_)).then(|| self.sidebar_toggle(cx)))
             .child(
                 div()
                     .flex_1()

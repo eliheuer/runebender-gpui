@@ -8,16 +8,12 @@ use crate::Workspace;
 use crate::view::controls as c;
 use crate::view::grid::glyph_column_span;
 use crate::view::grid::pack_spans;
-use crate::view::paint::build_fill_path;
 use crate::view::paint::flat_slider;
 use crate::view::paint::icon_svg;
-use crate::view::panels::Thumb;
-use crate::view::render::TabTooltip;
 use crate::view::theme as t;
 use crate::widgets;
 use crate::workspace::BOTTOM_BAR_H;
 use crate::workspace::GRID_GAP;
-use gpui::AppContext;
 use gpui::Bounds;
 use gpui::Context;
 use gpui::InteractiveElement;
@@ -72,49 +68,82 @@ impl Workspace {
                     .flatten()
                     .map(|(i, span)| {
                         let w = fit.cell_w * span as f32 + GRID_GAP * (span - 1) as f32;
-                        self.glyph_cell_sized(i, w, fit.cell_h, true, cx)
+                        self.glyph_cell_sized(i, w, fit.cell_h, fit.cell_w, true, cx)
                             .into_any_element()
                     })
                     .collect()
             }
             None => Vec::new(),
         };
-        // The sidebar's own tabs, like the web's editor sidebar: the
-        // glyph list, and the designspace axes.
+        // The sidebar's own modes occupy a compact, Ableton-like tab
+        // rail: icons first, with real panel space reserved below.
         let has_axes = !self.axis_sliders.is_empty();
-        // Icons, not words: four labels overflowed a narrow sidebar
-        // and the last one was clipped. The name comes back on hover.
-        let tab = |id: &'static str,
-                   label: &'static str,
-                   icon: &'static str,
-                   which: u8,
-                   cx: &mut Context<'_, Self>| {
+        // The surfaces step forward in order: recessed rail, inactive
+        // tab, then the selected panel. That is the visual structure that
+        // makes the selected tab read as one surface with its panel.
+        let tab_rail = t::tab_rail_bg();
+        let tab = |id: &'static str, icon: &'static str, which: u8, cx: &mut Context<'_, Self>| {
             let active = self.sidebar.tab == which;
-            // Same treatment as the edit-mode toolbar: a filled tile
-            // when active, no outline either way.
-            div()
+            let inactive_ink = gpui::Rgba {
+                a: 0.42,
+                ..t::text()
+            };
+            let face = div()
                 .id(id)
-                .size(px(26.0))
+                .h(px(if active { 32.0 } else { 28.0 }))
                 .flex()
                 .items_center()
                 .justify_center()
-                .flex_shrink_0()
-                .rounded(t::radius_control())
+                // The selected tab meets the panel below it with no
+                // lower corners, as in Ableton's device tabs. The
+                // other tabs are quiet rounded caps behind it.
+                .when(active, |el| {
+                    el.rounded_t(px(6.0))
+                        .border_t_1()
+                        .border_l_1()
+                        .border_r_1()
+                        .border_color(t::cell_border())
+                        .bg(t::panel_bg())
+                })
+                .when(!active, |el| {
+                    el.rounded(px(6.0))
+                        .border_1()
+                        .border_color(t::cell_border())
+                        .bg(t::inactive_tab_bg())
+                })
                 .cursor_pointer()
-                .when(active, |el| el.bg(t::selected_bg()))
-                .child(icon_svg(
-                    icon,
-                    if active {
-                        t::selected_ink()
-                    } else {
-                        t::text_muted()
-                    },
-                ))
-                .tooltip(move |_, cx| cx.new(|_| TabTooltip { label }).into())
+                .group(id)
+                .child(if active {
+                    // The selected face is taller because it meets the
+                    // panel. Lift its icon by half that extra height so all
+                    // five icons share one baseline.
+                    div()
+                        .size(px(18.0))
+                        .relative()
+                        .top(px(-2.0))
+                        .child(icon_svg(icon, t::text()))
+                } else {
+                    // Surface colours stay still. Hovering only lifts the
+                    // icon, so the tab/panel join does not flicker apart.
+                    div()
+                        .size(px(18.0))
+                        .relative()
+                        .child(icon_svg(icon, inactive_ink))
+                        .child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .invisible()
+                                .group_hover(id, |el| el.visible())
+                                .child(icon_svg(icon, t::text())),
+                        )
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.sidebar.tab = which;
                     cx.notify();
-                }))
+                }));
+            let cell = div().h(px(32.0)).flex_1().relative();
+            cell.child(face)
         };
         // An axis-less font has no Axes tab, so a stale selection
         // falls back to the glyph list.
@@ -131,18 +160,33 @@ impl Workspace {
             .min_h(px(0.0))
             .child(
                 div()
-                    .px_2()
-                    .pt_2()
+                    .h(px(36.0))
+                    .relative()
+                    .px(px(4.0))
+                    .pt(px(4.0))
                     .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(tab("sidebar-tab-glyphs", "Glyphs", "glyph-grid", 0, cx))
-                    .child(tab("sidebar-tab-shapes", "Shapes", "shapes", 1, cx))
+                    .items_start()
+                    .gap(px(4.0))
+                    .bg(tab_rail)
+                    // This rule is beneath every tab face. The active face
+                    // reaches it and covers it; inactive faces stop one
+                    // shared gap above it.
+                    .child(
+                        div()
+                            .absolute()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(1.0))
+                            .bg(t::cell_border()),
+                    )
+                    .child(tab("sidebar-tab-glyphs", "glyph-grid", 0, cx))
+                    .child(tab("sidebar-tab-shapes", "shapes", 1, cx))
                     .when(has_axes, |el| {
-                        el.child(tab("sidebar-tab-axes", "Axes", "measure", 2, cx))
+                        el.child(tab("sidebar-tab-axes", "measure", 2, cx))
                     })
-                    .child(tab("sidebar-tab-ai", "Local AI", "preview", 3, cx))
-                    .child(tab("sidebar-tab-chat", "Chat", "text", 4, cx)),
+                    .child(tab("sidebar-tab-ai", "preview", 3, cx))
+                    .child(tab("sidebar-tab-chat", "text", 4, cx)),
             )
             .when(tab_now == 1, |el| {
                 el.child(
@@ -237,17 +281,27 @@ impl Workspace {
                         .flex_1()
                         .min_h(px(0.0))
                         .relative()
+                        // The editor's mini browser is a smaller view of
+                        // the Font grid, not another sidebar surface.
+                        .bg(t::grid_bg())
                         .child({
                             let this = cx.entity().downgrade();
                             canvas(
                                 move |bounds: Bounds<gpui::Pixels>, _, app: &mut gpui::App| {
-                                    this.update(app, |this, cx| {
-                                        if this.sidebar.viewport != bounds.size {
-                                            this.sidebar.viewport = bounds.size;
-                                            cx.notify();
-                                        }
-                                    })
-                                    .ok();
+                                    // Like the main grid, this callback runs
+                                    // during prepaint. Schedule the update
+                                    // after rendering so web builds do not
+                                    // retain their first-frame estimate.
+                                    let viewport = bounds.size;
+                                    app.defer(move |app| {
+                                        this.update(app, |this, cx| {
+                                            if this.sidebar.viewport != viewport {
+                                                this.sidebar.viewport = viewport;
+                                                cx.notify();
+                                            }
+                                        })
+                                        .ok();
+                                    });
                                 },
                                 |_, _, _, _| {},
                             )
@@ -994,8 +1048,9 @@ impl Workspace {
         self.section(cx, "Background", body)
     }
 
-    /// Layers section: one row per master, the active one highlighted.
-    pub(crate) fn layers_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
+    /// Master switcher. Master choices are not layers: keeping this
+    /// compact avoids mixing document structure with underlay controls.
+    pub(crate) fn masters_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
         let (names, active): (Vec<SharedString>, usize) = match &self.project {
             Some(p) => (
                 p.master_names
@@ -1007,82 +1062,19 @@ impl Workspace {
             ),
             None => (Vec::new(), 0),
         };
-        let reference = self.reference_layers.clone();
-        // A thumbnail of the current glyph in each master, the web
-        // MasterToolbar's glyph buttons relocated into this section.
-        let glyph_name: Option<String> = self
-            .selected
-            .and_then(|i| self.font().map(|f| f.glyphs[i].name.to_string()));
-        let thumbs: Vec<Option<Thumb>> = match (&self.project, &glyph_name) {
-            (Some(p), Some(name)) => p
-                .masters
-                .iter()
-                .map(|m| {
-                    m.name_map.get(name).map(|&g| {
-                        (
-                            m.glyphs[g].path.clone(),
-                            m.glyphs[g].advance,
-                            m.ascender,
-                            m.descender,
-                        )
-                    })
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
         let rows: Vec<_> = names
             .into_iter()
             .enumerate()
             .map(|(i, name)| {
                 let is_active = i == active;
-                let eye_on = reference.contains(&i);
-                let thumb = thumbs.get(i).cloned().flatten();
                 div()
                     .flex()
                     .items_center()
-                    .gap_1()
-                    .children(thumb.map(|(path, advance, asc, desc)| {
-                        div()
-                            .id(("layer-thumb", i))
-                            .w(px(22.0))
-                            .h(px(22.0))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.reference_layers.remove(&i) {
-                                    this.reference_layers.insert(i);
-                                }
-                                cx.notify();
-                            }))
-                            .child(
-                                canvas(
-                                    move |bounds, _, _| bounds,
-                                    move |_, bounds: Bounds<gpui::Pixels>, window, _| {
-                                        let h: f32 = bounds.size.height.into();
-                                        let w: f32 = bounds.size.width.into();
-                                        let em = (asc - desc).max(1.0);
-                                        let scale =
-                                            (h as f64 / em).min(w as f64 / advance.max(1.0));
-                                        let ox = (w as f64 - advance * scale) / 2.0;
-                                        let baseline = h as f64 + desc * scale;
-                                        let view = Affine::translate((ox, baseline))
-                                            * Affine::scale_non_uniform(scale, -scale);
-                                        if let Some(p) = build_fill_path(&path, view, bounds.origin)
-                                        {
-                                            window.paint_path(p, t::glyph_fill());
-                                        }
-                                    },
-                                )
-                                .size_full(),
-                            )
-                    }))
                     .child(
-                        // The active master reads in the accent, like a
-                        // picked category or tab. Clicking the
-                        // thumbnail beside it toggles that master as a
-                        // dim reference underlay — the dot that used to
-                        // carry that is gone.
+                        // The active master uses the same neutral row
+                        // surface and yellow text as a picked category.
                         div()
-                            .id(("layer", i))
+                            .id(("master", i))
                             .h(px(20.0))
                             .flex_1()
                             .px_1()
@@ -1093,11 +1085,10 @@ impl Workspace {
                             .when(is_active, |el| {
                                 el.border(t::stroke())
                                     .bg(t::selected_bg())
-                                    .border_color(t::selected_bg())
-                                    .text_color(t::selected_ink())
+                                    .border_color(t::selected_row_outline())
+                                    .text_color(t::selected_row_ink())
                             })
-                            .when(!is_active && eye_on, |el| el.text_color(t::text()))
-                            .when(!is_active && !eye_on, |el| el.text_color(t::text_muted()))
+                            .when(!is_active, |el| el.text_color(t::text()))
                             .child(name)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.switch_master(i);
@@ -1107,7 +1098,46 @@ impl Workspace {
                     .into_any_element()
             })
             .collect();
-        let mut body = div().flex().flex_col().children(rows);
+        self.section(cx, "Masters", div().flex().flex_col().children(rows))
+    }
+
+    /// Underlay and per-glyph layer controls, kept apart from master
+    /// switching so their scope is clear.
+    pub(crate) fn layers_section(&self, cx: &mut Context<'_, Self>) -> gpui::Div {
+        let mut body = div().flex().flex_col();
+        if let Some(project) = &self.project
+            && project.masters.len() > 1
+        {
+            body = body.child(div().text_color(t::text_muted()).child("Master References"));
+            for (i, name) in project.master_names.iter().enumerate() {
+                if i == project.active {
+                    continue;
+                }
+                let eye_on = self.reference_layers.contains(&i);
+                body = body.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .id(("master-reference-eye", i))
+                                .w(px(20.0))
+                                .cursor_pointer()
+                                .text_color(if eye_on { t::text() } else { t::text_muted() })
+                                .child("◉")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if !this.reference_layers.remove(&i) {
+                                        this.reference_layers.insert(i);
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .text_color(t::text())
+                        .child(SharedString::from(name.clone())),
+                );
+            }
+        }
         // Per-glyph layers: any other UFO layer holding this glyph.
         // Eye = underlay, arrows = swap with the drawing, × = drop.
         if let (Some(font), Some(name)) = (
@@ -1224,7 +1254,7 @@ impl Workspace {
                     ),
             );
         }
-        self.section(cx, "Masters", body)
+        self.section(cx, "Layers", body)
     }
 
     /// The context-menu overlay, absolutely positioned inside the
@@ -1502,7 +1532,7 @@ impl Workspace {
                         cx.stop_propagation();
                     }),
                 )
-                .bg(t::panel_bg())
+                .bg(t::header_bg())
                 .border(t::stroke())
                 .border_color(t::panel_outline())
                 .rounded(t::radius_control())

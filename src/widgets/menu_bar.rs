@@ -10,7 +10,7 @@
 
 use gpui::{
     Action, Context, InteractiveElement as _, IntoElement, Menu, MenuItem, MouseButton,
-    ParentElement as _, Render, SharedString, Styled as _, Window, div, px,
+    ParentElement as _, Render, SharedString, Styled as _, Window, deferred, div, px,
 };
 
 use crate::view::theme as t;
@@ -96,7 +96,7 @@ impl Render for MenuBar {
             .items_center()
             .h(px(24.0))
             .w_full()
-            .bg(t::panel_bg())
+            .bg(t::header_bg())
             .border_b_1()
             .border_color(t::panel_outline());
 
@@ -108,7 +108,7 @@ impl Render for MenuBar {
                 .h_full()
                 .flex()
                 .items_center()
-                .text_color(t::text())
+                .text_color(t::header_ink())
                 .when(is_open, |el| {
                     el.bg(t::selected_bg()).text_color(t::selected_ink())
                 })
@@ -127,7 +127,11 @@ impl Render for MenuBar {
 
             let mut cell = div().relative().h_full().child(title);
             if is_open {
-                cell = cell.child(self.dropdown(index, cx));
+                // A dropdown is a window overlay, not header content.
+                // `deferred` lays it out from this title but paints it after
+                // the editor's later canvas and panels, so it cannot sink
+                // behind them in the browser.
+                cell = cell.child(deferred(self.dropdown(index, cx)).with_priority(1));
             }
             bar = bar.child(cell);
         }
@@ -147,7 +151,7 @@ impl MenuBar {
             .left(px(0.0))
             .min_w(px(200.0))
             .py(px(4.0))
-            .bg(t::panel_bg())
+            .bg(t::header_bg())
             .border(t::stroke())
             .border_color(t::panel_outline())
             .flex()
@@ -163,7 +167,7 @@ impl MenuBar {
                         div()
                             .px(px(10.0))
                             .py(px(2.0))
-                            .text_color(t::text_muted())
+                            .text_color(t::header_ink_muted())
                             .child(name.clone()),
                     );
                 }
@@ -174,7 +178,7 @@ impl MenuBar {
                             .id(("menu-item", index * 1000 + row))
                             .px(px(10.0))
                             .py(px(3.0))
-                            .text_color(t::text())
+                            .text_color(t::header_ink())
                             .hover(|el| el.bg(t::selected_bg()).text_color(t::selected_ink()))
                             .child(name.clone())
                             .on_mouse_down(

@@ -727,6 +727,10 @@ impl gpui::RenderOnce for Input {
         let focus_handle = state.read(cx).focus_handle.clone();
         let focused = focus_handle.is_focused(window);
         let multi_line = state.read(cx).multi_line;
+        // Compact metric fields keep the same 20px text line box as a
+        // regular field. Their old 20px total height also included 8px
+        // of padding, leaving no vertical slack for the line to centre in.
+        let pad_y = if self.small { 2.0 } else { PAD_Y };
 
         let paint_state = state.clone();
         let click_state = state.clone();
@@ -737,7 +741,7 @@ impl gpui::RenderOnce for Input {
             .relative()
             .w_full()
             .px(px(PAD_X))
-            .py(px(PAD_Y))
+            .py(px(pad_y))
             .border(t::stroke())
             .border_color(if focused {
                 t::text()
@@ -753,7 +757,7 @@ impl gpui::RenderOnce for Input {
         } else if multi_line {
             field.min_h(px(LINE_HEIGHT * 3.0))
         } else if self.small {
-            field.h(px(LINE_HEIGHT))
+            field.h(px(LINE_HEIGHT + pad_y * 2.0))
         } else {
             field.h(px(LINE_HEIGHT + PAD_Y * 2.0))
         };

@@ -28,7 +28,6 @@ use gpui::Point;
 use gpui::SharedString;
 use gpui::StatefulInteractiveElement;
 use gpui::Styled;
-use gpui::Window;
 use gpui::canvas;
 use gpui::div;
 use gpui::prelude::FluentBuilder;
@@ -101,10 +100,11 @@ impl Workspace {
                         };
                         let cell_w: f32 = cell.size.width.into();
                         let cell_h: f32 = cell.size.height.into();
-                        // The cell sizes its own label block from its
-                        // own width, so a cell spanning two columns
-                        // gets a taller one: ask the same question.
-                        let label_h = cell_label_metrics(cell_w).height;
+                        // Captions follow the grid's base cell size, not
+                        // a particular glyph's span. This keeps compact
+                        // sidebar glyphs centred even when a long name
+                        // occupies several columns.
+                        let label_h = cell_label_metrics(fit.cell_w).height;
                         let transform = cell_glyph_transform(
                             *bbox,
                             false,
@@ -453,46 +453,72 @@ impl Workspace {
                         if any_handles && let Ok(p) = handles.build() {
                             window.paint_path(p, t::handle_line());
                         }
-                        let ring = |center: Point<gpui::Pixels>,
-                                    r: f32,
-                                    color: gpui::Rgba,
-                                    window: &mut Window| {
+                        // The preview is a compact editor canvas, not a
+                        // second visual system with its own point language.
+                        let point_shape = |center: Point<gpui::Pixels>, r: f32, square: bool| {
                             let cx_: f32 = center.x.into();
                             let cy_: f32 = center.y.into();
-                            let shape = kurbo::Circle::new((cx_ as f64, cy_ as f64), r as f64)
-                                .to_path(0.25);
+                            if square {
+                                kurbo::Rect::new(
+                                    cx_ as f64 - r as f64,
+                                    cy_ as f64 - r as f64,
+                                    cx_ as f64 + r as f64,
+                                    cy_ as f64 + r as f64,
+                                )
+                                .to_path(0.1)
+                            } else {
+                                kurbo::Circle::new((cx_ as f64, cy_ as f64), r as f64).to_path(0.15)
+                            }
+                        };
+                        for p in points.iter() {
+                            let center = to_screen(p.x, p.y);
+                            let hue = if p.hyper {
+                                t::point_hyper_outer()
+                            } else if !p.on_curve {
+                                t::point_offcurve_outer()
+                            } else if p.smooth {
+                                t::point_smooth_outer()
+                            } else {
+                                t::point_corner_outer()
+                            };
+                            let (ring, inner) = if t::points_filled() {
+                                (t::point_outline(), hue)
+                            } else {
+                                (hue, t::point_inner())
+                            };
+                            let square = p.on_curve && !p.smooth && !p.hyper;
+                            let r = if p.hyper && p.on_curve {
+                                4.0
+                            } else if square {
+                                3.5
+                            } else {
+                                4.5
+                            };
+                            let shape = point_shape(center, r, square);
+                            if t::point_halo()
+                                && let Some(path) = build_path(
+                                    &shape,
+                                    Affine::IDENTITY,
+                                    gpui::point(px(0.0), px(0.0)),
+                                    PathBuilder::stroke(px(3.5)),
+                                )
+                            {
+                                window.paint_path(path, t::halo());
+                            }
                             if let Some(p) = build_fill_path(
                                 &shape,
                                 Affine::IDENTITY,
                                 gpui::point(px(0.0), px(0.0)),
                             ) {
-                                window.paint_path(p, t::point_inner());
+                                window.paint_path(p, inner);
                             }
                             if let Some(p) = build_path(
                                 &shape,
                                 Affine::IDENTITY,
                                 gpui::point(px(0.0), px(0.0)),
-                                PathBuilder::stroke(px(1.0)),
+                                PathBuilder::stroke(px(1.5)),
                             ) {
-                                window.paint_path(p, color);
-                            }
-                        };
-                        for p in points.iter() {
-                            let center = to_screen(p.x, p.y);
-                            if !p.on_curve {
-                                ring(center, 2.0, t::point_offcurve_outer(), window);
-                            } else if p.smooth {
-                                ring(center, 3.0, t::point_smooth_outer(), window);
-                            } else if p.hyper {
-                                ring(center, 3.0, t::point_hyper_outer(), window);
-                            } else {
-                                window.paint_quad(gpui::fill(
-                                    Bounds::from_corners(
-                                        gpui::point(center.x - px(2.5), center.y - px(2.5)),
-                                        gpui::point(center.x + px(2.5), center.y + px(2.5)),
-                                    ),
-                                    t::point_corner_outer(),
-                                ));
+                                window.paint_path(p, ring);
                             }
                         }
                     },
@@ -501,7 +527,15 @@ impl Workspace {
                 .into_any_element()
             }
         };
-        div().flex_1().min_h(px(200.0)).p_1().child(body)
+        div()
+            .flex_1()
+            .min_h(px(200.0))
+            // This is the edit canvas in miniature: keep its ground in
+            // sync with the full editor rather than blending into the
+            // surrounding inspector panel.
+            .bg(t::canvas_bg())
+            .p_1()
+            .child(body)
     }
 
     /// The row of mark colour swatches: clicking one sets the selected

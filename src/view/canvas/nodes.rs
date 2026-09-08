@@ -284,7 +284,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .py_1()
-            .bg(t::panel_bg())
+            .bg(t::header_bg())
             .border(t::stroke())
             .border_color(t::cell_border())
             .rounded(t::radius());
@@ -513,6 +513,9 @@ fn paint_nodes(
     let sp = |p: kurbo::Point| to_screen(vp, origin, p);
     let stroke = f32::from(t::stroke()).max(1.0);
     let wire_w = (1.5 * zoom).max(1.0);
+    // Every graph object shares this lower-left screen-space lift. Convert
+    // it to canvas units so zooming never makes the shadow look heavier.
+    let shadow_offset = f64::from(4.0 / zoom.max(0.01));
     let draw = |window: &mut Window, path: &BezPath, builder: PathBuilder, color: gpui::Rgba| {
         if let Some(p) = build_path(path, tf, origin, builder) {
             window.paint_path(p, color);
@@ -556,6 +559,13 @@ fn paint_nodes(
             .map_or_else(t::text_muted, |p| p.bg.unwrap_or(p.border))
     };
     let draw_wire = |window: &mut Window, path: &BezPath, ink| {
+        let shadow_path = kurbo::Affine::translate((-shadow_offset, shadow_offset)) * path;
+        draw(
+            window,
+            &shadow_path,
+            PathBuilder::stroke(px(wire_w + 2.0 * stroke)),
+            t::cell_shadow(),
+        );
         draw(
             window,
             path,
@@ -608,9 +618,30 @@ fn paint_nodes(
         } else {
             mark.as_ref().map_or_else(t::cell_border, |m| m.border)
         };
+        // Match the glyph tiles: a crisp lower-left shadow separates
+        // a node from the graph ground without introducing blur. The
+        // value is converted back into canvas units so it remains a
+        // 4px (5px selected) shadow at every zoom level.
+        let shadow = if selected {
+            f64::from(5.0 / zoom.max(0.01))
+        } else {
+            shadow_offset
+        };
+        let shadow_rect = kurbo::Rect::new(
+            nb.rect.x0 - shadow,
+            nb.rect.y0 + shadow,
+            nb.rect.x1 - shadow,
+            nb.rect.y1 + shadow,
+        );
         // The body, the header band in the node's mark colour (the way
         // a grid cell wears its glyph's, inverted when selected), the
         // rule between them, then the keyline.
+        draw(
+            window,
+            &rect(shadow_rect),
+            PathBuilder::fill(),
+            t::cell_shadow(),
+        );
         draw(window, &rect(nb.rect), PathBuilder::fill(), t::field_bg());
         let header_bg = if selected {
             t::selected_bg()
@@ -810,6 +841,11 @@ fn paint_nodes(
             } else {
                 t::field_bg()
             };
+            let shadow_dot = circle(
+                kurbo::Point::new(port.at.x - shadow_offset, port.at.y + shadow_offset),
+                nl::PORT_R,
+            );
+            draw(window, &shadow_dot, PathBuilder::fill(), t::cell_shadow());
             draw(window, &dot, PathBuilder::fill(), fill);
             draw(window, &dot, PathBuilder::stroke(px(stroke)), ink);
             if takes {

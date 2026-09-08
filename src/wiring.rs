@@ -597,10 +597,27 @@ impl Workspace {
                 }
             }
         });
+        // Open on a real glyph so the overview has a useful preview.
+        // This is deliberately deterministic rather than random: the
+        // same font should open in the same state every time.
+        let initial_selected = project.as_ref().and_then(|project| {
+            project.masters.get(project.active).and_then(|master| {
+                master
+                    .glyphs
+                    .iter()
+                    .position(|glyph| glyph.codepoint.is_some() && !glyph.points.is_empty())
+                    .or_else(|| {
+                        master
+                            .glyphs
+                            .iter()
+                            .position(|glyph| glyph.codepoint.is_some())
+                    })
+            })
+        });
         let mut workspace = Self {
             project,
             load_error,
-            selected: None,
+            selected: initial_selected,
             last_editor: None,
             sessions: Vec::new(),
             active_session: 0,
@@ -608,7 +625,20 @@ impl Workspace {
             mode: start_mode,
             editor: EditorState::new(),
             edit_buffer: runebender_core::text::buffer::TextBuffer::new(),
-            collapsed_sections: HashSet::from([crate::view::panels::editor_info::FONT_ADVANCED]),
+            // Start the Font view as an overview: identity and the
+            // current master are immediately useful; the deep editing
+            // panels are available but do not crowd the first glance.
+            collapsed_sections: HashSet::from([
+                "Glyph",
+                "Font info",
+                "Dimensions",
+                crate::view::panels::editor_info::FONT_ADVANCED,
+                "Kerning",
+                "Groups",
+                "Compare",
+                "Features",
+                "Layers",
+            ]),
             reference_layers: HashSet::new(),
             show_all_masters: false,
             grid_lines: false,

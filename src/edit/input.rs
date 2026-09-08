@@ -1264,6 +1264,7 @@ impl Workspace {
         let cmd = event.keystroke.modifiers.platform;
         let shift = event.keystroke.modifiers.shift;
         let in_editor = matches!(self.mode, Mode::Editor(_));
+        let in_grid = matches!(self.mode, Mode::Grid);
         let ctrl = event.keystroke.modifiers.control;
         let alt = event.keystroke.modifiers.alt;
         // Web nudge steps: 2 design units, 8 with shift, 32 with ctrl
@@ -1313,9 +1314,27 @@ impl Workspace {
                 self.pen_finish();
                 true
             }
+            ("enter", false) if in_grid => {
+                if let Some(index) = self.selected {
+                    self.open_editor_in_new_session(index);
+                    true
+                } else {
+                    false
+                }
+            }
             ("enter", false) if !in_editor => {
                 if let Some(index) = self.selected {
                     self.open_editor(index);
+                    true
+                } else {
+                    false
+                }
+            }
+            // Glyphs' Font View shortcut: open the selected glyph in
+            // another Edit View tab, keeping existing workspaces open.
+            ("down", true) if in_grid => {
+                if let Some(index) = self.selected {
+                    self.open_editor_in_new_session(index);
                     true
                 } else {
                     false
@@ -1485,6 +1504,18 @@ impl Workspace {
                     self.font_mut()
                         .is_some_and(|f| f.toggle_smooth(index, &selected))
                 }
+            }
+            ("left", false) if in_grid && !shift && !ctrl && !alt => self.step_grid_selection(-1),
+            ("right", false) if in_grid && !shift && !ctrl && !alt => self.step_grid_selection(1),
+            ("up", false) if in_grid && !shift && !ctrl && !alt => {
+                let cols =
+                    isize::try_from(self.grid_cell_metrics().cols.max(1)).unwrap_or(isize::MAX);
+                self.step_grid_selection(-cols)
+            }
+            ("down", false) if in_grid && !shift && !ctrl && !alt => {
+                let cols =
+                    isize::try_from(self.grid_cell_metrics().cols.max(1)).unwrap_or(isize::MAX);
+                self.step_grid_selection(cols)
             }
             ("left", false) if in_editor => self.nudge_selection(-step, 0.0, alt),
             ("right", false) if in_editor => self.nudge_selection(step, 0.0, alt),

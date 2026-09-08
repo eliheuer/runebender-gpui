@@ -162,28 +162,6 @@ pub(crate) fn to_index(value: f64) -> i64 {
     runebender_core::outline::glyph_paths::round_units(value)
 }
 
-/// The hover tooltip on a sidebar tab icon.
-///
-/// The tabs show icons only, so the full name appears on hover.
-pub(crate) struct TabTooltip {
-    /// The tab's full name.
-    pub(crate) label: &'static str,
-}
-
-impl Render for TabTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
-        div()
-            .px_1p5()
-            .py_0p5()
-            .bg(t::panel_bg())
-            .border(t::stroke())
-            .border_color(t::panel_outline())
-            .rounded(t::radius())
-            .text_color(t::text())
-            .child(self.label)
-    }
-}
-
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         // RB_FRAME_LOG=1 prints how long each render tree took to
@@ -332,7 +310,7 @@ impl Workspace {
                             .flatten()
                             .map(|(i, span)| {
                                 let w = cell_w * span as f32 + GRID_GAP * (span - 1) as f32;
-                                self.glyph_cell_sized(i, w, cell_h, false, cx)
+                                self.glyph_cell_sized(i, w, cell_h, cell_w, false, cx)
                                     .into_any_element()
                             })
                             .collect()
@@ -345,13 +323,22 @@ impl Workspace {
                 let this = cx.entity().downgrade();
                 let probe = canvas(
                     move |bounds: Bounds<gpui::Pixels>, _, app: &mut gpui::App| {
-                        this.update(app, |this, cx| {
-                            if this.grid.viewport != bounds.size {
-                                this.grid.viewport = bounds.size;
-                                cx.notify();
-                            }
-                        })
-                        .ok();
+                        // A canvas prepaint runs while the workspace is
+                        // borrowed for rendering. Updating it immediately
+                        // therefore fails on the web renderer (and was
+                        // quietly discarded), leaving the grid at its
+                        // three-column first-frame fallback. Defer the
+                        // state update until the paint pass ends.
+                        let viewport = bounds.size;
+                        app.defer(move |app| {
+                            this.update(app, |this, cx| {
+                                if this.grid.viewport != viewport {
+                                    this.grid.viewport = viewport;
+                                    cx.notify();
+                                }
+                            })
+                            .ok();
+                        });
                     },
                     |_, _, _, _| {},
                 )
@@ -377,6 +364,7 @@ impl Workspace {
                                 .flex_1()
                                 .min_h(px(0.0))
                                 .relative()
+                                .bg(t::grid_bg())
                                 .overflow_hidden()
                                 .child(probe)
                                 .child(
@@ -453,6 +441,7 @@ impl Workspace {
                     .child(self.shaping_section(cx))
                     .child(self.related_section(cx))
                     .child(self.layers_section(cx))
+                    .child(self.masters_section(cx))
                     .children(self.axes_section(cx))
             })
             .when(!in_editor, |el| {
@@ -465,6 +454,7 @@ impl Workspace {
                     .child(self.compare_section(cx))
                     .child(self.features_section(cx))
                     .child(self.layers_section(cx))
+                    .child(self.masters_section(cx))
                     .child(self.glyph_preview_panel())
             });
         let content = div()
@@ -477,7 +467,10 @@ impl Workspace {
                             // Eight 24px swatches, seven 6px gaps, and
                             // 6px at each edge: the mark row fits exactly.
                             .size(px(246.0))
-                            .size_range(px(140.0)..px(440.0))
+                            // 246px is the designed minimum: below it
+                            // cells and the fixed swatch row no longer
+                            // share a usable width. The panel may grow.
+                            .size_range(px(246.0)..px(440.0))
                             .visible(!self.left_collapsed)
                             .child(
                                 // No border here: the resize handle

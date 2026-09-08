@@ -7,12 +7,6 @@
 //! holding state of its own, so a panel can be moved or removed
 //! without untangling it from the editing model.
 
-use crate::Arc;
-use kurbo::BezPath;
-
-/// A master thumbnail: the outline, advance, ascender, and descender.
-pub(crate) type Thumb = (Arc<BezPath>, f64, f64, f64);
-
 mod chat;
 pub(crate) mod editor_info;
 mod editor_sidebar;

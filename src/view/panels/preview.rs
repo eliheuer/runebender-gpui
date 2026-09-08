@@ -98,9 +98,12 @@ impl Workspace {
                     // preview is type, so it takes the text colours,
                     // not a hue.
                     let (ink, ground) = if invert {
-                        (t::panel_bg(), t::text())
+                        // Inverted preview is a selected dark surface,
+                        // not the near-black ink. That keeps its edge
+                        // visible against the surrounding edit canvas.
+                        (t::preview_bg(), t::selected_bg())
                     } else {
-                        (t::text(), t::panel_bg())
+                        (t::text(), t::preview_bg())
                     };
                     window.paint_quad(gpui::fill(bounds, ground));
                     // The type fits the pane, the way Glyphs and the
@@ -195,8 +198,9 @@ impl Workspace {
             .min_h(px(0.0))
             .flex()
             .flex_col()
-            // No rule of its own: the divider above it is the rule.
-            .bg(t::panel_bg())
+            // The resizable split above owns the single dark divider.
+            // Adding another rule here makes the preview edge double-wide.
+            .bg(t::preview_bg())
             .child(body)
             .into_any_element()
     }

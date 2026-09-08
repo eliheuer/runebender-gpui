@@ -48,9 +48,19 @@ use runebender_core::formats::lib_keys::read_masks;
 use runebender_core::ui::editing::ViewPort;
 use std::collections::HashSet;
 
-/// A contour start marker: its point, its direction, and whether the
-/// contour closes.
-type StartMarker = ((f64, f64), (f64, f64), bool);
+/// A closed contour's first on-curve point and the next point it heads toward.
+///
+/// The start point is painted as the direction indicator itself, rather than
+/// having a separate arrow beside it.
+#[derive(Clone, Copy)]
+struct StartMarker {
+    /// Contour containing the start point.
+    contour: usize,
+    /// Index of the start point within its contour.
+    index: usize,
+    /// The next point's design-space position.
+    next: (f64, f64),
+}
 /// The pen tool's preview: last on-curve point, pointer, and the ring
 /// on the start point when closing would land.
 type PenPreview = ((f64, f64), (f64, f64), Option<(f64, f64)>);
@@ -402,11 +412,11 @@ impl Workspace {
                         let first = all.iter().position(|p| p.on_curve)?;
                         let start = all[first];
                         let next = all[(first + 1) % all.len()];
-                        Some((
-                            (start.x, start.y),
-                            (next.x, next.y),
-                            self.editor.selected.contains(&(start.contour, start.index)),
-                        ))
+                        Some(StartMarker {
+                            contour: start.contour,
+                            index: start.index,
+                            next: (next.x, next.y),
+                        })
                     })
                     .collect()
             })
@@ -991,7 +1001,6 @@ fn paint_scene(scene: &EditorScene, s: &Screen, window: &mut Window, cx: &mut Ap
     paint_outline(scene, s, window);
     paint_handles(scene, s, window);
     paint_points(scene, s, window);
-    paint_start_markers(scene, s, window);
     paint_anchors(scene, s, window);
     paint_tool_preview(scene, s, window);
     paint_measure_hud(scene, s, window, cx);
@@ -1134,7 +1143,12 @@ fn paint_design_grid(scene: &EditorScene, s: &Screen, window: &mut Window) {
                         continue;
                     }
                     let at = s.to_screen(ix as f64 * spacing, iy as f64 * spacing);
-                    dot(&mut pb, at, size_px);
+                    round_dot(
+                        &mut pb,
+                        f64::from(f32::from(at.x)),
+                        f64::from(f32::from(at.y)),
+                        f64::from(size_px),
+                    );
                     count += 1;
                     if count % RUN == 0 {
                         flush(&mut pb, window);
@@ -1205,16 +1219,64 @@ fn grid_dot_sizes(zoom: f64) -> (f32, f32) {
     (px32(coarse), px32(fine))
 }
 
-/// One grid dot: a square `size` pixels across, centred on `at`.
-/// A square, not a circle, because a circle costs sixteen vertices
-/// and a grid has tens of thousands of dots.
-fn dot(pb: &mut PathBuilder, at: Point<gpui::Pixels>, size: f32) {
-    let h = px(size / 2.0);
-    pb.move_to(gpui::point(at.x - h, at.y - h));
-    pb.line_to(gpui::point(at.x + h, at.y - h));
-    pb.line_to(gpui::point(at.x + h, at.y + h));
-    pb.line_to(gpui::point(at.x - h, at.y + h));
-    pb.close();
+/// A path sink that can accept the shared design-grid dot geometry.
+///
+/// The full canvas uses GPUI's batched path builder, while the small
+/// grid preview inside a point accumulates a `BezPath`. Keeping this
+/// adapter narrow prevents either surface from quietly growing its own
+/// slightly different dot shape or alignment rule.
+trait DotSink {
+    /// Begins a dot path at `(x, y)` in local pixel coordinates.
+    fn dot_move_to(&mut self, x: f64, y: f64);
+    /// Adds a quadratic segment ending at `to`, controlled by `control`.
+    fn dot_curve_to(&mut self, to: (f64, f64), control: (f64, f64));
+    /// Closes the current dot path.
+    fn dot_close(&mut self);
+}
+
+impl DotSink for PathBuilder {
+    fn dot_move_to(&mut self, x: f64, y: f64) {
+        self.move_to(gpui::point(px(px32(x)), px(px32(y))));
+    }
+
+    fn dot_curve_to(&mut self, to: (f64, f64), control: (f64, f64)) {
+        self.curve_to(
+            gpui::point(px(px32(to.0)), px(px32(to.1))),
+            gpui::point(px(px32(control.0)), px(px32(control.1))),
+        );
+    }
+
+    fn dot_close(&mut self) {
+        self.close();
+    }
+}
+
+impl DotSink for BezPath {
+    fn dot_move_to(&mut self, x: f64, y: f64) {
+        self.move_to((x, y));
+    }
+
+    fn dot_curve_to(&mut self, to: (f64, f64), control: (f64, f64)) {
+        self.quad_to(control, to);
+    }
+
+    fn dot_close(&mut self) {
+        self.close_path();
+    }
+}
+
+/// Appends one round design-grid dot to a batched or accumulated path.
+fn round_dot(sink: &mut impl DotSink, x: f64, y: f64, size: f64) {
+    let h = size * 0.5;
+    // Tangent-matched quadratic handle: this has less than a 1% radial
+    // error at the midpoint, which is invisible at the grid's dot size.
+    let k = h * 0.914_213_54;
+    sink.dot_move_to(x + h, y);
+    sink.dot_curve_to((x, y + h), (x + k, y + k));
+    sink.dot_curve_to((x - h, y), (x - k, y + k));
+    sink.dot_curve_to((x, y - h), (x - k, y - k));
+    sink.dot_curve_to((x + h, y), (x + k, y - k));
+    sink.dot_close();
 }
 
 /// The tracing template, under everything.
@@ -1946,8 +2008,9 @@ fn paint_handles(scene: &EditorScene, s: &Screen, window: &mut Window) {
 /// recipe. A halo casing keeps an edge over the outline and the comb.
 /// An interior fill masks what runs underneath. A constant-width ring
 /// sits on top. Selected points fill yellow and ring in the selection
-/// colour. Three path draws for every point on the glyph, plus the
-/// gridlines, collapse into one per colour.
+/// colour. Points deliberately paint in contour traversal order:
+/// batching by colour would make a coincident earlier node cover a
+/// later node merely because its hue sorted later.
 fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
     let transform = s.transform;
     let (grid_mid_alpha, grid_close_alpha) = grid_alphas(s.zoom);
@@ -1967,13 +2030,61 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
             kurbo::Circle::new((cx_, cy_), r as f64).to_path(0.15)
         }
     };
+    // The first node of a closed contour is also its direction marker. A
+    // corner gets a crisp triangle; a smooth node gets the same triangle with
+    // softly rounded corners. Keeping it in this pass means overlapping nodes
+    // still obey contour order and selection uses the normal point palette.
+    let direction_shape =
+        |center: Point<gpui::Pixels>, toward: Point<gpui::Pixels>, r: f32, smooth: bool| {
+            let (cx, cy) = (f32::from(center.x) as f64, f32::from(center.y) as f64);
+            let (dx, dy) = (
+                f32::from(toward.x - center.x) as f64,
+                f32::from(toward.y - center.y) as f64,
+            );
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < f64::EPSILON {
+                return None;
+            }
+            let (dx, dy) = (dx / len, dy / len);
+            let (px, py) = (-dy, dx);
+            // Direction needs to remain legible as part of the point, rather
+            // than reading as a smaller decorative arrow beside it.
+            let r = r as f64 * 1.25;
+            let tip = kurbo::Point::new(cx + dx * r * 1.15, cy + dy * r * 1.15);
+            let left = kurbo::Point::new(
+                cx - dx * r * 0.70 + px * r * 0.85,
+                cy - dy * r * 0.70 + py * r * 0.85,
+            );
+            let right = kurbo::Point::new(
+                cx - dx * r * 0.70 - px * r * 0.85,
+                cy - dy * r * 0.70 - py * r * 0.85,
+            );
+            let mut path = BezPath::new();
+            if smooth {
+                // Trim each corner, then bend through its original vertex. At this
+                // size it reads as a rounded triangle without a second marker.
+                let cut = 0.25;
+                let toward = |a: kurbo::Point, b: kurbo::Point| {
+                    kurbo::Point::new(a.x + (b.x - a.x) * cut, a.y + (b.y - a.y) * cut)
+                };
+                path.move_to(toward(tip, right));
+                path.quad_to(tip, toward(tip, left));
+                path.line_to(toward(left, tip));
+                path.quad_to(left, toward(left, right));
+                path.line_to(toward(right, left));
+                path.quad_to(right, toward(right, tip));
+            } else {
+                path.move_to(tip);
+                path.line_to(left);
+                path.line_to(right);
+            }
+            path.close_path();
+            Some(path)
+        };
     let zero = zero();
-    let mut halo_batch: Vec<BezPath> = Vec::new();
-    let mut fill_batch: ColorBatch = std::collections::BTreeMap::new();
-    let mut ring_batch: ColorBatch = std::collections::BTreeMap::new();
-    let mut chord_batch: std::collections::BTreeMap<u32, (gpui::Rgba, Vec<(f32, BezPath)>)> =
-        std::collections::BTreeMap::new();
-    for p in scene.points.iter() {
+    let mut points: Vec<&GlyphPoint> = scene.points.iter().collect();
+    points.sort_by_key(|p| (p.contour, p.index));
+    for p in points {
         if scene.preview_mode || scene.text_mode {
             break;
         }
@@ -2011,13 +2122,28 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
         } else {
             4.5
         } * ps;
-        let path = shape(center, r, is_square);
-        halo_batch.push(path.clone());
-        fill_batch
-            .entry(color_key(inner))
-            .or_insert_with(|| (inner, Vec::new()))
-            .1
-            .push(path.clone());
+        let start = scene
+            .start_markers
+            .iter()
+            .find(|start| start.contour == p.contour && start.index == p.index);
+        let path = start
+            .and_then(|start| {
+                direction_shape(center, s.to_screen(start.next.0, start.next.1), r, p.smooth)
+            })
+            .unwrap_or_else(|| shape(center, r, is_square));
+        if t::point_halo()
+            && let Some(halo) = build_path(
+                &path,
+                Affine::IDENTITY,
+                zero,
+                PathBuilder::stroke(px(halo_w)),
+            )
+        {
+            window.paint_path(halo, t::halo());
+        }
+        if let Some(fill) = build_fill_path(&path, Affine::IDENTITY, zero) {
+            window.paint_path(fill, inner);
+        }
         // The point is a window onto the design grid: the grid that
         // falls inside it is redrawn on top, tinted with the point's
         // own colour, so you can read where it sits. Dots when the
@@ -2027,12 +2153,24 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
         if grid_mid_alpha > 0.0 && !scene.preview_mode && !scene.text_mode {
             let (cx_, cy_) = (f32::from(center.x) as f64, f32::from(center.y) as f64);
             let r = r as f64;
+            // `center` is in window coordinates. Bring it back through
+            // the exact inverse of `Screen::to_screen` before choosing
+            // the nearby design-grid intersections. The old path mixed
+            // local canvas coordinates here with window coordinates in
+            // the main grid, so the dots inside a node drifted by the
+            // canvas origin.
             let inv = transform.inverse();
-            let a = (inv * kurbo::Point::new(cx_ - r, cy_)).x;
-            let b = (inv * kurbo::Point::new(cx_ + r, cy_)).x;
+            let to_design = |x: f64, y: f64| {
+                inv * kurbo::Point::new(
+                    x - f64::from(f32::from(s.origin.x)),
+                    y - f64::from(f32::from(s.origin.y)),
+                )
+            };
+            let a = to_design(cx_ - r, cy_).x;
+            let b = to_design(cx_ + r, cy_).x;
             let (lo_x, hi_x) = (a.min(b), a.max(b));
-            let a = (inv * kurbo::Point::new(cx_, cy_ - r)).y;
-            let b = (inv * kurbo::Point::new(cx_, cy_ + r)).y;
+            let a = to_design(cx_, cy_ - r).y;
+            let b = to_design(cx_, cy_ + r).y;
             let (lo_y, hi_y) = (a.min(b), a.max(b));
             let (coarse_dot, fine_dot) = grid_dot_sizes(s.zoom);
             for (spacing, alpha, size, wide) in [
@@ -2042,7 +2180,15 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
                 if alpha <= 0.0 {
                     continue;
                 }
-                let mut tint = if is_locked || is_selected { ring } else { hue };
+                // A filled point's interior already has `hue`, so using
+                // it again for its embedded grid makes correct dots look
+                // absent. Its dark ring provides the needed contrast;
+                // ring-style themes keep the coloured-dot treatment.
+                let mut tint = if is_locked || is_selected || t::points_filled() {
+                    ring
+                } else {
+                    hue
+                };
                 tint.a = px32(alpha);
                 let ks = to_index((lo_x / spacing).ceil())..=to_index((hi_x / spacing).floor());
                 let ls = to_index((lo_y / spacing).ceil())..=to_index((hi_y / spacing).floor());
@@ -2058,7 +2204,8 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
                         }
                     };
                     for k in ks.clone() {
-                        let sx = (transform * kurbo::Point::new(k as f64 * spacing, 0.0)).x;
+                        let sx: f32 = s.to_screen(k as f64 * spacing, 0.0).x.into();
+                        let sx = f64::from(sx);
                         let half = half_at(sx - cx_);
                         if half > 0.2 {
                             marks.move_to((sx, cy_ - half));
@@ -2066,7 +2213,8 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
                         }
                     }
                     for l in ls.clone() {
-                        let sy = (transform * kurbo::Point::new(0.0, l as f64 * spacing)).y;
+                        let sy: f32 = s.to_screen(0.0, l as f64 * spacing).y.into();
+                        let sy = f64::from(sy);
                         let half = half_at(sy - cy_);
                         if half > 0.2 {
                             marks.move_to((cx_ - half, sy));
@@ -2074,11 +2222,13 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
                         }
                     }
                 } else {
-                    let h = (size / 2.0) as f64;
                     for k in ks.clone() {
                         for l in ls.clone() {
-                            let at = transform
-                                * kurbo::Point::new(k as f64 * spacing, l as f64 * spacing);
+                            let at = s.to_screen(k as f64 * spacing, l as f64 * spacing);
+                            let at = kurbo::Point::new(
+                                f64::from(f32::from(at.x)),
+                                f64::from(f32::from(at.y)),
+                            );
                             let (dx, dy) = (at.x - cx_, at.y - cy_);
                             let inside = if is_square {
                                 dx.abs() <= r && dy.abs() <= r
@@ -2086,100 +2236,39 @@ fn paint_points(scene: &EditorScene, s: &Screen, window: &mut Window) {
                                 dx * dx + dy * dy <= r * r
                             };
                             if inside {
-                                marks.extend(kurbo::Shape::to_path(
-                                    &kurbo::Rect::new(at.x - h, at.y - h, at.x + h, at.y + h),
-                                    0.1,
-                                ));
+                                round_dot(&mut marks, at.x, at.y, size as f64);
                             }
                         }
                     }
                 }
                 if !marks.is_empty() {
                     let width = if scene.grid_lines { wide } else { 0.0 };
-                    let entry = chord_batch
-                        .entry(color_key(tint))
-                        .or_insert_with(|| (tint, Vec::new()));
-                    match entry.1.iter_mut().find(|(w, _)| *w == width) {
-                        Some((_, acc)) => acc.extend(marks.iter()),
-                        None => entry.1.push((width, marks)),
+                    // Draw the point's own grid marks before its ring;
+                    // a later coincident point then wholly owns the
+                    // overlap, not just its outer keyline.
+                    let chord = if width > 0.0 {
+                        build_path(
+                            &marks,
+                            Affine::IDENTITY,
+                            zero,
+                            PathBuilder::stroke(px(width)),
+                        )
+                    } else {
+                        build_fill_path(&marks, Affine::IDENTITY, zero)
+                    };
+                    if let Some(chord) = chord {
+                        window.paint_path(chord, tint);
                     }
                 }
             }
         }
-        ring_batch
-            .entry(color_key(ring))
-            .or_insert_with(|| (ring, Vec::new()))
-            .1
-            .push(path);
-    }
-    if t::point_halo() {
-        paint_batched(window, zero, t::halo(), &halo_batch, Some(halo_w));
-    }
-    for (color, paths) in fill_batch.values() {
-        paint_batched(window, zero, *color, paths, None);
-    }
-    for (color, path) in chord_batch.values() {
-        for (width, path) in path {
-            // Width zero marks a filled dot; otherwise a stroked chord.
-            let built = if *width > 0.0 {
-                build_path(
-                    path,
-                    Affine::IDENTITY,
-                    zero,
-                    PathBuilder::stroke(px(*width)),
-                )
-            } else {
-                build_fill_path(path, Affine::IDENTITY, zero)
-            };
-            if let Some(p) = built {
-                window.paint_path(p, *color);
-            }
-        }
-    }
-    for (color, paths) in ring_batch.values() {
-        paint_batched(window, zero, *color, paths, Some(ring_w));
-    }
-}
-
-/// Start-of-contour arrow: which point a closed contour begins at,
-/// and which way it runs. This is the web editor's
-/// `draw_start_arrow`.
-fn paint_start_markers(scene: &EditorScene, s: &Screen, window: &mut Window) {
-    let (ps, _, _) = point_widths(s.zoom);
-    if !scene.preview_mode && !scene.text_mode {
-        for start in scene.start_markers.iter() {
-            let (from, to, selected) = *start;
-            let a = s.to_screen(from.0, from.1);
-            let b = s.to_screen(to.0, to.1);
-            let size = (if selected { 6.5 } else { 5.5 }) * ps;
-            let dir = (f32::from(b.x - a.x), f32::from(b.y - a.y));
-            let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt();
-            if len < 0.001 {
-                continue;
-            }
-            let f = (dir.0 / len, dir.1 / len);
-            let perp = (-f.1, f.0);
-            let cx_ = f32::from(a.x) + perp.0 * 8.0 * ps;
-            let cy_ = f32::from(a.y) + perp.1 * 8.0 * ps;
-            let tip = (cx_ + f.0 * size, cy_ + f.1 * size);
-            let base = (cx_ - f.0 * size * 0.5, cy_ - f.1 * size * 0.5);
-            let left = (base.0 + perp.0 * size * 0.5, base.1 + perp.1 * size * 0.5);
-            let right = (base.0 - perp.0 * size * 0.5, base.1 - perp.1 * size * 0.5);
-            let mut pb = PathBuilder::fill();
-            pb.move_to(gpui::point(px(tip.0), px(tip.1)));
-            pb.line_to(gpui::point(px(left.0), px(left.1)));
-            pb.line_to(gpui::point(px(right.0), px(right.1)));
-            pb.close();
-            if let Ok(path) = pb.build() {
-                window.paint_path(
-                    path,
-                    if selected {
-                        t::point_selected()
-                    } else {
-                        t::point_smooth_outer()
-                    },
-                );
-            }
+        if let Some(ring_path) = build_path(
+            &path,
+            Affine::IDENTITY,
+            zero,
+            PathBuilder::stroke(px(ring_w)),
+        ) {
+            window.paint_path(ring_path, ring);
         }
     }
 }

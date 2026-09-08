@@ -505,16 +505,15 @@ impl Workspace {
             // Fixed row height, no vertical padding: Glyphs' sidebar
             // packs its rows tight, and leading is what made ours look
             // twice as tall as it needed to be.
-            // 21px per row, the pitch Glyphs packs its sidebar at. The
-            // selected row is a filled block, so it sits a little in
-            // from the panel on every edge: 1px above and below, 2px
-            // at the sides, and the label keeps the inset it had by
-            // paying that back in padding.
+            // The section owns the horizontal inset. Keeping the row
+            // inside it gives the left filter selector the same side
+            // margins as the master selector on the right.
             .h(px(19.0))
-            .mx(px(-6.0))
-            .my(px(1.0))
+            .my(px(0.0))
             .px(px(14.0))
-            .when(indent, |el| el.ml(px(6.0)))
+            // A child has no chevron of its own, so its text aligns
+            // with the parent's label rather than the parent's marker.
+            .when(indent, |el| el.ml(px(14.0)))
             .rounded(t::radius())
             .cursor_pointer()
             .flex()
@@ -523,15 +522,15 @@ impl Workspace {
             .when(active, |el| {
                 el.border(t::stroke())
                     .bg(t::selected_bg())
-                    .border_color(t::selected_outline())
-                    .text_color(t::selected_ink())
+                    .border_color(t::selected_row_outline())
+                    .text_color(t::selected_row_ink())
             })
             .when(!active, |el| el.text_color(t::text()))
             .when_some(mark, |el, mark| {
                 el.child(Self::row_marker(
                     mark,
                     if active {
-                        t::selected_ink()
+                        t::selected_row_ink()
                     } else {
                         t::text_muted()
                     },
@@ -542,7 +541,7 @@ impl Workspace {
                     div()
                         .w(px(16.0))
                         .text_color(if active {
-                            t::selected_ink()
+                            t::selected_row_ink()
                         } else {
                             t::text_muted()
                         })
@@ -553,7 +552,7 @@ impl Workspace {
             .child(
                 div()
                     .text_color(if active {
-                        t::selected_ink()
+                        t::selected_row_ink()
                     } else {
                         t::text_muted()
                     })
@@ -805,6 +804,31 @@ impl Workspace {
             ))
     }
 
+    /// A tool tile for the dark editor header.
+    fn header_icon_tile(
+        id: &'static str,
+        icon: &'static str,
+        active: bool,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .w(px(crate::view::controls::CONTROL_H))
+            .h(px(crate::view::controls::CONTROL_H))
+            .rounded(t::radius_control())
+            .cursor_pointer()
+            .child(icon_svg(
+                icon,
+                if active {
+                    t::selected_ink()
+                } else {
+                    gpui::Rgba {
+                        a: 0.5,
+                        ..t::selected_ink()
+                    }
+                },
+            ))
+    }
+
     /// Tool icons for the header bar (editor mode only).
     pub(crate) fn header_tools(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         let tool = self.editor.tool;
@@ -813,7 +837,7 @@ impl Workspace {
             .items_center()
             .gap_1()
             .child(
-                Self::icon_tile("tool-select", "select", tool == Tool::Select).on_click(
+                Self::header_icon_tile("tool-select", "select", tool == Tool::Select).on_click(
                     cx.listener(|this, _, _, cx| {
                         this.pen_finish();
                         this.editor.tool = Tool::Select;
@@ -822,7 +846,7 @@ impl Workspace {
                 ),
             )
             .child(
-                Self::icon_tile("tool-pen", "pen", tool == Tool::Pen).on_click(cx.listener(
+                Self::header_icon_tile("tool-pen", "pen", tool == Tool::Pen).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.editor.tool = Tool::Pen;
                         cx.notify();
@@ -830,7 +854,7 @@ impl Workspace {
                 )),
             )
             .child(
-                Self::icon_tile(
+                Self::header_icon_tile(
                     "tool-shapes",
                     if self.editor.shape_ellipse {
                         "shape-ellipse"
@@ -849,7 +873,7 @@ impl Workspace {
                 })),
             )
             .child(
-                Self::icon_tile("tool-measure", "measure", tool == Tool::Measure).on_click(
+                Self::header_icon_tile("tool-measure", "measure", tool == Tool::Measure).on_click(
                     cx.listener(|this, _, _, cx| {
                         this.pen_finish();
                         this.editor.tool = Tool::Measure;
@@ -858,34 +882,33 @@ impl Workspace {
                 ),
             )
             .child(
-                Self::icon_tile("tool-text", "text", tool == Tool::Text).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.pen_finish();
-                        this.editor.tool = Tool::Text;
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                Self::icon_tile("tool-knife", "knife", tool == Tool::Knife).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.pen_finish();
-                        this.editor.tool = Tool::Knife;
-                        cx.notify();
-                    },
-                )),
-            )
-            .child(
-                Self::icon_tile("tool-hyperpen", "hyperpen", tool == Tool::HyperPen).on_click(
+                Self::header_icon_tile("tool-text", "text", tool == Tool::Text).on_click(
                     cx.listener(|this, _, _, cx| {
                         this.pen_finish();
-                        this.editor.tool = Tool::HyperPen;
+                        this.editor.tool = Tool::Text;
                         cx.notify();
                     }),
                 ),
             )
             .child(
-                Self::icon_tile("tool-preview", "preview", tool == Tool::Preview).on_click(
+                Self::header_icon_tile("tool-knife", "knife", tool == Tool::Knife).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.pen_finish();
+                        this.editor.tool = Tool::Knife;
+                        cx.notify();
+                    }),
+                ),
+            )
+            .child(
+                Self::header_icon_tile("tool-hyperpen", "hyperpen", tool == Tool::HyperPen)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.pen_finish();
+                        this.editor.tool = Tool::HyperPen;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Self::header_icon_tile("tool-preview", "preview", tool == Tool::Preview).on_click(
                     cx.listener(|this, _, _, cx| {
                         this.pen_finish();
                         if this.editor.tool == Tool::Preview {
@@ -897,71 +920,6 @@ impl Workspace {
                         cx.notify();
                     }),
                 ),
-            )
-    }
-
-    /// Text direction control for the text tool: LTR / RTL / Auto.
-    /// This is `TextDirectionToolbar` in the web editor.
-    pub(crate) fn direction_toolbar(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
-        use runebender_core::text::buffer::TextDirection;
-        let auto = self.edit_buffer.direction_is_auto();
-        let dir = self.edit_buffer.direction();
-        // The same shape as a session tab, on the same height, so the
-        // header reads as one row of controls.
-        let button = |id: &'static str, label: &'static str, active: bool| {
-            div()
-                .id(id)
-                .h(px(crate::workspace::TAB_H))
-                .px_2()
-                .flex()
-                .items_center()
-                .rounded(t::radius())
-                .border(t::stroke())
-                .when(active, |el| el.bg(t::selected_bg()))
-                .border_color(if active {
-                    t::selected_bg()
-                } else {
-                    t::cell_border()
-                })
-                .text_color(if active {
-                    t::selected_ink()
-                } else {
-                    t::text_muted()
-                })
-                .cursor_pointer()
-                .child(label)
-        };
-        div()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(
-                button("dir-ltr", "LTR", !auto && dir == TextDirection::LeftToRight).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.edit_buffer.set_direction(TextDirection::LeftToRight);
-                        this.edit_buffer.shape_arabic_if_rtl();
-                        this.sync_sort_offset();
-                        cx.notify();
-                    }),
-                ),
-            )
-            .child(
-                button("dir-rtl", "RTL", !auto && dir == TextDirection::RightToLeft).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.edit_buffer.set_direction(TextDirection::RightToLeft);
-                        this.edit_buffer.shape_arabic_if_rtl();
-                        this.sync_sort_offset();
-                        cx.notify();
-                    }),
-                ),
-            )
-            .child(
-                button("dir-auto", "Auto", auto).on_click(cx.listener(|this, _, _, cx| {
-                    this.edit_buffer.set_auto_direction();
-                    this.edit_buffer.shape_arabic_if_rtl();
-                    this.sync_sort_offset();
-                    cx.notify();
-                })),
             )
     }
 }

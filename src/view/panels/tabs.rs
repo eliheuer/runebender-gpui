@@ -6,6 +6,7 @@
 use crate::Mode;
 use crate::Workspace;
 use crate::edit::sidebar::RowMark;
+use crate::view::paint::icon_svg;
 use crate::view::theme as t;
 use crate::widgets;
 use crate::workspace::SIDEBAR_CATEGORIES;
@@ -28,6 +29,73 @@ impl Workspace {
     pub(crate) fn category_sidebar(&self, cx: &mut Context<'_, Self>) -> impl IntoElement + use<> {
         use runebender_core::ui::sidebar as sb;
         let counts = self.sidebar.counts.as_ref();
+
+        // The Font view keeps the same sidebar modes as the editor where
+        // they remain useful. Grid/List already have controls in the status
+        // bar, while axes, local models, and chat need a stable home here.
+        let has_axes = !self.axis_sliders.is_empty();
+        let tab_now = if !has_axes && self.sidebar.tab == 2 || self.sidebar.tab == 1 {
+            0
+        } else {
+            self.sidebar.tab
+        };
+        let on_categories = tab_now == 0;
+        let tab_rail = t::tab_rail_bg();
+        let sidebar_tab =
+            |id: &'static str, icon: &'static str, which: u8, cx: &mut Context<'_, Self>| {
+                let active = tab_now == which;
+                let inactive_ink = gpui::Rgba {
+                    a: 0.42,
+                    ..t::text()
+                };
+                let face = div()
+                    .id(id)
+                    .h(px(if active { 32.0 } else { 28.0 }))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(active, |el| {
+                        el.rounded_t(px(6.0))
+                            .border_t_1()
+                            .border_l_1()
+                            .border_r_1()
+                            .border_color(t::cell_border())
+                            .bg(t::panel_bg())
+                    })
+                    .when(!active, |el| {
+                        el.rounded(px(6.0))
+                            .border_1()
+                            .border_color(t::cell_border())
+                            .bg(t::inactive_tab_bg())
+                    })
+                    .cursor_pointer()
+                    .group(id)
+                    .child(if active {
+                        div()
+                            .size(px(18.0))
+                            .relative()
+                            .top(px(-2.0))
+                            .child(icon_svg(icon, t::text()))
+                    } else {
+                        div()
+                            .size(px(18.0))
+                            .relative()
+                            .child(icon_svg(icon, inactive_ink))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .invisible()
+                                    .group_hover(id, |el| el.visible())
+                                    .child(icon_svg(icon, t::text())),
+                            )
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.sidebar.tab = which;
+                        cx.notify();
+                    }));
+                div().h(px(32.0)).flex_1().relative().child(face)
+            };
 
         // Categories: expandable rows with the web's subfilters.
         let mut categories = div().flex().flex_col();
@@ -302,7 +370,7 @@ impl Workspace {
             );
         }
 
-        div()
+        let categories_pane = div()
             .size_full()
             .flex()
             .flex_col()
@@ -365,7 +433,69 @@ impl Workspace {
             )
             // Mark colours sit at the foot of the sidebar, beside the
             // glyphs they apply to, the way the web places them.
-            .child(self.mark_colors_panel(cx))
+            .child(self.mark_colors_panel(cx));
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .min_h(px(0.0))
+            .child(
+                div()
+                    .h(px(36.0))
+                    .relative()
+                    .px(px(4.0))
+                    .pt(px(4.0))
+                    .flex()
+                    .items_start()
+                    .gap(px(4.0))
+                    .bg(tab_rail)
+                    .child(
+                        div()
+                            .absolute()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(1.0))
+                            .bg(t::cell_border()),
+                    )
+                    .child(sidebar_tab("font-tab-glyphs", "glyph-grid", 0, cx))
+                    .when(has_axes, |el| {
+                        el.child(sidebar_tab("font-tab-axes", "measure", 2, cx))
+                    })
+                    .child(sidebar_tab("font-tab-ai", "preview", 3, cx))
+                    .child(sidebar_tab("font-tab-chat", "text", 4, cx)),
+            )
+            .when(tab_now == 2, |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .p_2()
+                        .children(self.axes_section(cx)),
+                )
+            })
+            .when(tab_now == 3, |el| {
+                el.child(
+                    div()
+                        .id("font-sidebar-ai")
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .overflow_y_scroll()
+                        .p_2()
+                        .child(self.local_ai_panel(cx)),
+                )
+            })
+            .when(tab_now == 4, |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .p_2()
+                        .child(self.chat_panel(cx)),
+                )
+            })
+            .when(on_categories, |el| el.child(categories_pane))
     }
 
     /// The Glyphs-style tab strip under the header: a Font tab that
@@ -388,14 +518,19 @@ impl Workspace {
                 .cursor_pointer()
                 .when(active, |el| {
                     el.border(t::stroke())
-                        .bg(t::selected_bg())
-                        .border_color(t::selected_outline())
-                        .text_color(t::selected_ink())
+                        .border_color(t::mark_color("orange").unwrap_or_else(t::selected_ink))
+                        .text_color(t::mark_color("yellow").unwrap_or_else(t::selected_ink))
                 })
                 .when(!active, |el| {
                     el.border(t::stroke())
-                        .border_color(t::cell_border())
-                        .text_color(t::text_muted())
+                        .border_color(gpui::Rgba {
+                            a: 0.45,
+                            ..t::selected_ink()
+                        })
+                        .text_color(gpui::Rgba {
+                            a: 0.72,
+                            ..t::selected_ink()
+                        })
                 })
                 .child(label)
         };

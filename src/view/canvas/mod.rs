@@ -41,6 +41,7 @@ impl Workspace {
         index: usize,
         cell: f32,
         cell_h: f32,
+        label_cell_w: f32,
         jump_on_click: bool,
         cx: &mut Context<'_, Self>,
     ) -> impl IntoElement + use<> {
@@ -57,7 +58,11 @@ impl Workspace {
         } else {
             self.selected == Some(index) || self.grid.multi_selected.contains(name.as_ref())
         };
-        let labels = cell_label_metrics(cell);
+        // A spanning glyph has a wider tile, but it is still part of
+        // the same compact grid. Caption policy follows the grid's base
+        // cell width, so a long Arabic name cannot steal its outline's
+        // drawing area merely by spanning columns.
+        let labels = cell_label_metrics(label_cell_w);
         let (show_labels, label_px, label_h) = (labels.show, labels.size, labels.height);
         let incompatible = self
             .project
@@ -67,6 +72,10 @@ impl Workspace {
 
         let paint = t::mark_paint(entry.mark.as_deref());
         let mark = paint.as_ref().map(|p| p.ink);
+        // A hard, quiet lower-left offset makes every tile sit above
+        // the grid ground. Selection gets one extra pixel so it reads
+        // as the foremost tile without changing its geometry or fill.
+        let shadow_offset = if selected { 3.0 } else { 2.0 };
         let _ = font;
         div()
             .id(index)
@@ -89,6 +98,13 @@ impl Workspace {
                     .unwrap_or_else(t::cell_border)
             })
             .rounded(t::radius_control())
+            .shadow(vec![gpui::BoxShadow {
+                color: t::cell_shadow().into(),
+                offset: gpui::point(px(-shadow_offset), px(shadow_offset)),
+                blur_radius: px(0.0),
+                spread_radius: px(0.0),
+                inset: false,
+            }])
             .cursor_pointer()
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                 // Notes are transient: picking a glyph clears them so
@@ -108,7 +124,10 @@ impl Workspace {
                         this.grid.multi_selected.clear();
                     }
                     if event.click_count() >= 2 {
-                        this.open_editor(index);
+                        // Font View opens a distinct Edit View tab;
+                        // it must not replace the workspace parked
+                        // behind the overview tab.
+                        this.open_editor_in_new_session(index);
                     }
                 }
                 cx.notify();
@@ -120,19 +139,22 @@ impl Workspace {
             .child(div().flex_1())
             .when(show_labels, |el| {
                 el.child(
-                    // Same inset left, right and bottom, a little air above,
-                    // and the two lines close together (the web's
-                    // cell-labels box).
+                    // A compact, equal inset puts the labels near the
+                    // lower-left corner; stated leading keeps the two
+                    // lines together instead of inheriting a loose default.
                     div()
                         .h(px(label_h))
-                        .pl(px(8.0))
-                        .pr(px(8.0))
-                        .pb(px(8.0))
-                        .pt(px(4.0))
+                        .pl(px(5.0))
+                        .pr(px(5.0))
+                        // The font's baseline sits optically high in a
+                        // mathematically even box; one pixel less below
+                        // restores the perceived balance at the cell edge.
+                        .pb(px(4.0))
+                        .pt(px(5.0))
                         .flex()
                         .flex_col()
                         .justify_end()
-                        .gap(px(2.0))
+                        .gap(px(0.0))
                         .text_size(px(label_px))
                         .line_height(px(labels.line))
                         .overflow_hidden()
@@ -291,7 +313,7 @@ impl Workspace {
                             this.grid.multi_selected.clear();
                         }
                         if event.click_count() >= 2 {
-                            this.open_editor(index);
+                            this.open_editor_in_new_session(index);
                         }
                         cx.notify();
                     }))

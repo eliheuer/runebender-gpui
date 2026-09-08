@@ -240,6 +240,35 @@ pub(crate) fn eye_icon(color: gpui::Rgba, open: bool) -> impl IntoElement {
     .h(px(16.0))
 }
 
+/// A split-pane mark for showing or hiding the editor's left sidebar.
+/// Its size and stroke match the bottom-bar eye and appearance marks.
+pub(crate) fn sidebar_icon(color: gpui::Rgba, open: bool) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| bounds,
+        move |_, bounds: Bounds<gpui::Pixels>, window, _| {
+            use kurbo::Shape as _;
+            let w = f32::from(bounds.size.width) as f64;
+            let h = f32::from(bounds.size.height) as f64;
+            let o = bounds.origin;
+            let frame = kurbo::Rect::new(1.5, 2.0, w - 1.5, h - 2.0).to_path(0.1);
+            if let Some(path) =
+                build_path(&frame, Affine::IDENTITY, o, PathBuilder::stroke(px(1.2)))
+            {
+                window.paint_path(path, color);
+            }
+            let split = if open { w * 0.37 } else { w * 0.18 };
+            let mut line = PathBuilder::stroke(px(1.2));
+            line.move_to(gpui::point(o.x + px(px32(split)), o.y + px(2.0)));
+            line.line_to(gpui::point(o.x + px(px32(split)), o.y + px(px32(h - 2.0))));
+            if let Ok(path) = line.build() {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .w(px(16.0))
+    .h(px(16.0))
+}
+
 /// A drawn plus, minus, grid or list mark.
 ///
 /// Set as text these sit visibly off-centre: a "×" carries its own

@@ -21,10 +21,10 @@ use gpui::{
 
 use crate::view::theme as t;
 
-/// How thick the divider is, and how much of it answers to the mouse.
+/// The visible divider remains a one-pixel rule.
 const DIVIDER: f32 = 1.0;
-/// The width of the invisible strip over the divider that catches the mouse.
-const GRIP: f32 = 6.0;
+/// The invisible pointer target extending around that rule.
+const GRIP: f32 = 12.0;
 
 #[derive(Default)]
 /// Every group's sizes and painted bounds, held as a global.
@@ -273,33 +273,33 @@ fn divider(
     let drag_group = group.clone();
     let drag_range = range.clone();
 
-    let mut strip = div().id(id).flex_shrink_0().bg(t::cell_border()).relative();
+    let mut strip = div().id(id).flex_shrink_0().relative().bg(t::cell_border());
     strip = if horizontal {
-        strip.w(px(DIVIDER)).h_full().cursor_col_resize()
+        strip.w(px(DIVIDER)).h_full()
     } else {
-        strip.h(px(DIVIDER)).w_full().cursor_row_resize()
+        strip.h(px(DIVIDER)).w_full()
     };
 
-    // A 1px line is hard to hit, so a wider invisible grip sits over
-    // it, centred on the line.
-    let grip = {
-        let mut g = div().absolute();
-        g = if horizontal {
-            g.top_0()
-                .bottom_0()
-                .left(px(-(GRIP - DIVIDER) / 2.0))
-                .w(px(GRIP))
-        } else {
-            g.left_0()
-                .right_0()
-                .top(px(-(GRIP - DIVIDER) / 2.0))
-                .h(px(GRIP))
-        };
-        g
+    // This child owns pointer events. Because it is absolute it does
+    // not consume layout space or turn the rule into a visible gutter.
+    let mut grip = div()
+        .id(SharedString::from(format!("{group}-divider-grip-{slot}")))
+        .absolute();
+    grip = if horizontal {
+        grip.top_0()
+            .bottom_0()
+            .left(px(-(GRIP - DIVIDER) / 2.0))
+            .w(px(GRIP))
+            .cursor_col_resize()
+    } else {
+        grip.left_0()
+            .right_0()
+            .top(px(-(GRIP - DIVIDER) / 2.0))
+            .h(px(GRIP))
+            .cursor_row_resize()
     };
 
-    strip
-        .child(grip)
+    let grip = grip
         .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
             cx.stop_propagation();
         })
@@ -335,7 +335,8 @@ fn divider(
             };
             store_size(cx, &drag_group, target, clamped);
             cx.refresh_windows();
-        })
+        });
+    strip.child(grip)
 }
 
 impl gpui::RenderOnce for ResizableGroup {

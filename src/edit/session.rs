@@ -156,6 +156,28 @@ impl Workspace {
         }
     }
 
+    /// Open `index` in a fresh edit workspace, preserving the active
+    /// workspace exactly as it was left. Font View uses this path,
+    /// matching Glyphs' separate Edit View tabs rather than replacing
+    /// the previously open workspace.
+    pub(crate) fn open_editor_in_new_session(&mut self, index: usize) {
+        let Some(name) = self
+            .font()
+            .and_then(|font| font.glyphs.get(index))
+            .map(|glyph| glyph.name.to_string())
+        else {
+            return;
+        };
+        self.park_active_session();
+        self.sessions.push(EditSession {
+            glyph_name: name,
+            editor: EditorState::new(),
+            buffer: runebender_core::text::buffer::TextBuffer::new(),
+        });
+        self.active_session = self.sessions.len() - 1;
+        self.open_editor(index);
+    }
+
     /// Open the glyph at `index` in the editor, resetting tool, selection, and undo history.
     pub(crate) fn open_editor(&mut self, index: usize) {
         // Opening from the grid lands in the active tab; the first

@@ -166,10 +166,86 @@ pub(crate) fn canvas_bg() -> Rgba {
 pub(crate) fn panel_bg() -> Rgba {
     c(theme().surface("panel"))
 }
+/// The type-preview ground: a lifted gray, distinct from the divider.
+pub(crate) fn preview_bg() -> Rgba {
+    c(theme().surface("button"))
+}
 /// The header row that stands in for the title bar: a step darker
 /// than the panels, so the window controls sit on contrast.
 pub(crate) fn titlebar_bg() -> Rgba {
     c(theme().surface("titlebar"))
+}
+/// The recessed ground behind sidebar tabs. It is deliberately much
+/// darker than [`inactive_tab_bg`], so inactive tabs read as objects
+/// behind the selected panel rather than lighter controls in front of it.
+pub(crate) fn tab_rail_bg() -> Rgba {
+    let titlebar = titlebar_bg();
+    Rgba {
+        r: titlebar.r,
+        g: titlebar.g,
+        b: titlebar.b,
+        a: 1.0,
+    }
+}
+/// The face of an unselected sidebar tab: darker than the panel surface
+/// used by the selected tab, but visibly lifted from the recessed rail.
+pub(crate) fn inactive_tab_bg() -> Rgba {
+    let titlebar = titlebar_bg();
+    let panel = panel_bg();
+    Rgba {
+        r: titlebar.r + (panel.r - titlebar.r) * 0.5,
+        g: titlebar.g + (panel.g - titlebar.g) * 0.5,
+        b: titlebar.b + (panel.b - titlebar.b) * 0.5,
+        a: 1.0,
+    }
+}
+/// The header of a floating information pane when its subject has no
+/// mark colour. It is one restrained step below the pane body, and is
+/// derived from theme surfaces rather than a hard-coded grey.
+pub(crate) fn floating_pane_header_bg() -> Rgba {
+    let panel = panel_bg();
+    let titlebar = titlebar_bg();
+    Rgba {
+        r: panel.r + (titlebar.r - panel.r) * 0.25,
+        g: panel.g + (titlebar.g - panel.g) * 0.25,
+        b: panel.b + (titlebar.b - panel.b) * 0.25,
+        a: 1.0,
+    }
+}
+/// The application's custom titlebar ground.
+///
+/// This is deliberately darker than the token named `titlebar`: the
+/// browser and non-macOS header also carries the app menus. Keeping
+/// the calculation here means a menu popup can use precisely the
+/// same ground as the bar it drops out of.
+pub(crate) fn header_bg() -> Rgba {
+    let selected = selected_bg();
+    Rgba {
+        r: selected.r * 0.5,
+        g: selected.g * 0.5,
+        b: selected.b * 0.5,
+        a: 1.0,
+    }
+}
+/// The high-contrast ink for labels placed on [`header_bg`].
+///
+/// The mid-grey and light themes use their selected-control ink there;
+/// the dark theme's selected-control ink is intentionally dark, so its
+/// ordinary primary text is the readable choice instead.
+pub(crate) fn header_ink() -> Rgba {
+    if current_theme() == "dark" {
+        text()
+    } else {
+        selected_ink()
+    }
+}
+
+/// A quieter but still readable header label.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn header_ink_muted() -> Rgba {
+    let mut ink = header_ink();
+    ink.a = 0.72;
+    ink
 }
 /// The rule around a panel.
 pub(crate) fn panel_outline() -> Rgba {
@@ -189,6 +265,22 @@ pub(crate) fn field_outline() -> Rgba {
 pub(crate) fn cell_bg() -> Rgba {
     panel_bg()
 }
+/// The ground behind both glyph grids.
+///
+/// It is one quiet step below the app background, enough to give the
+/// tiles and their hard shadows a surface without making either grid
+/// read as a separate panel.
+pub(crate) fn grid_bg() -> Rgba {
+    let app = window_bg();
+    let selected = selected_bg();
+    const DARKEN: f32 = 0.16;
+    Rgba {
+        r: app.r + (selected.r - app.r) * DARKEN,
+        g: app.g + (selected.g - app.g) * DARKEN,
+        b: app.b + (selected.b - app.b) * DARKEN,
+        a: 1.0,
+    }
+}
 /// The rule around a grid cell.
 pub(crate) fn cell_border() -> Rgba {
     c(theme().surface("outline"))
@@ -197,15 +289,31 @@ pub(crate) fn cell_border() -> Rgba {
 /// invert to the ink, Dark lifts the cell instead, because a light
 /// slab on a dark grid shouts.
 pub(crate) fn cell_selected_bg() -> Rgba {
-    c(theme().role("cellSelectedFill"))
+    selected_bg()
 }
 /// The glyph and label on a selected grid cell.
 pub(crate) fn cell_selected_ink() -> Rgba {
-    c(theme().role("cellSelectedInk"))
+    mark_color("yellow").unwrap_or_else(selected_ink)
 }
-/// Selected grid cell ring.
+/// The neutral keyline around a selected grid cell.
 pub(crate) fn cell_selected_ring() -> Rgba {
-    c(theme().role("gridSelected"))
+    panel_outline()
+}
+
+/// The solid, recessed shadow beneath glyph-grid cells.
+///
+/// It sits halfway between the grid's ground and the selection grey:
+/// enough contrast to separate neighbouring tiles without becoming a
+/// second outline.
+pub(crate) fn cell_shadow() -> Rgba {
+    let ground = grid_bg();
+    let selected = selected_bg();
+    Rgba {
+        r: (ground.r + selected.r) * 0.5,
+        g: (ground.g + selected.g) * 0.5,
+        b: (ground.b + selected.b) * 0.5,
+        a: 1.0,
+    }
 }
 
 // ---- selection ----
@@ -226,6 +334,18 @@ pub(crate) fn selected_outline() -> Rgba {
 /// The text and icon colour on a selected control.
 pub(crate) fn selected_ink() -> Rgba {
     c(theme().role("controlSelectedInk"))
+}
+
+/// The outline of a selected sidebar row. Unlike a selected tool or
+/// cell, a sidebar selection stays neutral so its yellow text is the
+/// only colour competing with the glyph marks beside it.
+pub(crate) fn selected_row_outline() -> Rgba {
+    panel_outline()
+}
+
+/// The label and count on a selected sidebar row.
+pub(crate) fn selected_row_ink() -> Rgba {
+    mark_color("yellow").unwrap_or_else(selected_ink)
 }
 
 // ---- accents and text ----
@@ -264,7 +384,11 @@ pub(crate) fn path_stroke() -> Rgba {
 /// points. Its own token, because the cell fill (`glyph_fill`) is
 /// ink and this is not.
 pub(crate) fn outline_fill() -> Rgba {
-    c(theme().role("outlineFill"))
+    // Let metric lines and the design grid remain legible beneath the
+    // editable outline without making the shape read as a faint ghost.
+    let mut fill = c(theme().role("outlineFill"));
+    fill.a *= 0.70;
+    fill
 }
 /// Metric lines such as baseline and x-height: a quiet neutral rule.
 /// The outline is what the canvas is for; the metrics sit under it.

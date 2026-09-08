@@ -675,7 +675,7 @@ pub(crate) struct SidebarState {
     /// First visible row of the mini grid.
     pub(crate) scroll_row: usize,
     /// Which editor-sidebar tab is up: 0 glyphs, 1 shapes, 2 axes,
-    /// 3 chat.
+    /// 3 local AI, 4 chat.
     pub(crate) tab: u8,
     /// Target cell size for the editor sidebar's mini grid.
     pub(crate) cell_size: f32,

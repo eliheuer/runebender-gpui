@@ -51,28 +51,36 @@ impl Workspace {
             .map(|c| format!("{:04X}", c as u32))
             .unwrap_or_default()
             .into();
-        let group_l =
-            runebender_core::document::font_ops::kern_group(&font.font, entry.name.as_ref(), true)
-                .map(|g| g.as_str().replace("public.kern1.", ""))
-                .unwrap_or_default();
-        let group_r =
-            runebender_core::document::font_ops::kern_group(&font.font, entry.name.as_ref(), false)
-                .map(|g| g.as_str().replace("public.kern2.", ""))
-                .unwrap_or_default();
-
         // One card, built on a 6px rhythm: an 8px inset on every side,
         // 6px between rows, and a header band the same height as the
         // fields under it.
         const CARD_PAD: f32 = 8.0;
         const CARD_GAP: f32 = 6.0;
-        const CARD_RADIUS: f32 = 6.0;
         const HEADER_H: f32 = 22.0;
+        let card_radius = t::radius();
+        let mark = t::mark_paint(entry.mark.as_deref());
+        let header_bg = mark
+            .as_ref()
+            .and_then(|paint| paint.bg)
+            .unwrap_or_else(t::floating_pane_header_bg);
+        let header_ink = mark.as_ref().map_or_else(t::text, |paint| paint.ink);
+        let mut card_shadow = t::cell_shadow();
+        card_shadow.a *= 0.5;
         let card = || {
             div()
-                .rounded(px(CARD_RADIUS))
+                .rounded(card_radius)
                 .border(t::stroke())
                 .border_color(t::panel_outline())
                 .bg(t::panel_bg())
+                // Floating over the edit canvas, this card uses the
+                // same hard lower-left lift as glyph cells and nodes.
+                .shadow(vec![gpui::BoxShadow {
+                    color: card_shadow.into(),
+                    offset: gpui::point(px(-4.0), px(4.0)),
+                    blur_radius: px(0.0),
+                    spread_radius: px(0.0),
+                    inset: false,
+                }])
                 .flex()
                 .flex_col()
         };
@@ -82,13 +90,25 @@ impl Workspace {
                 .w(px(64.0))
                 .child(widgets::input::Input::new(input).small())
         };
+        let kern_group =
+            |label_text: SharedString, input: &gpui::Entity<widgets::input::InputState>| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(CARD_GAP))
+                    .child(label(label_text))
+                    .child(
+                        div()
+                            .w(px(96.0))
+                            .child(widgets::input::Input::new(input).small()),
+                    )
+            };
 
         let metrics = card()
             .child(
                 // Header: the glyph on the left, its codepoint on the
-                // right. A quiet band, not a colour statement — the
-                // corners follow the card's radius so nothing pokes
-                // out past the border.
+                // right. A glyph mark colours this band; an unmarked
+                // glyph gets the theme's quieter panel-header surface.
                 div()
                     .h(px(HEADER_H))
                     .px(px(CARD_PAD))
@@ -96,13 +116,13 @@ impl Workspace {
                     .items_center()
                     .justify_between()
                     .gap_4()
-                    .rounded_t(px(CARD_RADIUS - 1.0))
-                    .bg(t::field_bg())
+                    .rounded_t(card_radius)
+                    .bg(header_bg)
                     .border_b_1()
                     .border_color(t::panel_outline())
-                    .text_color(t::text())
+                    .text_color(header_ink)
                     .child(name)
-                    .child(div().text_color(t::text_muted()).child(unicode)),
+                    .child(div().text_color(header_ink).child(unicode)),
             )
             .child(
                 div()
@@ -122,67 +142,24 @@ impl Workspace {
                             .child(label("RSB".into())),
                     )
                     .child(
-                        // Kerning groups sit under the sidebearing they
-                        // apply to, the way Glyphs stacks them.
+                        // Kerning groups are editable in the floating
+                        // metrics pane too, using the same inputs and
+                        // Enter-to-commit wiring as the Glyph inspector.
                         div()
                             .flex()
                             .items_center()
-                            .justify_between()
-                            .child(label(SharedString::from(group_l)))
-                            .child(label(SharedString::from(group_r))),
+                            .gap(px(CARD_GAP))
+                            .child(kern_group("L".into(), &self.inputs.glyph.group_l))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_center()
+                                    .text_color(t::text_muted())
+                                    .child("Kern groups"),
+                            )
+                            .child(kern_group("R".into(), &self.inputs.glyph.group_r)),
                     ),
             );
-
-        let selection = self.selection_bounds().map(|r| {
-            let readout = |name: &'static str, value: f64| {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(CARD_GAP))
-                    .child(div().w(px(10.0)).text_color(t::text_muted()).child(name))
-                    .child(
-                        div()
-                            .text_color(t::text())
-                            .child(SharedString::from(format!("{value:.0}"))),
-                    )
-            };
-            card()
-                .child(
-                    div()
-                        .h(px(HEADER_H))
-                        .px(px(CARD_PAD))
-                        .flex()
-                        .items_center()
-                        .rounded_t(px(CARD_RADIUS - 1.0))
-                        .bg(t::field_bg())
-                        .border_b_1()
-                        .border_color(t::panel_outline())
-                        .text_color(t::text_muted())
-                        .child("Selection"),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(CARD_PAD * 2.0))
-                        .p(px(CARD_PAD))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(CARD_GAP))
-                                .child(readout("X", r.x0))
-                                .child(readout("Y", r.y0)),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(CARD_GAP))
-                                .child(readout("W", r.width()))
-                                .child(readout("H", r.height())),
-                        ),
-                )
-        });
 
         div()
             .absolute()
@@ -192,9 +169,7 @@ impl Workspace {
             .flex()
             .justify_center()
             .items_end()
-            .gap_2()
             .child(metrics)
-            .children(selection)
             .into_any_element()
     }
 
